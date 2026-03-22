@@ -25,6 +25,7 @@ const (
 	keyEnd
 	keyPgUp
 	keyPgDn
+	keyDel
 )
 
 type bufferState struct {
@@ -33,6 +34,8 @@ type bufferState struct {
 	origin   int
 	dotStart int
 	dotEnd   int
+	markMode bool
+	markPos  int
 }
 
 // Run executes the initial terminal-client slice.
@@ -156,6 +159,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					return err
 				}
 				if key == keyEsc {
+					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
+						return err
+					}
 					if err := exitBufferMode(stdout); err != nil {
 						return err
 					}
@@ -163,13 +169,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					buffer = nil
 					continue
 				}
-				handleBufferKey(buffer, key)
+				buffer, err = applyBufferKey(svc, buffer, key)
+				if err != nil {
+					return err
+				}
 				if err := drawBufferMode(stdout, buffer); err != nil {
 					return err
 				}
 				continue
 			}
-			handleBufferKey(buffer, int(r))
+			buffer, err = applyBufferKey(svc, buffer, int(r))
+			if err != nil {
+				return err
+			}
 			if err := drawBufferMode(stdout, buffer); err != nil {
 				return err
 			}
@@ -295,6 +307,61 @@ func newBufferState(view wire.BufferView) *bufferState {
 	}
 }
 
+func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferState, error) {
+	if state == nil {
+		return state, nil
+	}
+	switch key {
+	case 0:
+		if state.markMode {
+			state.markMode = false
+		} else {
+			state.markMode = true
+			state.markPos = state.cursor
+		}
+		updateSelection(state)
+		return state, nil
+	case 8, 127:
+		if state.dotStart != state.dotEnd {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+		}
+		if state.cursor == 0 {
+			return state, nil
+		}
+		return replaceBufferRange(svc, state, state.cursor-1, state.cursor, "")
+	case keyDel:
+		if state.dotStart != state.dotEnd {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+		}
+		if state.cursor >= len(state.text) {
+			return state, nil
+		}
+		return replaceBufferRange(svc, state, state.cursor, state.cursor+1, "")
+	case 21, 26:
+		view, err := svc.Undo()
+		if err != nil {
+			return nil, err
+		}
+		return newBufferState(view), nil
+	case '\t', '\n':
+		return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
+	default:
+		if key >= 32 && key < keyEsc {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
+		}
+		handleBufferKey(state, key)
+		return state, nil
+	}
+}
+
+func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {
+	view, err := svc.Replace(start, end, repl)
+	if err != nil {
+		return nil, err
+	}
+	return newBufferState(view), nil
+}
+
 func drawBufferMode(stdout io.Writer, state *bufferState) error {
 	if state == nil {
 		return nil
@@ -365,6 +432,13 @@ func handleBufferKey(state *bufferState, key int) {
 		return
 	}
 	switch key {
+	case 0:
+		if state.markMode {
+			state.markMode = false
+		} else {
+			state.markMode = true
+			state.markPos = state.cursor
+		}
 	case keyUp, keyPgUp:
 		state.cursor = movePageUp(state.text, state.cursor, bufferRows)
 		state.origin = lineStart(state.text, state.cursor)
@@ -397,6 +471,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
 		state.origin = lineStart(state.text, state.cursor)
 	}
+	updateSelection(state)
 }
 
 func readBufferKey(reader *bufio.Reader) (int, error) {
@@ -439,6 +514,11 @@ func readBufferKey(reader *bufio.Reader) (int, error) {
 				_, _ = reader.ReadByte()
 			}
 			return keyPgDn, nil
+		case '3':
+			if reader.Buffered() > 0 {
+				_, _ = reader.ReadByte()
+			}
+			return keyDel, nil
 		default:
 			return keyEsc, nil
 		}
@@ -569,4 +649,22 @@ func clampIndex(n, max int) int {
 		return max
 	}
 	return n
+}
+
+func updateSelection(state *bufferState) {
+	if state == nil {
+		return
+	}
+	if !state.markMode {
+		state.dotStart = state.cursor
+		state.dotEnd = state.cursor
+		return
+	}
+	if state.cursor < state.markPos {
+		state.dotStart = state.cursor
+		state.dotEnd = state.markPos
+		return
+	}
+	state.dotStart = state.markPos
+	state.dotEnd = state.cursor
 }

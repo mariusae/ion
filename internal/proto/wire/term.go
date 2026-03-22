@@ -12,4 +12,7 @@ type BufferView struct {
 type TermService interface {
 	DownloadService
 	CurrentView() (BufferView, error)
+	SetDot(start, end int) (BufferView, error)
+	Replace(start, end int, text string) (BufferView, error)
+	Undo() (BufferView, error)
 }

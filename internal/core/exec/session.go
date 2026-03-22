@@ -1359,6 +1359,75 @@ func (s *Session) CurrentDot() text.Range {
 	return s.Current.Dot
 }
 
+// SetCurrentDot updates the current file selection without mutating file text.
+func (s *Session) SetCurrentDot(start, end text.Posn) error {
+	if s.Current == nil {
+		return fmt.Errorf("no current file")
+	}
+	if start < 0 || end < start || int(end) > s.Current.B.Len() {
+		return fmt.Errorf("dot out of range")
+	}
+	r := text.Range{P1: start, P2: end}
+	s.Current.Dot = r
+	s.Current.NDot = r
+	return nil
+}
+
+// ReplaceCurrent replaces the current file range with UTF-8 text.
+func (s *Session) ReplaceCurrent(start, end text.Posn, replacement string) (err error) {
+	if s.Current == nil {
+		return fmt.Errorf("no current file")
+	}
+	if start < 0 || end < start || int(end) > s.Current.B.Len() {
+		return fmt.Errorf("replace range out of bounds")
+	}
+	if start == end && replacement == "" {
+		return s.SetCurrentDot(start, end)
+	}
+
+	startedFrame := s.beginFrame()
+	defer func() {
+		if startedFrame {
+			ferr := s.finishFrame(err == nil)
+			if err == nil && ferr != nil {
+				err = ferr
+			}
+		}
+	}()
+
+	f := s.Current
+	return s.mutate(f, func(seq uint32) error {
+		if end > start {
+			if err := f.LogDelete(start, end, seq); err != nil {
+				return err
+			}
+		}
+		if replacement == "" {
+			f.NDot = text.Range{P1: start, P2: start}
+			return nil
+		}
+		txt := text.NewStringFromUTF8(replacement)
+		f.NDot = text.Range{P1: end, P2: end}
+		return s.appendLogged(f, &txt, end, seq)
+	})
+}
+
+// UndoCurrent undoes the most recent change in the current file.
+func (s *Session) UndoCurrent() error {
+	if s.Current == nil {
+		return fmt.Errorf("no current file")
+	}
+	q0, q1, err := s.Current.Undo(true, true)
+	if err != nil {
+		return err
+	}
+	r := text.Range{P1: q0, P2: q1}
+	s.Current.Dot = r
+	s.Current.NDot = r
+	s.QuitOK = false
+	return nil
+}
+
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
 		if f != nil && f.Mod {

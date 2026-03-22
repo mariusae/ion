@@ -67,6 +67,34 @@ func (w *Workspace) Execute(cmd *cmdlang.Cmd) (bool, error) {
 // CurrentView returns the current file text and selection state for the
 // initial terminal client.
 func (w *Workspace) CurrentView() (wire.BufferView, error) {
+	return w.currentView()
+}
+
+// SetDot updates the current selection for the terminal client.
+func (w *Workspace) SetDot(start, end int) (wire.BufferView, error) {
+	if err := w.session.SetCurrentDot(text.Posn(start), text.Posn(end)); err != nil {
+		return wire.BufferView{}, err
+	}
+	return w.currentView()
+}
+
+// Replace edits the current file through the server-owned core session.
+func (w *Workspace) Replace(start, end int, repl string) (wire.BufferView, error) {
+	if err := w.session.ReplaceCurrent(text.Posn(start), text.Posn(end), repl); err != nil {
+		return wire.BufferView{}, err
+	}
+	return w.currentView()
+}
+
+// Undo reverts the latest change in the current file.
+func (w *Workspace) Undo() (wire.BufferView, error) {
+	if err := w.session.UndoCurrent(); err != nil {
+		return wire.BufferView{}, err
+	}
+	return w.currentView()
+}
+
+func (w *Workspace) currentView() (wire.BufferView, error) {
 	text, err := w.session.CurrentText()
 	if err != nil {
 		return wire.BufferView{}, err

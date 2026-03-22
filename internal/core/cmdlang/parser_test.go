@@ -127,3 +127,30 @@ func TestParsePreservesLastPatternAcrossReset(t *testing.T) {
 		t.Fatalf("second Text = %q, want %q", cmd.Text.UTF8(), "z")
 	}
 }
+
+func TestParseUnknownCommandErrorMatchesSam(t *testing.T) {
+	t.Parallel()
+
+	p := NewParser("Z\n")
+	if _, err := p.Parse(); err == nil || err.Error() != "unknown command `Z'" {
+		t.Fatalf("Parse() error = %v, want %q", err, "unknown command `Z'")
+	}
+}
+
+func TestParseBadDelimiterErrorMatchesSam(t *testing.T) {
+	t.Parallel()
+
+	p := NewParser("sptp\n")
+	if _, err := p.Parse(); err == nil || err.Error() != "bad delimiter `p'" {
+		t.Fatalf("Parse() error = %v, want %q", err, "bad delimiter `p'")
+	}
+}
+
+func TestParseUnmatchedBlockErrorMatchesSam(t *testing.T) {
+	t.Parallel()
+
+	p := NewParser("}\n")
+	if _, err := p.Parse(); err == nil || err.Error() != "unmatched `}'" {
+		t.Fatalf("Parse() error = %v, want %q", err, "unmatched `}'")
+	}
+}

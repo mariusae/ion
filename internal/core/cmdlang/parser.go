@@ -166,7 +166,7 @@ func (p *Parser) parseCmd(nest int) (*Cmd, error) {
 			return &cmd, nil
 		}
 		if spec.defaddr == aNo && cmd.Addr != nil {
-			return nil, fmt.Errorf("command %q takes no address", cmd.Cmdc)
+			return nil, fmt.Errorf("command takes no address")
 		}
 		if spec.count > 0 {
 			cmd.Num = int(p.getnum(spec.count))
@@ -268,11 +268,11 @@ func (p *Parser) parseCmd(nest int) (*Cmd, error) {
 			return nil, err
 		}
 		if nest == 0 {
-			return nil, fmt.Errorf("unexpected }")
+			return nil, fmt.Errorf("unmatched `}'")
 		}
 		return nil, errBlockEnd
 	default:
-		return nil, fmt.Errorf("unknown command %q", cmd.Cmdc)
+		return nil, errorC("unknown command", cmd.Cmdc)
 	}
 }
 
@@ -589,9 +589,13 @@ func lookup(c rune) (cmdSpec, bool) {
 
 func okDelim(c rune) error {
 	if c == '\\' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
-		return fmt.Errorf("bad delimiter %q", c)
+		return errorC("bad delimiter", c)
 	}
 	return nil
+}
+
+func errorC(msg string, c rune) error {
+	return fmt.Errorf("%s `%c'", msg, c)
 }
 
 func isBlankOrNL(c int) bool {

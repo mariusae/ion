@@ -30,6 +30,7 @@ type Session struct {
 	QuitOK       bool
 	LastShellCmd string
 	execDepth    int
+	fileLoopDepth int
 	frame        *execFrame
 }
 
@@ -852,6 +853,14 @@ func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 }
 
 func (s *Session) fileLoop(cmd *ioncmd.Cmd, wantMatch bool) error {
+	if s.fileLoopDepth > 0 {
+		return fmt.Errorf("can't nest X or Y")
+	}
+	s.fileLoopDepth++
+	defer func() {
+		s.fileLoopDepth--
+	}()
+
 	orig := s.Current
 	files := append([]*text.File(nil), s.Files...)
 	for _, f := range files {

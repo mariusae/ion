@@ -27,8 +27,10 @@ const (
 	keyPgUp
 	keyPgDn
 	keyDel
+	keyPaste
 	keyAltLeft
 	keyAltRight
+	keyAltSnarf
 	keyAltBackspace
 )
 
@@ -72,6 +74,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 	var linebuf []rune
 	inBufferMode := false
 	var buffer *bufferState
+	var snarf []rune
 
 	executePending := func(final bool) (bool, error) {
 		for {
@@ -175,6 +178,34 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					buffer = nil
 					continue
 				}
+				switch key {
+				case keyAltSnarf:
+					snarf = snarfSelection(buffer)
+					if len(snarf) != 0 {
+						buffer.status = "snarfed"
+					}
+					if err := drawBufferMode(stdout, buffer); err != nil {
+						return err
+					}
+					continue
+				case keyPaste:
+					paste, err := readBracketedPaste(reader)
+					if err != nil {
+						return err
+					}
+					if len(paste) == 0 {
+						continue
+					}
+					buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(paste))
+					if err != nil {
+						return err
+					}
+					buffer.status = ""
+					if err := drawBufferMode(stdout, buffer); err != nil {
+						return err
+					}
+					continue
+				}
 				buffer, err = applyBufferKey(svc, buffer, key)
 				if err != nil {
 					return err
@@ -185,6 +216,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				continue
 			}
 			switch r {
+			case 0x18:
+				snarf = snarfSelection(buffer)
+				if len(snarf) == 0 {
+					continue
+				}
+				buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
+				if err != nil {
+					return err
+				}
+				buffer.status = "cut"
+				if err := drawBufferMode(stdout, buffer); err != nil {
+					return err
+				}
+				continue
+			case 0x19:
+				if len(snarf) == 0 {
+					continue
+				}
+				buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
+				if err != nil {
+					return err
+				}
+				buffer.status = ""
+				if err := drawBufferMode(stdout, buffer); err != nil {
+					return err
+				}
+				continue
 			case 0x11:
 				if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
 					return err
@@ -625,22 +683,33 @@ func readBufferKey(reader *bufio.Reader) (int, error) {
 			return keyHome, nil
 		case 'F':
 			return keyEnd, nil
-		case '5':
-			if reader.Buffered() > 0 {
-				_, _ = reader.ReadByte()
-			}
-			return keyPgUp, nil
-		case '6':
-			if reader.Buffered() > 0 {
-				_, _ = reader.ReadByte()
-			}
-			return keyPgDn, nil
-		case '3':
-			if reader.Buffered() > 0 {
-				_, _ = reader.ReadByte()
-			}
-			return keyDel, nil
 		default:
+			if b >= '0' && b <= '9' {
+				num := int(b - '0')
+				for reader.Buffered() > 0 {
+					next, err := reader.ReadByte()
+					if err != nil {
+						return 0, err
+					}
+					if next >= '0' && next <= '9' {
+						num = num*10 + int(next-'0')
+						continue
+					}
+					if next == '~' {
+						switch num {
+						case 3:
+							return keyDel, nil
+						case 5:
+							return keyPgUp, nil
+						case 6:
+							return keyPgDn, nil
+						case 200:
+							return keyPaste, nil
+						}
+					}
+					break
+				}
+			}
 			return keyEsc, nil
 		}
 	case 'O':
@@ -661,6 +730,8 @@ func readBufferKey(reader *bufio.Reader) (int, error) {
 		return keyAltLeft, nil
 	case 'f':
 		return keyAltRight, nil
+	case 'w':
+		return keyAltSnarf, nil
 	case 0x08, 0x7f:
 		return keyAltBackspace, nil
 	}
@@ -776,6 +847,71 @@ func clampIndex(n, max int) int {
 		return max
 	}
 	return n
+}
+
+func snarfSelection(state *bufferState) []rune {
+	if state == nil || state.dotEnd <= state.dotStart {
+		return nil
+	}
+	return append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+}
+
+func readBracketedPaste(reader *bufio.Reader) ([]rune, error) {
+	var out []rune
+	var pending []rune
+	for {
+		r, _, err := reader.ReadRune()
+		if err != nil {
+			return nil, err
+		}
+		switch len(pending) {
+		case 0:
+			if r == 0x1b {
+				pending = append(pending, r)
+				continue
+			}
+			out = append(out, r)
+		case 1:
+			if r == '[' {
+				pending = append(pending, r)
+				continue
+			}
+			out = append(out, pending...)
+			pending = pending[:0]
+			out = append(out, r)
+		case 2:
+			if r == '2' {
+				pending = append(pending, r)
+				continue
+			}
+			out = append(out, pending...)
+			pending = pending[:0]
+			out = append(out, r)
+		case 3:
+			if r == '0' {
+				pending = append(pending, r)
+				continue
+			}
+			out = append(out, pending...)
+			pending = pending[:0]
+			out = append(out, r)
+		case 4:
+			if r == '1' {
+				pending = append(pending, r)
+				continue
+			}
+			out = append(out, pending...)
+			pending = pending[:0]
+			out = append(out, r)
+		case 5:
+			if r == '~' {
+				return out, nil
+			}
+			out = append(out, pending...)
+			pending = pending[:0]
+			out = append(out, r)
+		}
+	}
 }
 
 func isWordRune(r rune) bool {

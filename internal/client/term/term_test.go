@@ -1,6 +1,8 @@
 package term
 
 import (
+	"bufio"
+	"strings"
 	"testing"
 
 	"ion/internal/core/cmdlang"
@@ -227,5 +229,34 @@ func TestApplyBufferKeyAltBackspaceDeletesWord(t *testing.T) {
 	}
 	if got, want := next.cursor, 6; got != want {
 		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestReadBufferKeyPaste(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b[200~hello"))
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC: %v", err)
+	}
+	got, err := readBufferKey(reader)
+	if err != nil {
+		t.Fatalf("readBufferKey() error = %v", err)
+	}
+	if got != keyPaste {
+		t.Fatalf("readBufferKey() = %d, want keyPaste", got)
+	}
+}
+
+func TestReadBracketedPaste(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("hello\x1b[201~tail"))
+	got, err := readBracketedPaste(reader)
+	if err != nil {
+		t.Fatalf("readBracketedPaste() error = %v", err)
+	}
+	if want := "hello"; string(got) != want {
+		t.Fatalf("readBracketedPaste() = %q, want %q", string(got), want)
 	}
 }

@@ -27,7 +27,7 @@ func enterCBreakMode(f *os.File) (*ttyState, error) {
 		return nil, fmt.Errorf("get terminal mode: %w", errno)
 	}
 	orig := termios
-	termios.Lflag &^= syscall.ICANON
+	termios.Lflag &^= syscall.ICANON | syscall.ECHO
 	termios.Cc[syscall.VMIN] = 1
 	termios.Cc[syscall.VTIME] = 0
 	if _, _, errno := syscall.Syscall6(

@@ -37,6 +37,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 	parser := cmdlang.NewParserRunes(nil)
 	reader := bufio.NewReader(stdin)
 	var pending []rune
+	var linebuf []rune
 	inBufferMode := false
 
 	executePending := func(final bool) (bool, error) {
@@ -79,16 +80,42 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 		}
 	}
 
+	submitLine := func() (bool, error) {
+		if _, err := io.WriteString(stdout, "\n"); err != nil {
+			return false, err
+		}
+		pending = append(pending, linebuf...)
+		pending = append(pending, '\n')
+		linebuf = linebuf[:0]
+		return executePending(false)
+	}
+
+	eraseLast := func() error {
+		if len(linebuf) == 0 {
+			return nil
+		}
+		linebuf = linebuf[:len(linebuf)-1]
+		_, err := io.WriteString(stdout, "\b \b")
+		return err
+	}
+
+	ctrlC := func() (bool, error) {
+		if _, err := io.WriteString(stdout, "^C\n"); err != nil {
+			return false, err
+		}
+		linebuf = linebuf[:0]
+		pending = append(pending, '\n')
+		return executePending(false)
+	}
+
 	for {
 		r, _, err := reader.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				done, err := executePending(true)
+				pending = append(pending, linebuf...)
+				_, err := executePending(true)
 				if err != nil {
 					return err
-				}
-				if done {
-					return nil
 				}
 				return nil
 			}
@@ -116,13 +143,64 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 			continue
 		}
 
-		pending = append(pending, r)
-		done, err := executePending(false)
-		if err != nil {
-			return err
-		}
-		if done {
+		switch r {
+		case '\n':
+			done, err := submitLine()
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+		case 0x7f, 0x08:
+			if err := eraseLast(); err != nil {
+				return err
+			}
+		case 0x15:
+			for len(linebuf) > 0 {
+				if err := eraseLast(); err != nil {
+					return err
+				}
+			}
+		case 0x17:
+			for len(linebuf) > 0 && linebuf[len(linebuf)-1] == ' ' {
+				if err := eraseLast(); err != nil {
+					return err
+				}
+			}
+			for len(linebuf) > 0 && linebuf[len(linebuf)-1] != ' ' {
+				if err := eraseLast(); err != nil {
+					return err
+				}
+			}
+		case 0x03:
+			done, err := ctrlC()
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+		case 0x04:
+			if len(linebuf) != 0 {
+				break
+			}
+			pending = append(pending, linebuf...)
+			done, err := executePending(true)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
 			return nil
+		default:
+			if r >= 32 || r == '\t' {
+				linebuf = append(linebuf, r)
+				if _, err := io.WriteString(stdout, string(r)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 }

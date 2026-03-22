@@ -50,7 +50,7 @@ type bufferState struct {
 //
 // For now this shares the command-mode loop with the download client while the
 // full terminal UI from term.c is ported behind this package boundary.
-func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService) error {
+func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
 	inFile, ok := stdin.(*os.File)
 	if !ok || !isTTY(inFile) {
 		return download.Run(files, stdin, stderr, svc)
@@ -58,10 +58,10 @@ func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.Ter
 	if err := svc.Bootstrap(files); err != nil {
 		return err
 	}
-	return runTTY(inFile, stdout, stderr, svc)
+	return runTTY(inFile, stdout, stderr, svc, capture)
 }
 
-func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) error {
+func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
 	state, err := enterCBreakMode(stdin)
 	if err != nil {
 		return err
@@ -75,6 +75,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 	inBufferMode := false
 	var buffer *bufferState
 	var snarf []rune
+	overlay := newOverlayState()
 
 	executePending := func(final bool) (bool, error) {
 		for {
@@ -144,6 +145,53 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 		return executePending(false)
 	}
 
+	refreshBuffer := func() error {
+		view, err := svc.CurrentView()
+		if err != nil {
+			if overlay.visible {
+				overlay.addOutput("?" + err.Error())
+				return nil
+			}
+			return err
+		}
+		buffer = newBufferState(view)
+		return nil
+	}
+
+	submitOverlay := func() (bool, error) {
+		line := string(overlay.input)
+		if len(overlay.input) == 0 {
+			last, ok := overlay.lastCommand()
+			if !ok {
+				return false, nil
+			}
+			line = last
+		} else {
+			overlay.addCommand(line)
+		}
+		pending = append(pending, []rune(line)...)
+		pending = append(pending, '\n')
+		overlay.resetInput()
+		if capture != nil {
+			capture.Start(func(line string) {
+				overlay.addOutput(line)
+			})
+		}
+		done, err := executePending(false)
+		if capture != nil {
+			capture.Stop()
+		}
+		if err != nil {
+			return false, err
+		}
+		if !done {
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
+		}
+		return done, nil
+	}
+
 	for {
 		r, _, err := reader.ReadRune()
 		if err != nil {
@@ -157,11 +205,95 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 			}
 			return err
 		}
-		if r == '\r' {
-			r = '\n'
-		}
-
 		if inBufferMode {
+			if overlay.visible {
+				if r == 0x1b {
+					key, err := readBufferKey(reader)
+					if err != nil {
+						return err
+					}
+					switch key {
+					case keyEsc:
+						overlay.close()
+					case keyPaste:
+						paste, err := readBracketedPaste(reader)
+						if err != nil {
+							return err
+						}
+						filtered := paste[:0]
+						for _, pr := range paste {
+							if pr == '\r' || pr == '\n' {
+								continue
+							}
+							filtered = append(filtered, pr)
+						}
+						overlay.insert(filtered)
+					case keyLeft:
+						overlay.moveLeft()
+					case keyRight:
+						overlay.moveRight()
+					case keyHome:
+						overlay.moveHome()
+					case keyEnd:
+						overlay.moveEnd()
+					case keyUp:
+						overlay.recallPrev()
+					case keyDown:
+						overlay.recallNext()
+					case keyDel:
+						overlay.deleteForward()
+					}
+					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+						return err
+					}
+					continue
+				}
+				switch r {
+				case '\r':
+					done, err := submitOverlay()
+					if err != nil {
+						return err
+					}
+					if done {
+						if err := exitBufferMode(stdout); err != nil {
+							return err
+						}
+						return nil
+					}
+				case '\n':
+					overlay.close()
+				case 0x7f, 0x08:
+					overlay.backspace()
+				case 0x04:
+					overlay.deleteForward()
+				case 0x02:
+					overlay.moveLeft()
+				case 0x06:
+					overlay.moveRight()
+				case 0x01:
+					overlay.moveHome()
+				case 0x05:
+					overlay.moveEnd()
+				case 0x10:
+					overlay.recallPrev()
+				case 0x0e:
+					overlay.recallNext()
+				case 0x15:
+					overlay.killLine()
+				case 0x17:
+					overlay.killWord()
+				case 0x0b:
+					overlay.clearHistory()
+				default:
+					if r >= 32 || r == '\t' {
+						overlay.insert([]rune{r})
+					}
+				}
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					return err
+				}
+				continue
+			}
 			if r == 0x1b {
 				key, err := readBufferKey(reader)
 				if err != nil {
@@ -176,6 +308,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					}
 					inBufferMode = false
 					buffer = nil
+					overlay.close()
 					continue
 				}
 				switch key {
@@ -184,7 +317,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					if len(snarf) != 0 {
 						buffer.status = "snarfed"
 					}
-					if err := drawBufferMode(stdout, buffer); err != nil {
+					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 						return err
 					}
 					continue
@@ -201,7 +334,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 						return err
 					}
 					buffer.status = ""
-					if err := drawBufferMode(stdout, buffer); err != nil {
+					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 						return err
 					}
 					continue
@@ -210,12 +343,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				if err != nil {
 					return err
 				}
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
 			}
 			switch r {
+			case '\n':
+				overlay.open("")
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					return err
+				}
+				continue
 			case 0x18:
 				snarf = snarfSelection(buffer)
 				if len(snarf) == 0 {
@@ -226,7 +365,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					return err
 				}
 				buffer.status = "cut"
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
@@ -239,7 +378,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					return err
 				}
 				buffer.status = ""
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
@@ -252,6 +391,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				}
 				inBufferMode = false
 				buffer = nil
+				overlay.close()
 				pending = append(pending, []rune("q\n")...)
 				done, err := executePending(false)
 				if err != nil {
@@ -271,6 +411,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					}
 					inBufferMode = false
 					buffer = nil
+					overlay.close()
 					pending = append(pending, []rune("w ")...)
 					continue
 				}
@@ -280,7 +421,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				} else {
 					buffer.status = msg
 				}
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					return err
+				}
+				continue
+			case 0x1f:
+				overlay.open("/")
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
@@ -295,7 +442,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				} else {
 					buffer.status = "?no match"
 				}
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
@@ -310,22 +457,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 				} else {
 					buffer.status = "?no match"
 				}
-				if err := drawBufferMode(stdout, buffer); err != nil {
+				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 					return err
 				}
 				continue
+			}
+			if r == '\r' {
+				r = '\n'
 			}
 			buffer, err = applyBufferKey(svc, buffer, int(r))
 			if err != nil {
 				return err
 			}
-			if err := drawBufferMode(stdout, buffer); err != nil {
+			if err := drawBufferMode(stdout, buffer, overlay); err != nil {
 				return err
 			}
 			continue
 		}
 		if r == 0x1b {
-			next, err := enterBufferMode(stdout, svc)
+			overlay.close()
+			next, err := enterBufferMode(stdout, svc, overlay)
 			if err != nil {
 				return err
 			}
@@ -335,7 +486,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 		}
 
 		switch r {
-		case '\n':
+		case '\n', '\r':
 			done, err := submitLine()
 			if err != nil {
 				return err
@@ -396,13 +547,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
 	}
 	state := newBufferState(view)
-	if err := drawBufferMode(stdout, state); err != nil {
+	if err := drawBufferMode(stdout, state, overlay); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -523,45 +674,70 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, state *bufferState) error {
+func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState) error {
 	if state == nil {
 		return nil
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[2J\x1b[H"); err != nil {
+	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[2J"); err != nil {
 		return err
 	}
+	viewRows := bufferRows
+	if overlay != nil && overlay.visible {
+		viewRows -= overlayRows
+	}
 	p := state.origin
-	for row := 0; row < bufferRows; row++ {
-		if p > len(state.text) {
-			break
-		}
-		lineEndPos := lineEnd(state.text, p)
-		if err := drawBufferLine(stdout, state, p, lineEndPos); err != nil {
+	for row := 0; row < viewRows; row++ {
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 			return err
 		}
-		if row != bufferRows-1 {
-			if _, err := io.WriteString(stdout, "\n"); err != nil {
+		if p <= len(state.text) {
+			lineEndPos := lineEnd(state.text, p)
+			if err := drawBufferLine(stdout, state, p, lineEndPos); err != nil {
+				return err
+			}
+			if p < len(state.text) {
+				next := nextLineStart(state.text, p)
+				if next != p {
+					p = next
+					continue
+				}
+			}
+			p = len(state.text) + 1
+		}
+	}
+	for row := viewRows + 1; row <= bufferRows; row++ {
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row); err != nil {
+			return err
+		}
+	}
+	if overlay != nil && overlay.visible {
+		lines := overlay.renderLines(overlayRows - 1)
+		startRow := viewRows + 1
+		for i, line := range lines {
+			if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", startRow+i); err != nil {
+				return err
+			}
+			if err := drawOverlayText(stdout, line); err != nil {
 				return err
 			}
 		}
-		if p >= len(state.text) {
-			break
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", bufferRows); err != nil {
+			return err
 		}
-		next := nextLineStart(state.text, p)
-		if next == p {
-			break
+		if err := drawOverlayPrompt(stdout, overlay); err != nil {
+			return err
 		}
-		p = next
+		return nil
 	}
 	if state.status != "" {
-		if _, err := io.WriteString(stdout, "\x1b[24;1H\x1b[2K"); err != nil {
+		if _, err := io.WriteString(stdout, "\x1b[24;1H"); err != nil {
 			return err
 		}
 		status := []rune(state.status)
 		if len(status) > bufferCols {
 			status = status[:bufferCols]
 		}
-		if _, err := io.WriteString(stdout, string(status)); err != nil {
+		if err := drawOverlayText(stdout, string(status)); err != nil {
 			return err
 		}
 	}
@@ -596,6 +772,42 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int) error 
 		if _, err := io.WriteString(stdout, "\x1b[7m \x1b[27m"); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func drawOverlayText(stdout io.Writer, text string) error {
+	line := []rune(text)
+	if len(line) > bufferCols {
+		line = line[:bufferCols]
+	}
+	_, err := io.WriteString(stdout, string(line))
+	return err
+}
+
+func drawOverlayPrompt(stdout io.Writer, overlay *overlayState) error {
+	if overlay == nil {
+		return nil
+	}
+	if _, err := io.WriteString(stdout, ": "); err != nil {
+		return err
+	}
+	col := 2
+	for _, r := range []rune(overlay.promptLine()) {
+		if col >= bufferCols {
+			break
+		}
+		if r == 0 {
+			if _, err := io.WriteString(stdout, "\x1b[7m \x1b[27m"); err != nil {
+				return err
+			}
+			col++
+			continue
+		}
+		if _, err := io.WriteString(stdout, string(r)); err != nil {
+			return err
+		}
+		col++
 	}
 	return nil
 }

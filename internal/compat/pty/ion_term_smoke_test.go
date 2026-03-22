@@ -565,6 +565,78 @@ func TestIonTermBufferModeSnarfAndPaste(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeOverlayRecall(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\n,p\r"); err != nil {
+		t.Fatalf("open overlay and run print command: %v", err)
+	}
+	if _, err := sess.WaitFor("> ,p", 2*time.Second); err != nil {
+		t.Fatalf("wait for overlay command history: %v\n%s", err, sess.Snapshot())
+	}
+	if _, err := sess.WaitFor("beta", 2*time.Second); err != nil {
+		t.Fatalf("wait for overlay command output: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x10"); err != nil {
+		t.Fatalf("recall last overlay command: %v", err)
+	}
+	if _, err := sess.WaitFor(": ,p\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+		t.Fatalf("wait for recalled overlay prompt: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\n\x1f"); err != nil {
+		t.Fatalf("close overlay and reopen with slash preload: %v", err)
+	}
+	if _, err := sess.WaitFor(": /\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+		t.Fatalf("wait for slash-preloaded overlay prompt: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b\x1bq\n"); err != nil {
+		t.Fatalf("close overlay, exit buffer mode, and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func findModuleRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

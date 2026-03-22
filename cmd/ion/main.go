@@ -60,5 +60,6 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	return term.Run(cfg.files, stdin, stdout, stderr, workspace.New(stdout, stderr))
+	capture := term.NewOutputCapture(stdout, stderr)
+	return term.Run(cfg.files, stdin, stdout, stderr, workspace.New(capture.Stdout(), capture.Stderr()), capture)
 }

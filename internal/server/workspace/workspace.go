@@ -1,9 +1,7 @@
 package workspace
 
 import (
-	"bytes"
 	"io"
-	"os"
 	"strings"
 
 	"ion/internal/core/cmdlang"
@@ -46,14 +44,12 @@ func (w *Workspace) Bootstrap(files []string) error {
 			if err := f.Name.DupString(&s); err != nil {
 				return err
 			}
-			data, err := os.ReadFile(name)
-			if err != nil {
-				return err
-			}
-			if _, _, err := f.LoadInitial(bytes.NewReader(data)); err != nil {
-				return err
-			}
 			w.session.AddFile(f)
+		}
+		if w.session.Current != nil {
+			if err := w.session.LoadCurrentIfUnread(); err != nil {
+				return err
+			}
 		}
 	}
 

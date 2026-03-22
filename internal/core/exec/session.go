@@ -313,7 +313,13 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 		return nil, ionaddr.Address{}, fmt.Errorf("no current file")
 	}
 
-	eval := &ionaddr.Evaluator{Files: s.Files, Current: s.Current}
+	eval := &ionaddr.Evaluator{
+		Files:   s.Files,
+		Current: s.Current,
+		EnsureFile: func(f *text.File) error {
+			return s.ensureLoadedForCommand(f, f != s.Current)
+		},
+	}
 	ap := cmd.Addr
 	if def := defaultAddrFor(cmd.Cmdc); def != 0 {
 		if ap == nil && cmd.Cmdc != '\n' {
@@ -326,6 +332,11 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 		if f == nil {
 			return nil, ionaddr.Address{}, nil
 		}
+		if commandNeedsCurrent(cmd.Cmdc) {
+			if err := s.ensureLoadedForCommand(f, f != s.Current); err != nil {
+				return nil, ionaddr.Address{}, err
+			}
+		}
 		return f, ionaddr.Address{F: f, R: f.Dot}, nil
 	}
 	base := ionaddr.Address{F: f, R: f.Dot}
@@ -334,6 +345,9 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 	}
 	a, err := eval.Resolve(ap, base, 0)
 	if err != nil {
+		return nil, ionaddr.Address{}, err
+	}
+	if err := s.ensureLoadedForCommand(a.F, a.F != s.Current); err != nil {
 		return nil, ionaddr.Address{}, err
 	}
 	return a.F, a, nil
@@ -961,7 +975,13 @@ func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.
 	if current != nil {
 		base = ionaddr.Address{F: current, R: current.Dot}
 	}
-	eval := &ionaddr.Evaluator{Files: s.Files, Current: s.Current}
+	eval := &ionaddr.Evaluator{
+		Files:   s.Files,
+		Current: s.Current,
+		EnsureFile: func(f *text.File) error {
+			return s.ensureLoadedForCommand(f, false)
+		},
+	}
 	return eval.Resolve(ap, base, 0)
 }
 
@@ -1351,6 +1371,9 @@ func (s *Session) CurrentText() (string, error) {
 	if s.Current == nil {
 		return "", nil
 	}
+	if err := s.LoadCurrentIfUnread(); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	if _, err := s.Current.WriteTo(&b); err != nil {
 		return "", err
@@ -1371,6 +1394,9 @@ func (s *Session) SetCurrentDot(start, end text.Posn) error {
 	if s.Current == nil {
 		return fmt.Errorf("no current file")
 	}
+	if err := s.LoadCurrentIfUnread(); err != nil {
+		return err
+	}
 	if start < 0 || end < start || int(end) > s.Current.B.Len() {
 		return fmt.Errorf("dot out of range")
 	}
@@ -1384,6 +1410,9 @@ func (s *Session) SetCurrentDot(start, end text.Posn) error {
 func (s *Session) ReplaceCurrent(start, end text.Posn, replacement string) (err error) {
 	if s.Current == nil {
 		return fmt.Errorf("no current file")
+	}
+	if err := s.LoadCurrentIfUnread(); err != nil {
+		return err
 	}
 	if start < 0 || end < start || int(end) > s.Current.B.Len() {
 		return fmt.Errorf("replace range out of bounds")
@@ -1424,6 +1453,9 @@ func (s *Session) UndoCurrent() error {
 	if s.Current == nil {
 		return fmt.Errorf("no current file")
 	}
+	if err := s.LoadCurrentIfUnread(); err != nil {
+		return err
+	}
 	q0, q1, err := s.Current.Undo(true, true)
 	if err != nil {
 		return err
@@ -1440,6 +1472,9 @@ func (s *Session) SaveCurrent() (string, error) {
 	if s.Current == nil {
 		return "", fmt.Errorf("no current file")
 	}
+	if err := s.LoadCurrentIfUnread(); err != nil {
+		return "", err
+	}
 	oldDiag := s.Diag
 	var b bytes.Buffer
 	s.Diag = &b
@@ -1450,6 +1485,14 @@ func (s *Session) SaveCurrent() (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// LoadCurrentIfUnread materializes the current file contents on demand.
+func (s *Session) LoadCurrentIfUnread() error {
+	if s.Current == nil {
+		return nil
+	}
+	return s.ensureLoadedForCommand(s.Current, false)
 }
 
 // MenuFiles returns the current file-menu ordering and status flags.
@@ -1576,6 +1619,19 @@ func loadUnreadFile(f *text.File) error {
 	}
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Session) ensureLoadedForCommand(f *text.File, reportStatus bool) error {
+	if f == nil || !f.Unread {
+		return nil
+	}
+	if err := loadUnreadFile(f); err != nil {
+		return err
+	}
+	if reportStatus {
+		return s.printFileStatus(f, false)
 	}
 	return nil
 }

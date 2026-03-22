@@ -26,8 +26,9 @@ type Addr struct {
 
 // Evaluator resolves address expressions against files.
 type Evaluator struct {
-	Files   []*text.File
-	Current *text.File
+	Files      []*text.File
+	Current    *text.File
+	EnsureFile func(*text.File) error
 }
 
 // Resolve evaluates ap starting from a.
@@ -73,6 +74,11 @@ func (e *Evaluator) Resolve(ap *Addr, a Address, sign int) (Address, error) {
 			match, err := e.matchFile(ap.Re)
 			if err != nil {
 				return Address{}, err
+			}
+			if e.EnsureFile != nil {
+				if err := e.EnsureFile(match); err != nil {
+					return Address{}, err
+				}
 			}
 			a = Address{F: match, R: match.Dot}
 			f = match

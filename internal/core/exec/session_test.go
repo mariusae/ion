@@ -135,6 +135,85 @@ func TestGroupedChangesApplyInParallel(t *testing.T) {
 	}
 }
 
+func TestQuotedFileAddressLoadsUnreadFileAndReportsStatus(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	aPath := filepath.Join(root, "a.txt")
+	bPath := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(aPath, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	if err := os.WriteFile(bPath, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+
+	newNamedFile := func(name string) *text.File {
+		t.Helper()
+		d, err := text.NewDisk()
+		if err != nil {
+			t.Fatalf("new disk: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = d.Close()
+		})
+		f := text.NewFile(d)
+		s := text.NewStringFromUTF8(name)
+		if err := f.Name.DupString(&s); err != nil {
+			t.Fatalf("set name: %v", err)
+		}
+		return f
+	}
+
+	fa := newNamedFile(aPath)
+	if err := loadUnreadFile(fa); err != nil {
+		t.Fatalf("load current file: %v", err)
+	}
+	fb := newNamedFile(bPath)
+
+	var out bytes.Buffer
+	var diag bytes.Buffer
+	sess := NewSession(&out)
+	sess.Diag = &diag
+	sess.AddFile(fa)
+	sess.AddFile(fb)
+	sess.Current = fa
+
+	parser := cmdlang.NewParser("\"b.txt\"p\nf\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !ok {
+		t.Fatal("execute requested stop")
+	}
+	cmd, err = parser.Parse()
+	if err != nil {
+		t.Fatalf("parse second command: %v", err)
+	}
+	ok, err = sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute second command: %v", err)
+	}
+	if !ok {
+		t.Fatal("execute second command requested stop")
+	}
+	if sess.Current != fb {
+		t.Fatalf("current file not switched to b.txt")
+	}
+	if fb.Unread {
+		t.Fatalf("quoted-file target remained unread")
+	}
+	if got, want := diag.String(), " -  "+bPath+"\n -. "+bPath+"\n"; got != want {
+		t.Fatalf("diag = %q, want %q", got, want)
+	}
+}
+
 func sameFilePath(t *testing.T, got, want string) bool {
 	t.Helper()
 

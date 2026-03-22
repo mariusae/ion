@@ -215,7 +215,7 @@ func (p *Parser) parseCmd(nest int) (*Cmd, error) {
 				return nil, err
 			}
 			if cmd.AddrArg == nil {
-				return nil, fmt.Errorf("missing address argument")
+				return nil, fmt.Errorf("address")
 			}
 		}
 		if spec.defcmd != 0 {

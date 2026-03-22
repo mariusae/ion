@@ -581,7 +581,7 @@ func (s *Session) substitute(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) e
 		}
 	}
 	if !didSub {
-		return fmt.Errorf("no substitution")
+		return fmt.Errorf("substitution")
 	}
 	f.NDot = text.Range{P1: a.R.P1, P2: a.R.P2 + delta}
 	s.touchFile(f)
@@ -981,7 +981,7 @@ func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 
 func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.Address, error) {
 	if ap == nil {
-		return ionaddr.Address{}, fmt.Errorf("missing address argument")
+		return ionaddr.Address{}, fmt.Errorf("address")
 	}
 	base := ionaddr.Address{}
 	if current != nil {

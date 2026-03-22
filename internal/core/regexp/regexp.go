@@ -157,7 +157,7 @@ func (c *compiler) realCompile(expr []rune, backwards bool) (*inst, error) {
 		return nil, err
 	}
 	if c.nbra != 0 {
-		return nil, fmt.Errorf("left parenthesis missing")
+		return nil, fmt.Errorf("unmatched `('")
 	}
 	c.andp--
 	return c.andstack[c.andp].first, nil
@@ -165,7 +165,7 @@ func (c *compiler) realCompile(expr []rune, backwards bool) (*inst, error) {
 
 func (c *compiler) newInst(t int) (*inst, error) {
 	if len(c.program) >= nprog {
-		return nil, fmt.Errorf("regexp too long")
+		return nil, fmt.Errorf("reg. exp. list overflow")
 	}
 	i := &inst{typ: t, subid: -1, class: -1}
 	c.program = append(c.program, i)
@@ -199,7 +199,7 @@ func (c *compiler) operator(t int) error {
 	if t == rbraTok {
 		c.nbra--
 		if c.nbra < 0 {
-			return fmt.Errorf("right parenthesis with no matching left parenthesis")
+			return fmt.Errorf("unmatched `)'")
 		}
 	}
 	if t == lbraTok {
@@ -227,7 +227,7 @@ func (c *compiler) operator(t int) error {
 
 func (c *compiler) pushand(first, last *inst) error {
 	if c.andp >= len(c.andstack) {
-		return fmt.Errorf("operand stack overflow")
+		return fmt.Errorf("reg. exp. list overflow")
 	}
 	c.andstack[c.andp] = node{first: first, last: last}
 	c.andp++
@@ -236,7 +236,7 @@ func (c *compiler) pushand(first, last *inst) error {
 
 func (c *compiler) pushator(t int) error {
 	if c.atorp >= len(c.atorstack) {
-		return fmt.Errorf("operator stack overflow")
+		return fmt.Errorf("reg. exp. list overflow")
 	}
 	c.atorstack[c.atorp] = t
 	c.atorp++
@@ -252,9 +252,9 @@ func (c *compiler) pushator(t int) error {
 func (c *compiler) popand(op int) (*node, error) {
 	if c.andp <= 0 {
 		if op != 0 {
-			return nil, fmt.Errorf("missing operand for %q", rune(op))
+			return nil, fmt.Errorf("no operand for `%c'", rune(op))
 		}
-		return nil, fmt.Errorf("bad regexp")
+		return nil, fmt.Errorf("malformed regexp")
 	}
 	c.andp--
 	return &c.andstack[c.andp], nil
@@ -262,7 +262,7 @@ func (c *compiler) popand(op int) (*node, error) {
 
 func (c *compiler) popator() (int, int, error) {
 	if c.atorp <= 0 || c.subidp <= 0 {
-		return 0, 0, fmt.Errorf("operator stack underflow")
+		return 0, 0, fmt.Errorf("reg. exp. list overflow")
 	}
 	c.atorp--
 	c.subidp--
@@ -463,7 +463,7 @@ func (c *compiler) lex() (int, error) {
 
 func (c *compiler) nextRec() (int, error) {
 	if c.pos >= len(c.expr) || (c.expr[c.pos] == '\\' && c.pos+1 >= len(c.expr)) {
-		return 0, fmt.Errorf("bad character class")
+		return 0, fmt.Errorf("malformed `[]'")
 	}
 	if c.expr[c.pos] == '\\' {
 		c.pos++
@@ -498,7 +498,7 @@ func (c *compiler) buildClass() error {
 			break
 		}
 		if c1 == int('-') {
-			return fmt.Errorf("bad character class")
+			return fmt.Errorf("malformed `[]'")
 		}
 		if c.pos < len(c.expr) && c.expr[c.pos] == '-' {
 			c.pos++
@@ -507,7 +507,7 @@ func (c *compiler) buildClass() error {
 				return err
 			}
 			if c2 == int(']') {
-				return fmt.Errorf("bad character class")
+				return fmt.Errorf("malformed `[]'")
 			}
 			class = append(class, rune(unicode.MaxRune), rune(c1&^quoted), rune(c2&^quoted))
 		} else {
@@ -596,7 +596,7 @@ func (p *Pattern) Execute(f *text.File, startp, eof text.Posn) (RangeSet, bool, 
 			if addInst(tl, p.start, sempty) {
 				ntl++
 				if ntl >= nlist {
-					return sel, false, fmt.Errorf("regexp thread overflow")
+					return sel, false, fmt.Errorf("reg. exp. list overflow")
 				}
 			}
 		}
@@ -610,7 +610,7 @@ func (p *Pattern) Execute(f *text.File, startp, eof text.Posn) (RangeSet, bool, 
 					if addInst(nl, inst.left, tl[i].ranges) {
 						nnl++
 						if nnl >= nlist {
-							return sel, false, fmt.Errorf("regexp thread overflow")
+							return sel, false, fmt.Errorf("reg. exp. list overflow")
 						}
 					}
 				}
@@ -630,7 +630,7 @@ func (p *Pattern) Execute(f *text.File, startp, eof text.Posn) (RangeSet, bool, 
 				if c != '\n' && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case bolTok:
@@ -651,21 +651,21 @@ func (p *Pattern) Execute(f *text.File, startp, eof text.Posn) (RangeSet, bool, 
 				if c >= 0 && classMatch(p.classes[inst.class], c, false) && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case ncclassTok:
 				if c >= 0 && classMatch(p.classes[inst.class], c, true) && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case orTok:
 				if addInst(tl, inst.right, tl[i].ranges) {
 					ntl++
 					if ntl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 				inst = inst.left
@@ -741,7 +741,7 @@ func (p *Pattern) BExecute(f *text.File, startp text.Posn) (RangeSet, bool, erro
 			if addInst(tl, p.backward, sempty) {
 				ntl++
 				if ntl >= nlist {
-					return sel, false, fmt.Errorf("regexp thread overflow")
+					return sel, false, fmt.Errorf("reg. exp. list overflow")
 				}
 			}
 		}
@@ -755,7 +755,7 @@ func (p *Pattern) BExecute(f *text.File, startp text.Posn) (RangeSet, bool, erro
 					if addInst(nl, inst.left, tl[i].ranges) {
 						nnl++
 						if nnl >= nlist {
-							return sel, false, fmt.Errorf("regexp thread overflow")
+							return sel, false, fmt.Errorf("reg. exp. list overflow")
 						}
 					}
 				}
@@ -775,7 +775,7 @@ func (p *Pattern) BExecute(f *text.File, startp text.Posn) (RangeSet, bool, erro
 				if c != '\n' && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case bolTok:
@@ -796,21 +796,21 @@ func (p *Pattern) BExecute(f *text.File, startp text.Posn) (RangeSet, bool, erro
 				if c >= 0 && classMatch(p.classes[inst.class], c, false) && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case ncclassTok:
 				if c >= 0 && classMatch(p.classes[inst.class], c, true) && addInst(nl, inst.left, tl[i].ranges) {
 					nnl++
 					if nnl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 			case orTok:
 				if addInst(tl, inst.right, tl[i].ranges) {
 					ntl++
 					if ntl >= nlist {
-						return sel, false, fmt.Errorf("regexp thread overflow")
+						return sel, false, fmt.Errorf("reg. exp. list overflow")
 					}
 				}
 				inst = inst.left

@@ -155,6 +155,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'b':
+		if err := s.switchFile(cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 'n':
 		if err := s.listFiles(); err != nil {
 			return false, err
@@ -562,6 +568,30 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 		}
 	}
 	return s.printFileStatus(f, true)
+}
+
+func (s *Session) switchFile(nameToken *text.String) error {
+	name := trimToken(nameTokenUTF8(nameToken))
+	if name == "" {
+		return fmt.Errorf("blank expected")
+	}
+	for _, f := range s.Files {
+		if trimToken(f.Name.UTF8()) != name {
+			continue
+		}
+		if f.Unread {
+			data, err := os.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+				return err
+			}
+		}
+		s.Current = f
+		return s.printFileStatus(f, true)
+	}
+	return fmt.Errorf("not in menu: %q", name)
 }
 
 func (s *Session) listFiles() error {

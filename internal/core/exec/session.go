@@ -182,6 +182,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'D':
+		if err := s.closeFiles(cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 'n':
 		if err := s.listFiles(); err != nil {
 			return false, err
@@ -229,7 +235,7 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 
 func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Address, error) {
 	f := s.Current
-	if f == nil && cmd.Cmdc != 'q' {
+	if f == nil && commandNeedsCurrent(cmd.Cmdc) {
 		return nil, ionaddr.Address{}, fmt.Errorf("no current file")
 	}
 
@@ -845,6 +851,26 @@ func (s *Session) openFiles(nameToken *text.String) error {
 	return s.printFileStatus(current, true)
 }
 
+func (s *Session) closeFiles(nameToken *text.String) error {
+	names := tokenFields(nameToken)
+	if len(names) == 0 {
+		if s.Current == nil {
+			return fmt.Errorf("no current file")
+		}
+		return s.removeFile(s.Current)
+	}
+	for _, name := range names {
+		f := s.findFileByName(name)
+		if f == nil {
+			continue
+		}
+		if err := s.removeFile(f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Session) switchFile(nameToken *text.String) error {
 	name := trimToken(nameTokenUTF8(nameToken))
 	if name == "" {
@@ -883,6 +909,21 @@ func (s *Session) firstFile() *text.File {
 		return nil
 	}
 	return s.Files[0]
+}
+
+func (s *Session) removeFile(target *text.File) error {
+	for i, f := range s.Files {
+		if f != target {
+			continue
+		}
+		if s.Current == target {
+			s.Current = nil
+		}
+		copy(s.Files[i:], s.Files[i+1:])
+		s.Files = s.Files[:len(s.Files)-1]
+		return target.Close()
+	}
+	return nil
 }
 
 func (s *Session) sortFiles() {
@@ -933,6 +974,15 @@ func defaultAddrFor(cmdc rune) rune {
 		return '*'
 	default:
 		return 0
+	}
+}
+
+func commandNeedsCurrent(cmdc rune) bool {
+	switch cmdc {
+	case 'b', 'B', 'D', 'n', 'q':
+		return false
+	default:
+		return true
 	}
 }
 

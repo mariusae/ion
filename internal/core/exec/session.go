@@ -101,6 +101,10 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'k':
+		f.Mark = a.R
+		return true, nil
+
 	case 's':
 		if err := s.substitute(f, cmd, a); err != nil {
 			return false, err
@@ -153,6 +157,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 
 	case 'n':
 		if err := s.listFiles(); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case '=':
+		if err := s.printAddress(f, a, cmd.Text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -618,6 +628,73 @@ func nameTokenUTF8(s *text.String) string {
 		return ""
 	}
 	return s.UTF8()
+}
+
+func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.String) error {
+	if f == nil {
+		return fmt.Errorf("no file")
+	}
+	arg := trimToken(nameTokenUTF8(token))
+	charOnly := false
+	switch arg {
+	case "":
+	case "#":
+		charOnly = true
+	default:
+		return fmt.Errorf("newline expected")
+	}
+
+	if charOnly {
+		if a.R.P1 == a.R.P2 {
+			_, err := fmt.Fprintf(s.Diag, "#%d\n", a.R.P1)
+			return err
+		}
+		_, err := fmt.Fprintf(s.Diag, "#%d,#%d\n", a.R.P1, a.R.P2)
+		return err
+	}
+
+	l1, err := lineNumberAt(f, a.R.P1)
+	if err != nil {
+		return err
+	}
+	l2, err := lineNumberEnd(f, a.R)
+	if err != nil {
+		return err
+	}
+	if l1 == l2 {
+		_, err = fmt.Fprintf(s.Diag, "%d; #%d", l1, a.R.P1)
+	} else {
+		_, err = fmt.Fprintf(s.Diag, "%d,%d; #%d,#%d", l1, l2, a.R.P1, a.R.P2)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(s.Diag)
+	return err
+}
+
+func lineNumberEnd(f *text.File, r text.Range) (int, error) {
+	if r.P1 == r.P2 {
+		return lineNumberAt(f, r.P1)
+	}
+	return lineNumberAt(f, r.P2-1)
+}
+
+func lineNumberAt(f *text.File, p text.Posn) (int, error) {
+	if p < 0 || p > text.Posn(f.B.Len()) {
+		return 0, fmt.Errorf("address out of range")
+	}
+	line := 1
+	for i := text.Posn(0); i < p; i++ {
+		ch, err := f.ReadRune(i)
+		if err != nil {
+			return 0, err
+		}
+		if ch == '\n' {
+			line++
+		}
+	}
+	return line, nil
 }
 
 func substituteText(f *text.File, rhs *text.String, matches ionregexp.RangeSet) ([]rune, error) {

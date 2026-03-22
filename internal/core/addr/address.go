@@ -113,14 +113,14 @@ func (e *Evaluator) Resolve(ap *Addr, a Address, sign int) (Address, error) {
 				a2 = Address{F: a.F, R: text.Range{P1: text.Posn(f.B.Len()), P2: text.Posn(f.B.Len())}}
 			}
 			if a1.F != a2.F {
-				return Address{}, fmt.Errorf("address range spans different files")
+				return Address{}, fmt.Errorf("addresses out of order")
 			}
 			a = Address{
 				F: a1.F,
 				R: text.Range{P1: a1.R.P1, P2: a2.R.P2},
 			}
 			if a.R.P2 < a.R.P1 {
-				return Address{}, fmt.Errorf("address out of order")
+				return Address{}, fmt.Errorf("addresses out of order")
 			}
 			return a, nil
 
@@ -355,7 +355,7 @@ func (e *Evaluator) matchFile(re *text.String) (*text.File, error) {
 		}
 		if ok && got.P[0].P1 >= 0 {
 			if match != nil {
-				return nil, fmt.Errorf("multiple files match")
+				return nil, fmt.Errorf("non-unique match for \"\"")
 			}
 			match = f
 		}

@@ -1000,7 +1000,7 @@ func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.
 func (s *Session) copyRangeLogged(seq uint32, src, dest ionaddr.Address) error {
 	size := src.R.P2 - src.R.P1
 	if size < 0 {
-		return fmt.Errorf("address out of order")
+		return fmt.Errorf("addresses out of order")
 	}
 	if size == 0 {
 		dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2}

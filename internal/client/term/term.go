@@ -28,6 +28,7 @@ const (
 	keyPgDn
 	keyDel
 	keyPaste
+	keyMouse
 	keyAltLeft
 	keyAltRight
 	keyAltSnarf
@@ -75,6 +76,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	inBufferMode := false
 	var buffer *bufferState
 	var snarf []rune
+	mouseSelecting := false
+	mouseSelectStart := 0
 	overlay := newOverlayState()
 
 	executePending := func(final bool) (bool, error) {
@@ -208,13 +211,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if inBufferMode {
 			if overlay.visible {
 				if r == 0x1b {
-					key, err := readBufferKey(reader)
+					key, mouse, err := readBufferEscape(reader)
 					if err != nil {
 						return err
 					}
 					switch key {
 					case keyEsc:
 						overlay.close()
+					case keyMouse:
+						if mouse != nil {
+							handled := handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart)
+							if !handled {
+								overlay.close()
+							}
+						}
 					case keyPaste:
 						paste, err := readBracketedPaste(reader)
 						if err != nil {
@@ -295,7 +305,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				continue
 			}
 			if r == 0x1b {
-				key, err := readBufferKey(reader)
+				key, mouse, err := readBufferEscape(reader)
 				if err != nil {
 					return err
 				}
@@ -309,6 +319,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					inBufferMode = false
 					buffer = nil
 					overlay.close()
+					mouseSelecting = false
+					continue
+				}
+				if key == keyMouse {
+					if mouse != nil && handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+						if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+							return err
+						}
+						continue
+					}
 					continue
 				}
 				switch key {
@@ -392,6 +412,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				inBufferMode = false
 				buffer = nil
 				overlay.close()
+				mouseSelecting = false
 				pending = append(pending, []rune("q\n")...)
 				done, err := executePending(false)
 				if err != nil {
@@ -412,6 +433,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					inBufferMode = false
 					buffer = nil
 					overlay.close()
+					mouseSelecting = false
 					pending = append(pending, []rune("w ")...)
 					continue
 				}
@@ -482,6 +504,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			buffer = next
 			inBufferMode = true
+			mouseSelecting = false
 			continue
 		}
 
@@ -560,7 +583,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlaySta
 }
 
 func exitBufferMode(stdout io.Writer) error {
-	_, err := io.WriteString(stdout, "\x1b[?1049l")
+	_, err := io.WriteString(stdout, "\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
 	return err
 }
 
@@ -678,13 +701,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState)
 	if state == nil {
 		return nil
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[2J"); err != nil {
+	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
 		return err
 	}
-	viewRows := bufferRows
-	if overlay != nil && overlay.visible {
-		viewRows -= overlayRows
-	}
+	viewRows := bufferViewRows(overlay)
 	p := state.origin
 	for row := 0; row < viewRows; row++ {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
@@ -863,91 +883,6 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
 	}
 	updateSelection(state)
-}
-
-func readBufferKey(reader *bufio.Reader) (int, error) {
-	if reader.Buffered() == 0 {
-		return keyEsc, nil
-	}
-	b, err := reader.ReadByte()
-	if err != nil {
-		return 0, err
-	}
-	switch b {
-	case '[':
-		if reader.Buffered() == 0 {
-			return keyEsc, nil
-		}
-		b, err = reader.ReadByte()
-		if err != nil {
-			return 0, err
-		}
-		switch b {
-		case 'A':
-			return keyUp, nil
-		case 'B':
-			return keyDown, nil
-		case 'C':
-			return keyRight, nil
-		case 'D':
-			return keyLeft, nil
-		case 'H':
-			return keyHome, nil
-		case 'F':
-			return keyEnd, nil
-		default:
-			if b >= '0' && b <= '9' {
-				num := int(b - '0')
-				for reader.Buffered() > 0 {
-					next, err := reader.ReadByte()
-					if err != nil {
-						return 0, err
-					}
-					if next >= '0' && next <= '9' {
-						num = num*10 + int(next-'0')
-						continue
-					}
-					if next == '~' {
-						switch num {
-						case 3:
-							return keyDel, nil
-						case 5:
-							return keyPgUp, nil
-						case 6:
-							return keyPgDn, nil
-						case 200:
-							return keyPaste, nil
-						}
-					}
-					break
-				}
-			}
-			return keyEsc, nil
-		}
-	case 'O':
-		if reader.Buffered() == 0 {
-			return keyEsc, nil
-		}
-		b, err = reader.ReadByte()
-		if err != nil {
-			return 0, err
-		}
-		switch b {
-		case 'H':
-			return keyHome, nil
-		case 'F':
-			return keyEnd, nil
-		}
-	case 'b':
-		return keyAltLeft, nil
-	case 'f':
-		return keyAltRight, nil
-	case 'w':
-		return keyAltSnarf, nil
-	case 0x08, 0x7f:
-		return keyAltBackspace, nil
-	}
-	return keyEsc, nil
 }
 
 func movePageUp(text []rune, pos, rows int) int {

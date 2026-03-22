@@ -1,0 +1,261 @@
+package term
+
+import "bufio"
+
+type mouseEvent struct {
+	button  int
+	x       int
+	y       int
+	pressed bool
+}
+
+func bufferViewRows(overlay *overlayState) int {
+	rows := bufferRows
+	if overlay != nil && overlay.visible {
+		rows -= overlayRows
+	}
+	return rows
+}
+
+func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
+	if reader.Buffered() == 0 {
+		return keyEsc, nil, nil
+	}
+	b, err := reader.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	switch b {
+	case '[':
+		if reader.Buffered() == 0 {
+			return keyEsc, nil, nil
+		}
+		b, err = reader.ReadByte()
+		if err != nil {
+			return 0, nil, err
+		}
+		switch b {
+		case 'A':
+			return keyUp, nil, nil
+		case 'B':
+			return keyDown, nil, nil
+		case 'C':
+			return keyRight, nil, nil
+		case 'D':
+			return keyLeft, nil, nil
+		case 'H':
+			return keyHome, nil, nil
+		case 'F':
+			return keyEnd, nil, nil
+		case '<':
+			event, err := readMouseEvent(reader)
+			if err != nil {
+				return 0, nil, err
+			}
+			return keyMouse, &event, nil
+		default:
+			if b >= '0' && b <= '9' {
+				num := int(b - '0')
+				for reader.Buffered() > 0 {
+					next, err := reader.ReadByte()
+					if err != nil {
+						return 0, nil, err
+					}
+					if next >= '0' && next <= '9' {
+						num = num*10 + int(next-'0')
+						continue
+					}
+					if next == '~' {
+						switch num {
+						case 3:
+							return keyDel, nil, nil
+						case 5:
+							return keyPgUp, nil, nil
+						case 6:
+							return keyPgDn, nil, nil
+						case 200:
+							return keyPaste, nil, nil
+						}
+					}
+					break
+				}
+			}
+			return keyEsc, nil, nil
+		}
+	case 'O':
+		if reader.Buffered() == 0 {
+			return keyEsc, nil, nil
+		}
+		b, err = reader.ReadByte()
+		if err != nil {
+			return 0, nil, err
+		}
+		switch b {
+		case 'H':
+			return keyHome, nil, nil
+		case 'F':
+			return keyEnd, nil, nil
+		}
+	case 'b':
+		return keyAltLeft, nil, nil
+	case 'f':
+		return keyAltRight, nil, nil
+	case 'w':
+		return keyAltSnarf, nil, nil
+	case 0x08, 0x7f:
+		return keyAltBackspace, nil, nil
+	}
+	return keyEsc, nil, nil
+}
+
+func readBufferKey(reader *bufio.Reader) (int, error) {
+	key, _, err := readBufferEscape(reader)
+	return key, err
+}
+
+func readMouseEvent(reader *bufio.Reader) (mouseEvent, error) {
+	button, err := readMouseNumber(reader)
+	if err != nil {
+		return mouseEvent{}, err
+	}
+	if _, err := reader.ReadByte(); err != nil {
+		return mouseEvent{}, err
+	}
+	x, err := readMouseNumber(reader)
+	if err != nil {
+		return mouseEvent{}, err
+	}
+	if _, err := reader.ReadByte(); err != nil {
+		return mouseEvent{}, err
+	}
+	y, err := readMouseNumber(reader)
+	if err != nil {
+		return mouseEvent{}, err
+	}
+	end, err := reader.ReadByte()
+	if err != nil {
+		return mouseEvent{}, err
+	}
+	return mouseEvent{
+		button:  button,
+		x:       x - 1,
+		y:       y - 1,
+		pressed: end == 'M',
+	}, nil
+}
+
+func readMouseNumber(reader *bufio.Reader) (int, error) {
+	n := 0
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if b == ';' || b == 'M' || b == 'm' {
+			if err := reader.UnreadByte(); err != nil {
+				return 0, err
+			}
+			return n, nil
+		}
+		n = n*10 + int(b-'0')
+	}
+}
+
+func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEvent, selecting *bool, selectStart *int) bool {
+	if state == nil {
+		return false
+	}
+	viewRows := bufferViewRows(overlay)
+	if overlay != nil && overlay.visible && event.y >= viewRows {
+		overlay.close()
+		return true
+	}
+	switch event.button {
+	case 64:
+		for i := 0; i < 3; i++ {
+			next := prevLineStart(state.text, state.origin)
+			if next == state.origin {
+				break
+			}
+			state.origin = next
+		}
+		return true
+	case 65:
+		for i := 0; i < 3; i++ {
+			next := nextLineStart(state.text, state.origin)
+			if next == state.origin {
+				break
+			}
+			state.origin = next
+		}
+		return true
+	}
+	pos, ok := screenToPos(state, overlay, event.y, event.x)
+	if !ok {
+		return false
+	}
+	if event.button >= 32 && event.button < 64 {
+		if !*selecting {
+			return true
+		}
+		state.cursor = pos
+		state.markMode = false
+		updateMouseSelection(state, *selectStart, pos)
+		return true
+	}
+	if event.button&3 != 0 {
+		return false
+	}
+	if event.pressed {
+		*selecting = true
+		*selectStart = pos
+		state.cursor = pos
+		state.markMode = false
+		state.dotStart = pos
+		state.dotEnd = pos
+		return true
+	}
+	if !*selecting {
+		return true
+	}
+	*selecting = false
+	state.cursor = pos
+	state.markMode = false
+	updateMouseSelection(state, *selectStart, pos)
+	return true
+}
+
+func updateMouseSelection(state *bufferState, start, end int) {
+	if start <= end {
+		state.dotStart = start
+		state.dotEnd = end
+		return
+	}
+	state.dotStart = end
+	state.dotEnd = start
+}
+
+func screenToPos(state *bufferState, overlay *overlayState, row, col int) (int, bool) {
+	if state == nil {
+		return 0, false
+	}
+	if row < 0 || row >= bufferViewRows(overlay) {
+		return 0, false
+	}
+	if col < 0 {
+		col = 0
+	}
+	p := state.origin
+	for i := 0; i < row; i++ {
+		next := nextLineStart(state.text, p)
+		if next == p {
+			break
+		}
+		p = next
+	}
+	end := lineEnd(state.text, p)
+	if col > end-p {
+		col = end - p
+	}
+	return p + col, true
+}

@@ -695,6 +695,126 @@ func TestIonTermBufferModeCtrlSpaceSelectionSyncsBackToCommands(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeMouseSelectionSyncsBackToCommands(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("\x1b[?1006h", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for mouse enablement: %v\n%s", err, sess.Snapshot())
+	}
+	if _, err := sess.WaitFor("alpha", 2*time.Second); err != nil {
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[<0;1;1M\x1b[<32;3;1M\x1b[<0;3;1m"); err != nil {
+		t.Fatalf("send mouse drag selection: %v", err)
+	}
+	if _, err := sess.WaitFor("\x1b[7ma\x1b[27m\x1b[7ml\x1b[27mpha", 2*time.Second); err != nil {
+		t.Fatalf("wait for mouse-selected highlight: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bp\nq\n"); err != nil {
+		t.Fatalf("exit buffer mode, print selection, and quit: %v", err)
+	}
+	if _, err := sess.WaitFor("al", 2*time.Second); err != nil {
+		t.Fatalf("wait for command-mode print of mouse selection: %v\n%s", err, sess.Snapshot())
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
+func TestIonTermBufferModeMouseScroll(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	var text strings.Builder
+	for i := 1; i <= 40; i++ {
+		text.WriteString(fmt.Sprintf("line%03d\n", i))
+	}
+	if err := os.WriteFile(path, []byte(text.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("line001", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[<65;1;1M"); err != nil {
+		t.Fatalf("send mouse wheel down: %v", err)
+	}
+	if _, err := sess.WaitFor("line004", 2*time.Second); err != nil {
+		t.Fatalf("wait for scrolled buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bq\n"); err != nil {
+		t.Fatalf("exit buffer mode and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func findModuleRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

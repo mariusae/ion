@@ -2109,7 +2109,7 @@ func lineNumberEnd(f *text.File, r text.Range) (int, error) {
 
 func lineNumberAt(f *text.File, p text.Posn) (int, error) {
 	if p < 0 || p > text.Posn(f.B.Len()) {
-		return 0, fmt.Errorf("address out of range")
+		return 0, fmt.Errorf("address range")
 	}
 	line := 1
 	for i := text.Posn(0); i < p; i++ {

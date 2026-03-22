@@ -158,7 +158,7 @@ func CharAddr(n text.Posn, addr Address, sign int) (Address, error) {
 		addr.R.P1 = addr.R.P2
 	}
 	if addr.R.P1 < 0 || int(addr.R.P2) > addr.F.B.Len() {
-		return Address{}, fmt.Errorf("address out of range")
+		return Address{}, fmt.Errorf("address range")
 	}
 	return addr, nil
 }
@@ -196,7 +196,7 @@ func LineAddr(n text.Posn, addr Address, sign int) (Address, error) {
 			}
 			for count < n {
 				if int(p) >= f.B.Len() {
-					return Address{}, fmt.Errorf("address out of range")
+					return Address{}, fmt.Errorf("address range")
 				}
 				ch, err := f.ReadRune(p)
 				if err != nil {
@@ -231,9 +231,9 @@ func LineAddr(n text.Posn, addr Address, sign int) (Address, error) {
 		for count = 0; count < n; {
 			if p == 0 {
 				count++
-				if count != n {
-					return Address{}, fmt.Errorf("address out of range")
-				}
+					if count != n {
+						return Address{}, fmt.Errorf("address range")
+					}
 			} else {
 				ch, err := f.ReadRune(p - 1)
 				if err != nil {

@@ -1239,14 +1239,12 @@ func (s *Session) openFiles(nameToken *text.String) error {
 		return fmt.Errorf("blank expected")
 	}
 	if emptyList {
-		d, err := text.NewDisk()
-		if err != nil {
-			return err
+		return s.openNamelessFile()
+	}
+	if len(fields) == 1 {
+		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
+			return s.openNamelessFile()
 		}
-		f := text.NewFile(d)
-		s.AddFile(f)
-		s.Current = f
-		return s.printFileStatus(f, true)
 	}
 	var current *text.File
 	for _, name := range fields {
@@ -1275,6 +1273,17 @@ func (s *Session) openFiles(nameToken *text.String) error {
 		}
 	}
 	return s.printFileStatus(current, true)
+}
+
+func (s *Session) openNamelessFile() error {
+	d, err := text.NewDisk()
+	if err != nil {
+		return err
+	}
+	f := text.NewFile(d)
+	s.AddFile(f)
+	s.Current = f
+	return s.printFileStatus(f, true)
 }
 
 func (s *Session) closeFiles(nameToken *text.String) error {

@@ -106,6 +106,29 @@ func TestHandleBufferKeyCtrlAAndCtrlE(t *testing.T) {
 	}
 }
 
+func TestHandleBufferKeyCtrlSpaceExtendsSelection(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	handleBufferKey(state, 0)
+	handleBufferKey(state, keyRight)
+	handleBufferKey(state, keyRight)
+
+	if got, want := state.dotStart, 0; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := state.dotEnd, 2; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if !state.markMode {
+		t.Fatalf("markMode = false, want true")
+	}
+}
+
 func TestApplyBufferKeyPrintableReplacesSelection(t *testing.T) {
 	t.Parallel()
 

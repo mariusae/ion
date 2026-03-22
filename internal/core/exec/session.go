@@ -111,6 +111,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'm':
+		if err := s.moveRange(a, cmd.AddrArg); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 's':
 		if err := s.substitute(f, cmd, a); err != nil {
 			return false, err
@@ -545,33 +551,52 @@ func (s *Session) copyRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 	if err != nil {
 		return err
 	}
-	size := src.R.P2 - src.R.P1
-	if size < 0 {
-		return fmt.Errorf("address out of order")
-	}
-	if size == 0 {
-		dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2}
-		return nil
-	}
-
 	s.Seq++
 	seq := s.Seq
-	for p := src.R.P1; p < src.R.P2; {
-		n := src.R.P2 - p
-		if n > text.MaxStringRunes {
-			n = text.MaxStringRunes
-		}
-		buf := make([]rune, n)
-		if err := src.F.B.Read(p, buf); err != nil {
-			return err
-		}
-		if err := dest.F.LogInsert(dest.R.P2, buf, seq); err != nil {
-			return err
-		}
-		p += n
+	if err := s.copyRangeLogged(seq, src, dest); err != nil {
+		return err
 	}
-	dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2 + size}
 	_, _, _, err = dest.F.Update(false)
+	if err == nil {
+		s.QuitOK = false
+	}
+	return err
+}
+
+func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
+	dest, err := s.resolveAddrArg(src.F, ap)
+	if err != nil {
+		return err
+	}
+	s.Seq++
+	seq := s.Seq
+
+	switch {
+	case src.F == dest.F && src.R.P2 <= dest.R.P2:
+		if err := src.F.LogDelete(src.R.P1, src.R.P2, seq); err != nil {
+			return err
+		}
+		if err := s.copyRangeLogged(seq, src, dest); err != nil {
+			return err
+		}
+	case src.F == dest.F && src.R.P1 < dest.R.P2:
+		return fmt.Errorf("move overlaps itself")
+	default:
+		if err := s.copyRangeLogged(seq, src, dest); err != nil {
+			return err
+		}
+		if err := src.F.LogDelete(src.R.P1, src.R.P2, seq); err != nil {
+			return err
+		}
+	}
+
+	if src.F == dest.F {
+		_, _, _, err = src.F.Update(false)
+	} else {
+		if _, _, _, err = dest.F.Update(false); err == nil {
+			_, _, _, err = src.F.Update(false)
+		}
+	}
 	if err == nil {
 		s.QuitOK = false
 	}
@@ -588,6 +613,33 @@ func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.
 	}
 	eval := &ionaddr.Evaluator{Files: s.Files, Current: s.Current}
 	return eval.Resolve(ap, base, 0)
+}
+
+func (s *Session) copyRangeLogged(seq uint32, src, dest ionaddr.Address) error {
+	size := src.R.P2 - src.R.P1
+	if size < 0 {
+		return fmt.Errorf("address out of order")
+	}
+	if size == 0 {
+		dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2}
+		return nil
+	}
+	for p := src.R.P1; p < src.R.P2; {
+		n := src.R.P2 - p
+		if n > text.MaxStringRunes {
+			n = text.MaxStringRunes
+		}
+		buf := make([]rune, n)
+		if err := src.F.B.Read(p, buf); err != nil {
+			return err
+		}
+		if err := dest.F.LogInsert(dest.R.P2, buf, seq); err != nil {
+			return err
+		}
+		p += n
+	}
+	dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2 + size}
+	return nil
 }
 
 func (s *Session) writeFile(f *text.File, nameToken *text.String) error {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -214,6 +215,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 
 	case 'e':
 		if err := s.editFileFromDisk(f, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case 'c' | 0x100:
+		if err := s.changeDirectory(cmd.Text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -863,6 +870,36 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	return s.printFileStatus(f, true)
 }
 
+func (s *Session) changeDirectory(nameToken *text.String) error {
+	oldwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	target := trimToken(nameTokenUTF8(nameToken))
+	if target == "" {
+		target = strings.TrimSpace(os.Getenv("HOME"))
+		if target == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			target = home
+		}
+	}
+	if err := os.Chdir(target); err != nil {
+		return fmt.Errorf("chdir: ?I/O error: %q", err.Error())
+	}
+	newwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(s.Diag, "!"); err != nil {
+		return err
+	}
+	s.rewriteRelativeNames(oldwd, newwd)
+	return nil
+}
+
 func (s *Session) openFiles(nameToken *text.String) error {
 	names := tokenFields(nameToken)
 	if len(names) == 0 {
@@ -957,6 +994,38 @@ func (s *Session) hasFile(target *text.File) bool {
 		}
 	}
 	return false
+}
+
+func (s *Session) rewriteRelativeNames(oldwd, newwd string) {
+	for _, f := range s.Files {
+		if f == nil {
+			continue
+		}
+		name := trimToken(f.Name.UTF8())
+		if name == "" || filepath.IsAbs(name) {
+			continue
+		}
+		s.setFileName(f, normalizeNameForCWD(newwd, filepath.Join(oldwd, name)))
+	}
+	for _, f := range s.Files {
+		if f == nil {
+			continue
+		}
+		name := trimToken(f.Name.UTF8())
+		if name == "" || !filepath.IsAbs(name) {
+			continue
+		}
+		if !isUnderDir(newwd, name) {
+			continue
+		}
+		s.setFileName(f, normalizeNameForCWD(newwd, name))
+	}
+	s.sortFiles()
+}
+
+func (s *Session) setFileName(f *text.File, name string) {
+	next := text.NewStringFromUTF8(name)
+	_ = f.Name.DupString(&next)
 }
 
 func (s *Session) firstFile() *text.File {
@@ -1111,6 +1180,30 @@ func tokenFields(s *text.String) []string {
 		return nil
 	}
 	return strings.Fields(trimToken(s.UTF8()))
+}
+
+func normalizeNameForCWD(cwd, name string) string {
+	clean := filepath.Clean(name)
+	if clean == "." {
+		return ""
+	}
+	if rel, err := filepath.Rel(cwd, clean); err == nil {
+		if rel == "." {
+			return ""
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel
+		}
+	}
+	return clean
+}
+
+func isUnderDir(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {

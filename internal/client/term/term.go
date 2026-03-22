@@ -169,6 +169,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					buffer = nil
 					continue
 				}
+				if key == 17 {
+					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
+						return err
+					}
+					if err := exitBufferMode(stdout); err != nil {
+						return err
+					}
+					inBufferMode = false
+					buffer = nil
+					pending = append(pending, []rune("q\n")...)
+					done, err := executePending(false)
+					if err != nil {
+						return err
+					}
+					if done {
+						return nil
+					}
+					continue
+				}
 				buffer, err = applyBufferKey(svc, buffer, key)
 				if err != nil {
 					return err
@@ -343,6 +362,18 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 			return nil, err
 		}
 		return newBufferState(view), nil
+	case 11:
+		if state.dotStart != state.dotEnd {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+		}
+		end := lineEnd(state.text, state.cursor)
+		if state.cursor < end {
+			return replaceBufferRange(svc, state, state.cursor, end, "")
+		}
+		if state.cursor < len(state.text) {
+			return replaceBufferRange(svc, state, state.cursor, state.cursor+1, "")
+		}
+		return state, nil
 	case '\t', '\n':
 		return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
 	default:

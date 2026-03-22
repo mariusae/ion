@@ -147,3 +147,27 @@ func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
 		t.Fatalf("cursor = %d, want %d", got, want)
 	}
 }
+
+func TestApplyBufferKeyCtrlKDeletesToLineEnd(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\nbeta\n",
+			DotStart: 2,
+			DotEnd:   2,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, 11)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := string(next.text), "al\nbeta\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 2; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}

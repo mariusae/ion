@@ -214,6 +214,93 @@ func TestQuotedFileAddressLoadsUnreadFileAndReportsStatus(t *testing.T) {
 	}
 }
 
+func TestFileCommandPrintsPendingNewName(t *testing.T) {
+	t.Parallel()
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	name := text.NewStringFromUTF8("a.txt")
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+	f.Unread = false
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+	sess.AddFile(f)
+
+	parser := cmdlang.NewParser("f renamed.txt\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !ok {
+		t.Fatal("execute requested stop")
+	}
+	if got, want := diag.String(), "'-. renamed.txt\n"; got != want {
+		t.Fatalf("diag = %q, want %q", got, want)
+	}
+}
+
+func TestWriteFailsWhileChangingInSameSequence(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	name := text.NewStringFromUTF8(path)
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+	if err := loadUnreadFile(f); err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	sess.AddFile(f)
+
+	parser := cmdlang.NewParser("{\nf renamed.txt\nw\n}\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if ok {
+		t.Fatal("execute ok = true, want false on write-while-changing error")
+	}
+	if err == nil {
+		t.Fatal("execute error = nil, want write-while-changing failure")
+	}
+	if got, want := err.Error(), `can't write while changing: "`+path+`"`; got != want {
+		t.Fatalf("execute error = %v, want %q", err, want)
+	}
+}
+
 func sameFilePath(t *testing.T, got, want string) bool {
 	t.Helper()
 

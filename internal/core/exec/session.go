@@ -1017,6 +1017,9 @@ func (s *Session) writeFile(f *text.File, nameToken *text.String) error {
 	if name == "" {
 		return fmt.Errorf("no file name")
 	}
+	if f.Seq == s.currentSeq() {
+		return fmt.Errorf("can't write while changing: %q", name)
+	}
 	var b strings.Builder
 	if _, err := f.WriteTo(&b); err != nil {
 		return err
@@ -1044,6 +1047,9 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 		}); err != nil {
 			return err
 		}
+	}
+	if name != "" {
+		return s.printFileStatusName(f.Mod, true, name)
 	}
 	return s.printFileStatus(f, true)
 }
@@ -1346,15 +1352,19 @@ func (s *Session) printFileStatus(f *text.File, current bool) error {
 	if f == nil {
 		return fmt.Errorf("no file")
 	}
+	return s.printFileStatusName(f.Mod, current, trimToken(f.Name.UTF8()))
+}
+
+func (s *Session) printFileStatusName(modified, current bool, name string) error {
 	mod := ' '
-	if f.Mod {
+	if modified {
 		mod = '\''
 	}
 	cur := ' '
 	if current {
 		cur = '.'
 	}
-	_, err := fmt.Fprintf(s.Diag, "%c-%c %s\n", mod, cur, trimToken(f.Name.UTF8()))
+	_, err := fmt.Fprintf(s.Diag, "%c-%c %s\n", mod, cur, trimToken(name))
 	return err
 }
 

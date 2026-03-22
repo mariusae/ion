@@ -1351,6 +1351,14 @@ func (s *Session) CurrentText() (string, error) {
 	return b.String(), nil
 }
 
+// CurrentDot returns the current file's selection range.
+func (s *Session) CurrentDot() text.Range {
+	if s.Current == nil {
+		return text.Range{}
+	}
+	return s.Current.Dot
+}
+
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
 		if f != nil && f.Mod {

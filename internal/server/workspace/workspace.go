@@ -8,6 +8,7 @@ import (
 	"ion/internal/core/cmdlang"
 	"ion/internal/core/exec"
 	"ion/internal/core/text"
+	"ion/internal/proto/wire"
 )
 
 // Workspace owns the authoritative shared editing state for the current server
@@ -63,7 +64,17 @@ func (w *Workspace) Execute(cmd *cmdlang.Cmd) (bool, error) {
 	return w.session.Execute(cmd)
 }
 
-// CurrentText returns the current file contents for the initial terminal client.
-func (w *Workspace) CurrentText() (string, error) {
-	return w.session.CurrentText()
+// CurrentView returns the current file text and selection state for the
+// initial terminal client.
+func (w *Workspace) CurrentView() (wire.BufferView, error) {
+	text, err := w.session.CurrentText()
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	dot := w.session.CurrentDot()
+	return wire.BufferView{
+		Text:     text,
+		DotStart: int(dot.P1),
+		DotEnd:   int(dot.P2),
+	}, nil
 }

@@ -71,6 +71,29 @@ func (w *Workspace) CurrentView() (wire.BufferView, error) {
 	return w.currentView()
 }
 
+// MenuFiles returns the current file-menu snapshot for the terminal client.
+func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
+	files := w.session.MenuFiles()
+	out := make([]wire.MenuFile, 0, len(files))
+	for i, f := range files {
+		out = append(out, wire.MenuFile{
+			ID:      i,
+			Name:    f.Name,
+			Dirty:   f.Dirty,
+			Current: f.Current,
+		})
+	}
+	return out, nil
+}
+
+// FocusFile switches the current file by file-menu position.
+func (w *Workspace) FocusFile(id int) (wire.BufferView, error) {
+	if err := w.session.FocusFileIndex(id); err != nil {
+		return wire.BufferView{}, err
+	}
+	return w.currentView()
+}
+
 // SetDot updates the current selection for the terminal client.
 func (w *Workspace) SetDot(start, end int) (wire.BufferView, error) {
 	if err := w.session.SetCurrentDot(text.Posn(start), text.Posn(end)); err != nil {

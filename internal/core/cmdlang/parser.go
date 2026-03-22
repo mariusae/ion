@@ -138,6 +138,13 @@ func (p *Parser) Consumed() int {
 	return p.pos
 }
 
+// LastPatternUTF8 reports the parser's current remembered regexp, without the
+// trailing NUL used by the original sam representation.
+func (p *Parser) LastPatternUTF8() string {
+	s := p.lastPat.UTF8()
+	return strings.TrimRight(s, "\x00")
+}
+
 func (p *Parser) parseCmd(nest int) (*Cmd, error) {
 	cmd := Cmd{}
 	var err error

@@ -10,7 +10,9 @@ import (
 )
 
 type fakeTermService struct {
-	view wire.BufferView
+	view      wire.BufferView
+	menuFiles []wire.MenuFile
+	focusID   int
 }
 
 func (f *fakeTermService) Bootstrap(files []string) error {
@@ -24,6 +26,22 @@ func (f *fakeTermService) Execute(cmd *cmdlang.Cmd) (bool, error) {
 }
 
 func (f *fakeTermService) CurrentView() (wire.BufferView, error) {
+	return f.view, nil
+}
+
+func (f *fakeTermService) MenuFiles() ([]wire.MenuFile, error) {
+	return append([]wire.MenuFile(nil), f.menuFiles...), nil
+}
+
+func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
+	f.focusID = id
+	for _, file := range f.menuFiles {
+		if file.ID != id {
+			continue
+		}
+		f.view.Name = file.Name
+		break
+	}
 	return f.view, nil
 }
 

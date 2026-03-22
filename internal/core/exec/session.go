@@ -30,6 +30,13 @@ type Session struct {
 	frame        *execFrame
 }
 
+// MenuFileInfo is the server-owned file-menu snapshot exposed to clients.
+type MenuFileInfo struct {
+	Name    string
+	Dirty   bool
+	Current bool
+}
+
 // NewSession constructs an execution session.
 func NewSession(out io.Writer) *Session {
 	return &Session{Out: out, Diag: io.Discard}
@@ -1443,6 +1450,40 @@ func (s *Session) SaveCurrent() (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// MenuFiles returns the current file-menu ordering and status flags.
+func (s *Session) MenuFiles() []MenuFileInfo {
+	out := make([]MenuFileInfo, 0, len(s.Files))
+	for _, f := range s.Files {
+		if f == nil {
+			continue
+		}
+		out = append(out, MenuFileInfo{
+			Name:    trimToken(f.Name.UTF8()),
+			Dirty:   f.Mod,
+			Current: f == s.Current,
+		})
+	}
+	return out
+}
+
+// FocusFileIndex selects one file from the current menu ordering.
+func (s *Session) FocusFileIndex(idx int) error {
+	if idx < 0 || idx >= len(s.Files) {
+		return fmt.Errorf("menu index out of range")
+	}
+	f := s.Files[idx]
+	if f == nil {
+		return fmt.Errorf("menu index out of range")
+	}
+	if f.Unread {
+		if err := loadUnreadFile(f); err != nil {
+			return err
+		}
+	}
+	s.Current = f
+	return nil
 }
 
 func (s *Session) hasDirtyFiles() bool {

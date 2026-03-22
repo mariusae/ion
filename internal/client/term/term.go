@@ -79,6 +79,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	mouseSelecting := false
 	mouseSelectStart := 0
 	overlay := newOverlayState()
+	menu := newMenuState()
+	menuLastItem := -1
 
 	executePending := func(final bool) (bool, error) {
 		for {
@@ -161,6 +163,35 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return nil
 	}
 
+	redraw := func() error {
+		return drawBufferMode(stdout, buffer, overlay, menu)
+	}
+
+	executeDirect := func(line string, captureOutput bool) (bool, []string, error) {
+		parser.ResetRunes([]rune(line))
+		cmd, err := parser.ParseWithFinal(true)
+		if err != nil {
+			return false, nil, err
+		}
+		if cmd == nil {
+			return false, nil, nil
+		}
+		var lines []string
+		if capture != nil && captureOutput {
+			capture.Start(func(line string) {
+				lines = append(lines, line)
+			})
+		}
+		ok, err := svc.Execute(cmd)
+		if capture != nil && captureOutput {
+			capture.Stop()
+		}
+		if err != nil {
+			return false, lines, err
+		}
+		return !ok, lines, nil
+	}
+
 	submitOverlay := func() (bool, error) {
 		line := string(overlay.input)
 		if len(overlay.input) == 0 {
@@ -195,6 +226,152 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return done, nil
 	}
 
+	showMenu := func(clickX, clickY int) error {
+		files, err := svc.MenuFiles()
+		if err != nil {
+			return err
+		}
+		menu = buildContextMenu(buffer, files, clickX, clickY, menuLastItem)
+		return redraw()
+	}
+
+	executeMenuItem := func(item menuItem) (bool, error) {
+		menuLastItem = menu.hover
+		menu.dismiss()
+		switch item.kind {
+		case menuWrite:
+			msg, err := svc.Save()
+			if err != nil {
+				buffer.status = "?" + err.Error()
+			} else {
+				buffer.status = msg
+			}
+			return false, nil
+		case menuCut:
+			snarf = snarfSelection(buffer)
+			if len(snarf) == 0 {
+				return false, nil
+			}
+			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
+			if err != nil {
+				return false, err
+			}
+			buffer = next
+			buffer.status = "cut"
+			return false, nil
+		case menuSnarf:
+			snarf = snarfSelection(buffer)
+			if len(snarf) != 0 {
+				buffer.status = "snarfed"
+			}
+			return false, nil
+		case menuPaste:
+			if len(snarf) == 0 {
+				return false, nil
+			}
+			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
+			if err != nil {
+				return false, err
+			}
+			buffer = next
+			buffer.status = ""
+			return false, nil
+		case menuLook:
+			next, ok, err := lookInBuffer(svc, buffer, true)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, nil
+		case menuRegexp:
+			pattern := parser.LastPatternUTF8()
+			if pattern == "" {
+				buffer.status = "?no previous regexp"
+				return false, nil
+			}
+			done, _, err := executeDirect("/"+escapeSearchPattern(pattern)+"/\n", false)
+			if err != nil {
+				buffer.status = "?" + err.Error()
+				return false, nil
+			}
+			if done {
+				return true, nil
+			}
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
+			buffer.status = ""
+			return false, nil
+		case menuPlumb:
+			token := plumbToken(buffer)
+			if token == "" {
+				return false, nil
+			}
+			done, _, err := executeDirect("B "+token+"\n", false)
+			if err != nil {
+				buffer.status = "?" + err.Error()
+				return false, nil
+			}
+			if done {
+				return true, nil
+			}
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
+			buffer.status = ""
+			return false, nil
+		case menuFile:
+			view, err := svc.FocusFile(item.fileID)
+			if err != nil {
+				buffer.status = "?" + err.Error()
+				return false, nil
+			}
+			buffer = newBufferState(view)
+			buffer.status = ""
+			return false, nil
+		}
+		return false, nil
+	}
+
+	handleMenuMouse := func(event mouseEvent) (bool, error) {
+		if !menu.visible {
+			return false, nil
+		}
+		btn := event.button & 3
+		if event.button >= 32 && event.button < 64 {
+			item := menu.itemAt(event.x, event.y)
+			if menu.hover != item {
+				menu.hover = item
+				return false, redraw()
+			}
+			return false, nil
+		}
+		if btn == 2 && !event.pressed {
+			if menu.hover >= 0 && menu.hover < len(menu.items) {
+				done, err := executeMenuItem(menu.items[menu.hover])
+				if err != nil {
+					return false, err
+				}
+				if done {
+					return true, nil
+				}
+			} else {
+				menu.dismiss()
+			}
+			return false, redraw()
+		}
+		if event.pressed || event.button == 64 || event.button == 65 {
+			menu.dismiss()
+			return false, redraw()
+		}
+		return false, nil
+	}
+
 	for {
 		r, _, err := reader.ReadRune()
 		if err != nil {
@@ -217,12 +394,31 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					switch key {
 					case keyEsc:
+						if menu.visible {
+							menu.dismiss()
+							if err := redraw(); err != nil {
+								return err
+							}
+							continue
+						}
 						overlay.close()
 					case keyMouse:
 						if mouse != nil {
-							handled := handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart)
-							if !handled {
-								overlay.close()
+							done, err := handleMenuMouse(*mouse)
+							if err != nil {
+								return err
+							}
+							if done {
+								if err := exitBufferMode(stdout); err != nil {
+									return err
+								}
+								return nil
+							}
+							if !menu.visible {
+								handled := handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart)
+								if !handled {
+									overlay.close()
+								}
 							}
 						}
 					case keyPaste:
@@ -253,10 +449,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyDel:
 						overlay.deleteForward()
 					}
-					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					if err := redraw(); err != nil {
 						return err
 					}
 					continue
+				}
+				if menu.visible {
+					menu.dismiss()
 				}
 				switch r {
 				case '\r':
@@ -299,7 +498,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.insert([]rune{r})
 					}
 				}
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -310,6 +509,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return err
 				}
 				if key == keyEsc {
+					if menu.visible {
+						menu.dismiss()
+						if err := redraw(); err != nil {
+							return err
+						}
+						continue
+					}
 					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
 						return err
 					}
@@ -319,15 +525,37 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					inBufferMode = false
 					buffer = nil
 					overlay.close()
+					menu.dismiss()
 					mouseSelecting = false
 					continue
 				}
 				if key == keyMouse {
-					if mouse != nil && handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
-						if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					if mouse != nil {
+						done, err := handleMenuMouse(*mouse)
+						if err != nil {
 							return err
 						}
-						continue
+						if done {
+							if err := exitBufferMode(stdout); err != nil {
+								return err
+							}
+							return nil
+						}
+						if menu.visible {
+							continue
+						}
+						if mouse.button == 2 && mouse.pressed {
+							if err := showMenu(mouse.x, mouse.y); err != nil {
+								return err
+							}
+							continue
+						}
+						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+							if err := redraw(); err != nil {
+								return err
+							}
+							continue
+						}
 					}
 					continue
 				}
@@ -337,7 +565,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					if len(snarf) != 0 {
 						buffer.status = "snarfed"
 					}
-					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					if err := redraw(); err != nil {
 						return err
 					}
 					continue
@@ -354,7 +582,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return err
 					}
 					buffer.status = ""
-					if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+					if err := redraw(); err != nil {
 						return err
 					}
 					continue
@@ -363,15 +591,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if err != nil {
 					return err
 				}
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
 			}
+			if menu.visible {
+				menu.dismiss()
+			}
 			switch r {
 			case '\n':
 				overlay.open("")
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -385,7 +616,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return err
 				}
 				buffer.status = "cut"
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -398,7 +629,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return err
 				}
 				buffer.status = ""
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -412,6 +643,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				inBufferMode = false
 				buffer = nil
 				overlay.close()
+				menu.dismiss()
 				mouseSelecting = false
 				pending = append(pending, []rune("q\n")...)
 				done, err := executePending(false)
@@ -433,6 +665,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					inBufferMode = false
 					buffer = nil
 					overlay.close()
+					menu.dismiss()
 					mouseSelecting = false
 					pending = append(pending, []rune("w ")...)
 					continue
@@ -443,13 +676,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				} else {
 					buffer.status = msg
 				}
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
 			case 0x1f:
 				overlay.open("/")
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -464,7 +697,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				} else {
 					buffer.status = "?no match"
 				}
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -479,7 +712,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				} else {
 					buffer.status = "?no match"
 				}
-				if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+				if err := redraw(); err != nil {
 					return err
 				}
 				continue
@@ -491,14 +724,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err != nil {
 				return err
 			}
-			if err := drawBufferMode(stdout, buffer, overlay); err != nil {
+			if err := redraw(); err != nil {
 				return err
 			}
 			continue
 		}
 		if r == 0x1b {
 			overlay.close()
-			next, err := enterBufferMode(stdout, svc, overlay)
+			menu.dismiss()
+			next, err := enterBufferMode(stdout, svc, overlay, menu)
 			if err != nil {
 				return err
 			}
@@ -570,13 +804,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
 	}
 	state := newBufferState(view)
-	if err := drawBufferMode(stdout, state, overlay); err != nil {
+	if err := drawBufferMode(stdout, state, overlay, menu); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -697,7 +931,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState) error {
+func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState) error {
 	if state == nil {
 		return nil
 	}
@@ -747,7 +981,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState)
 		if err := drawOverlayPrompt(stdout, overlay); err != nil {
 			return err
 		}
-		return nil
+		return drawMenu(stdout, menu)
 	}
 	if state.status != "" {
 		if _, err := io.WriteString(stdout, "\x1b[24;1H"); err != nil {
@@ -761,7 +995,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState)
 			return err
 		}
 	}
-	return nil
+	return drawMenu(stdout, menu)
 }
 
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int) error {

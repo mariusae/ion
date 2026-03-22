@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	ionaddr "ion/internal/core/addr"
@@ -29,9 +30,11 @@ func NewSession(out io.Writer) *Session {
 
 // AddFile registers a file with the session and makes it current if needed.
 func (s *Session) AddFile(f *text.File) {
+	oldFirst := s.firstFile()
 	s.Files = append(s.Files, f)
-	if s.Current == nil {
-		s.Current = f
+	s.sortFiles()
+	if s.Current == nil || s.Current == oldFirst {
+		s.Current = s.firstFile()
 	}
 }
 
@@ -169,6 +172,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 
 	case 'b':
 		if err := s.switchFile(cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case 'B':
+		if err := s.openFiles(cmd.Text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -802,6 +811,40 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	return s.printFileStatus(f, true)
 }
 
+func (s *Session) openFiles(nameToken *text.String) error {
+	names := tokenFields(nameToken)
+	if len(names) == 0 {
+		return fmt.Errorf("blank expected")
+	}
+	var current *text.File
+	for _, name := range names {
+		f := s.findFileByName(name)
+		if f == nil {
+			d, err := text.NewDisk()
+			if err != nil {
+				return err
+			}
+			f = text.NewFile(d)
+			next := text.NewStringFromUTF8(name)
+			if err := f.Name.DupString(&next); err != nil {
+				return err
+			}
+			s.AddFile(f)
+		}
+		current = f
+	}
+	s.Current = current
+	if current == nil {
+		return fmt.Errorf("blank expected")
+	}
+	if current.Unread {
+		if err := loadUnreadFile(current); err != nil {
+			return err
+		}
+	}
+	return s.printFileStatus(current, true)
+}
+
 func (s *Session) switchFile(nameToken *text.String) error {
 	name := trimToken(nameTokenUTF8(nameToken))
 	if name == "" {
@@ -824,6 +867,28 @@ func (s *Session) switchFile(nameToken *text.String) error {
 		return s.printFileStatus(f, true)
 	}
 	return fmt.Errorf("not in menu: %q", name)
+}
+
+func (s *Session) findFileByName(name string) *text.File {
+	for _, f := range s.Files {
+		if trimToken(f.Name.UTF8()) == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func (s *Session) firstFile() *text.File {
+	if len(s.Files) == 0 {
+		return nil
+	}
+	return s.Files[0]
+}
+
+func (s *Session) sortFiles() {
+	sort.SliceStable(s.Files, func(i, j int) bool {
+		return trimToken(s.Files[i].Name.UTF8()) < trimToken(s.Files[j].Name.UTF8())
+	})
 }
 
 func (s *Session) listFiles() error {
@@ -914,6 +979,33 @@ func containsNullByte(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func loadUnreadFile(f *text.File) error {
+	name := trimToken(f.Name.UTF8())
+	if name == "" {
+		f.Unread = false
+		return nil
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		f.Unread = false
+		return err
+	}
+	if err := resetFileContents(f); err != nil {
+		return err
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+		return err
+	}
+	return nil
+}
+
+func tokenFields(s *text.String) []string {
+	if s == nil {
+		return nil
+	}
+	return strings.Fields(trimToken(s.UTF8()))
 }
 
 func resetFileContents(f *text.File) error {

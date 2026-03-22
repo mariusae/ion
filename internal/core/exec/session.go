@@ -287,7 +287,7 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (ok bool, err error) {
 		return true, nil
 
 	case 'w':
-		if err := s.writeFile(f, cmd.Text); err != nil {
+		if err := s.writeFile(f, a, cmd.Text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1012,7 +1012,7 @@ func (s *Session) copyRangeLogged(seq uint32, src, dest ionaddr.Address) error {
 	return nil
 }
 
-func (s *Session) writeFile(f *text.File, nameToken *text.String) error {
+func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.String) error {
 	name := fileNameForWrite(f, nameToken)
 	if name == "" {
 		return fmt.Errorf("no file name")
@@ -1020,16 +1020,56 @@ func (s *Session) writeFile(f *text.File, nameToken *text.String) error {
 	if f.Seq == s.currentSeq() {
 		return fmt.Errorf("can't write while changing: %q", name)
 	}
+
+	currentName := trimToken(f.Name.UTF8())
+	newFile := currentName == ""
+	if !newFile {
+		if _, err := os.Stat(currentName); err != nil {
+			if os.IsNotExist(err) {
+				newFile = true
+			} else {
+				return err
+			}
+		}
+	}
+
 	var b strings.Builder
-	if _, err := f.WriteTo(&b); err != nil {
+	if _, err := f.WriteRangeTo(&b, a.R.P1, a.R.P2); err != nil {
 		return err
 	}
 	if err := os.WriteFile(name, []byte(b.String()), 0o666); err != nil {
 		return err
 	}
-	f.MarkClean()
+
+	fullWrite := a.R.P1 == 0 && a.R.P2 == text.Posn(f.B.Len())
+	if fullWrite && (currentName == "" || name == currentName) {
+		f.MarkClean()
+	}
 	s.QuitOK = false
-	if _, err := fmt.Fprintf(s.Diag, "%s: #%d\n", name, len(b.String())); err != nil {
+
+	if _, err := fmt.Fprintf(s.Diag, "%s: ", name); err != nil {
+		return err
+	}
+	if newFile {
+		if _, err := fmt.Fprint(s.Diag, "(new file) "); err != nil {
+			return err
+		}
+	}
+
+	missingFinalNewline := false
+	if a.R.P2 > a.R.P1 {
+		r, err := f.ReadRune(a.R.P2 - 1)
+		if err != nil {
+			return err
+		}
+		missingFinalNewline = r != '\n'
+	}
+	if missingFinalNewline {
+		if _, err := fmt.Fprintln(s.Diag, "?warning: last char not newline"); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(b.String())); err != nil {
 		return err
 	}
 	return nil
@@ -1491,7 +1531,11 @@ func (s *Session) SaveCurrent() (string, error) {
 	defer func() {
 		s.Diag = oldDiag
 	}()
-	if err := s.writeFile(s.Current, nil); err != nil {
+	a := ionaddr.Address{
+		F: s.Current,
+		R: text.Range{P1: 0, P2: text.Posn(s.Current.B.Len())},
+	}
+	if err := s.writeFile(s.Current, a, nil); err != nil {
 		return "", err
 	}
 	return strings.TrimRight(b.String(), "\n"), nil

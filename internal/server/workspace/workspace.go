@@ -62,3 +62,8 @@ func (w *Workspace) Bootstrap(files []string) error {
 func (w *Workspace) Execute(cmd *cmdlang.Cmd) (bool, error) {
 	return w.session.Execute(cmd)
 }
+
+// CurrentText returns the current file contents for the initial terminal client.
+func (w *Workspace) CurrentText() (string, error) {
+	return w.session.CurrentText()
+}

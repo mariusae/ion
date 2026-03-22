@@ -1339,6 +1339,18 @@ func (s *Session) PrintCurrentStatus() error {
 	return s.printFileStatus(s.Current, true)
 }
 
+// CurrentText returns the current file contents as UTF-8 text.
+func (s *Session) CurrentText() (string, error) {
+	if s.Current == nil {
+		return "", nil
+	}
+	var b strings.Builder
+	if _, err := s.Current.WriteTo(&b); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
 		if f != nil && f.Mod {

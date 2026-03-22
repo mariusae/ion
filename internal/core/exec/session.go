@@ -105,6 +105,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		f.Mark = a.R
 		return true, nil
 
+	case 't':
+		if err := s.copyRange(a, cmd.AddrArg); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 's':
 		if err := s.substitute(f, cmd, a); err != nil {
 			return false, err
@@ -532,6 +538,56 @@ func (s *Session) runLoopBody(cmd *ioncmd.Cmd) (bool, error) {
 		return false, fmt.Errorf("%c command missing nested command", cmd.Cmdc)
 	}
 	return s.Execute(cmd.Cmd)
+}
+
+func (s *Session) copyRange(src ionaddr.Address, ap *ionaddr.Addr) error {
+	dest, err := s.resolveAddrArg(src.F, ap)
+	if err != nil {
+		return err
+	}
+	size := src.R.P2 - src.R.P1
+	if size < 0 {
+		return fmt.Errorf("address out of order")
+	}
+	if size == 0 {
+		dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2}
+		return nil
+	}
+
+	s.Seq++
+	seq := s.Seq
+	for p := src.R.P1; p < src.R.P2; {
+		n := src.R.P2 - p
+		if n > text.MaxStringRunes {
+			n = text.MaxStringRunes
+		}
+		buf := make([]rune, n)
+		if err := src.F.B.Read(p, buf); err != nil {
+			return err
+		}
+		if err := dest.F.LogInsert(dest.R.P2, buf, seq); err != nil {
+			return err
+		}
+		p += n
+	}
+	dest.F.NDot = text.Range{P1: dest.R.P2, P2: dest.R.P2 + size}
+	_, _, _, err = dest.F.Update(false)
+	if err == nil {
+		s.QuitOK = false
+	}
+	return err
+}
+
+func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.Address, error) {
+	if ap == nil {
+		return ionaddr.Address{}, fmt.Errorf("missing address argument")
+	}
+	base := ionaddr.Address{}
+	if current != nil {
+		base = ionaddr.Address{F: current, R: current.Dot}
+	}
+	eval := &ionaddr.Evaluator{Files: s.Files, Current: s.Current}
+	return eval.Resolve(ap, base, 0)
 }
 
 func (s *Session) writeFile(f *text.File, nameToken *text.String) error {

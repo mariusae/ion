@@ -144,6 +144,18 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'X':
+		if err := s.fileLoop(cmd, true); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case 'Y':
+		if err := s.fileLoop(cmd, false); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 'u':
 		n := cmd.Num
 		if n >= 0 {
@@ -581,6 +593,40 @@ func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	return nil
 }
 
+func (s *Session) fileLoop(cmd *ioncmd.Cmd, wantMatch bool) error {
+	orig := s.Current
+	files := append([]*text.File(nil), s.Files...)
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
+		matched, err := fileMatchesRegexp(f, cmd.Re)
+		if err != nil {
+			return err
+		}
+		if cmd.Re != nil && matched != wantMatch {
+			continue
+		}
+		if s.Current != f {
+			if err := s.printFileStatus(f, false); err != nil {
+				return err
+			}
+		}
+		s.Current = f
+		ok, err := s.runLoopBody(cmd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+	}
+	if s.hasFile(orig) {
+		s.Current = orig
+	}
+	return nil
+}
+
 func (s *Session) gCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	if f != a.F {
 		return fmt.Errorf("g/v command file mismatch")
@@ -904,6 +950,15 @@ func (s *Session) findFileByName(name string) *text.File {
 	return nil
 }
 
+func (s *Session) hasFile(target *text.File) bool {
+	for _, f := range s.Files {
+		if f == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Session) firstFile() *text.File {
 	if len(s.Files) == 0 {
 		return nil
@@ -979,7 +1034,7 @@ func defaultAddrFor(cmdc rune) rune {
 
 func commandNeedsCurrent(cmdc rune) bool {
 	switch cmdc {
-	case 'b', 'B', 'D', 'n', 'q':
+	case 'b', 'B', 'D', 'n', 'q', 'X', 'Y':
 		return false
 	default:
 		return true
@@ -1056,6 +1111,35 @@ func tokenFields(s *text.String) []string {
 		return nil
 	}
 	return strings.Fields(trimToken(s.UTF8()))
+}
+
+func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {
+	if re == nil {
+		return true, nil
+	}
+	pat, err := ionregexp.Compile(re)
+	if err != nil {
+		return false, err
+	}
+	tmpDisk, err := text.NewDisk()
+	if err != nil {
+		return false, err
+	}
+	menu := text.NewFile(tmpDisk)
+	defer func() {
+		_ = menu.Close()
+		_ = tmpDisk.Close()
+	}()
+	menu.Unread = false
+	line := trimToken(f.Name.UTF8()) + "\n"
+	if _, _, err := menu.LoadInitial(strings.NewReader(line)); err != nil {
+		return false, err
+	}
+	got, ok, err := pat.Execute(menu, 0, text.Posn(menu.B.Len()))
+	if err != nil {
+		return false, err
+	}
+	return ok && got.P[0].P1 >= 0, nil
 }
 
 func resetFileContents(f *text.File) error {

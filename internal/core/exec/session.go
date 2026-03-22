@@ -539,7 +539,7 @@ func (s *Session) lineXCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) err
 
 func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	if cmd.Re == nil {
-		return fmt.Errorf("line-based y not implemented")
+		return s.lineXCmd(f, cmd, a)
 	}
 	pat, err := ionregexp.Compile(cmd.Re)
 	if err != nil {

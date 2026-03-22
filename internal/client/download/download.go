@@ -10,6 +10,10 @@ import (
 	"ion/internal/proto/wire"
 )
 
+type diagnosticReporter interface {
+	Diagnostic() string
+}
+
 // Run drives the sam -d compatible client loop against a server implementation.
 func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadService) error {
 	if err := svc.Bootstrap(files); err != nil {
@@ -97,6 +101,11 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 }
 
 func reportCommandError(w io.Writer, err error) error {
+	var diag diagnosticReporter
+	if errors.As(err, &diag) {
+		_, writeErr := fmt.Fprintln(w, diag.Diagnostic())
+		return writeErr
+	}
 	_, writeErr := fmt.Fprintf(w, "?%v\n", err)
 	return writeErr
 }

@@ -34,6 +34,18 @@ type Session struct {
 	frame        *execFrame
 }
 
+type diagnosticError struct {
+	msg string
+}
+
+func (e diagnosticError) Error() string {
+	return e.msg
+}
+
+func (e diagnosticError) Diagnostic() string {
+	return e.msg
+}
+
 // MenuFileInfo is the server-owned file-menu snapshot exposed to clients.
 type MenuFileInfo struct {
 	Name    string
@@ -1205,7 +1217,7 @@ func (s *Session) changeDirectory(nameToken *text.String) error {
 		}
 	}
 	if err := os.Chdir(target); err != nil {
-		return fmt.Errorf("chdir: ?I/O error: %q", err.Error())
+		return diagnosticError{msg: fmt.Sprintf("chdir: ?I/O error: %q", ioErrText(err))}
 	}
 	newwd, err := os.Getwd()
 	if err != nil {

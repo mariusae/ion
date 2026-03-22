@@ -119,6 +119,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'y':
+		if err := s.yCmd(f, cmd, a); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case 'u':
 		n := cmd.Num
 		if n >= 0 {
@@ -408,6 +414,69 @@ func (s *Session) xCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	return nil
 }
 
+func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
+	if cmd.Re == nil {
+		return fmt.Errorf("line-based y not implemented")
+	}
+	pat, err := ionregexp.Compile(cmd.Re)
+	if err != nil {
+		return err
+	}
+	r := a.R
+	op := r.P1
+	prevMatchEnd := text.Posn(-1)
+	for p := r.P1; p <= r.P2; {
+		match, ok, err := pat.Execute(f, p, r.P2)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if op > r.P2 {
+				break
+			}
+			f.Dot = text.Range{P1: op, P2: r.P2}
+			f.NDot = f.Dot
+			ok, err := s.runLoopBody(cmd)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			break
+		}
+
+		sel := match.P[0]
+		if sel.P1 == sel.P2 {
+			if sel.P1 == prevMatchEnd {
+				p++
+				continue
+			}
+			p = sel.P2 + 1
+		} else {
+			p = sel.P2
+		}
+		prevMatchEnd = sel.P2
+
+		f.Dot = text.Range{P1: op, P2: sel.P1}
+		f.NDot = f.Dot
+		op = sel.P2
+		ok, err = s.runLoopBody(cmd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+
+		pat, err = ionregexp.Compile(cmd.Re)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Session) gCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	if f != a.F {
 		return fmt.Errorf("g/v command file mismatch")
@@ -440,6 +509,13 @@ func (s *Session) gCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 		_ = match
 	}
 	return nil
+}
+
+func (s *Session) runLoopBody(cmd *ioncmd.Cmd) (bool, error) {
+	if cmd.Cmd == nil {
+		return false, fmt.Errorf("%c command missing nested command", cmd.Cmdc)
+	}
+	return s.Execute(cmd.Cmd)
 }
 
 func (s *Session) writeFile(f *text.File, nameToken *text.String) error {

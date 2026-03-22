@@ -1,0 +1,13 @@
+a
+This manual is organized in a rather haphazard manner. The first
+.
+1p
+s/haphazard/thoughtless/
+p
+s/T/"&&&&"/
+p
+s2/is/was/
+p
+s/[a-zA-Z]/x/g
+p
+q

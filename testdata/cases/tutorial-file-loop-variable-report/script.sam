@@ -1,0 +1,8 @@
+X/\.c$/ ,g/variable/ {
+f
+,x/variable/+-{
+=
+p
+}
+}
+q

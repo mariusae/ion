@@ -316,11 +316,11 @@ func (p *Parser) simpleAddr() (*addr.Addr, error) {
 		switch a.Next.Type {
 		case '.', '$', '\'':
 			if a.Type != '"' {
-				return nil, fmt.Errorf("bad address syntax")
+				return nil, fmt.Errorf("address")
 			}
 		case '"':
 			if a.Type != '"' {
-				return nil, fmt.Errorf("bad address syntax")
+				return nil, fmt.Errorf("address")
 			}
 		case 'l', '#':
 			fallthrough
@@ -331,7 +331,7 @@ func (p *Parser) simpleAddr() (*addr.Addr, error) {
 			}
 		case '+', '-':
 		default:
-			return nil, fmt.Errorf("bad address syntax")
+			return nil, fmt.Errorf("address")
 		}
 	}
 	return cloneAddr(&a), nil
@@ -352,7 +352,7 @@ func (p *Parser) compoundAddr() (*addr.Addr, error) {
 		return nil, err
 	}
 	if next != nil && (next.Type == ',' || next.Type == ';') && next.Left == nil {
-		return nil, fmt.Errorf("bad address syntax")
+		return nil, fmt.Errorf("address")
 	}
 	return &addr.Addr{
 		Type: rune(sep),

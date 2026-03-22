@@ -6,14 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"ion/internal/core/cmdlang"
 	"ion/internal/core/text"
 )
 
 func TestExecuteChangeDirectoryCommand(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
 		t.Fatalf("mkdir sub: %v", err)
@@ -373,17 +372,6 @@ func TestWriteWarnsForNewFileAndMissingFinalNewline(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write a.txt: %v", err)
 	}
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(oldwd)
-	})
-	if err := os.Chdir(root); err != nil {
-		t.Fatalf("chdir root: %v", err)
-	}
-
 	d, err := text.NewDisk()
 	if err != nil {
 		t.Fatalf("new disk: %v", err)
@@ -406,7 +394,8 @@ func TestWriteWarnsForNewFileAndMissingFinalNewline(t *testing.T) {
 	sess.Diag = &diag
 	sess.AddFile(f)
 
-	parser := cmdlang.NewParser("f renamed.txt\n")
+	renamedPath := filepath.Join(root, "renamed.txt")
+	parser := cmdlang.NewParser("f " + renamedPath + "\n")
 	cmd, err := parser.Parse()
 	if err != nil {
 		t.Fatalf("parse rename: %v", err)
@@ -431,16 +420,79 @@ func TestWriteWarnsForNewFileAndMissingFinalNewline(t *testing.T) {
 		t.Fatal("write requested stop")
 	}
 
-	want := "'-. renamed.txt\nrenamed.txt: (new file) ?warning: last char not newline\n#1\n"
+	want := "'-. " + renamedPath + "\n" + renamedPath + ": (new file) ?warning: last char not newline\n#1\n"
 	if got := diag.String(); got != want {
 		t.Fatalf("diag = %q, want %q", got, want)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "renamed.txt"))
+	data, err := os.ReadFile(renamedPath)
 	if err != nil {
 		t.Fatalf("read renamed.txt: %v", err)
 	}
 	if got, want := string(data), "x"; got != want {
 		t.Fatalf("written contents = %q, want %q", got, want)
+	}
+}
+
+func TestWriteWarnsWhenDiskFileChanged(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	name := text.NewStringFromUTF8(path)
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+	if err := loadUnreadFile(f); err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("y\n"), 0o644); err != nil {
+		t.Fatalf("rewrite a.txt: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("chtimes a.txt: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+	sess.AddFile(f)
+
+	cmd, err := cmdlang.NewParser("w\n").Parse()
+	if err != nil {
+		t.Fatalf("parse write: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute write: %v", err)
+	}
+	if !ok {
+		t.Fatal("write requested stop")
+	}
+
+	if got, want := diag.String(), "?warning: write might change good version of `"+path+"'\n"; got != want {
+		t.Fatalf("diag = %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read a.txt: %v", err)
+	}
+	if got, want := string(data), "y\n"; got != want {
+		t.Fatalf("disk contents = %q, want %q", got, want)
 	}
 }
 

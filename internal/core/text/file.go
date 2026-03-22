@@ -57,6 +57,10 @@ type File struct {
 	PrevMod   bool
 	InitLine  Posn
 	InitCol   Posn
+	StatKnown bool
+	Dev       uint64
+	Inode     uint64
+	Mtime     int64
 	mergeOpen bool
 	merge     mergeState
 }
@@ -97,6 +101,22 @@ func (f *File) IsDirty() bool {
 func (f *File) MarkClean() {
 	f.CleanSeq = f.Seq
 	f.Mod = false
+}
+
+// SetFileInfo records the current on-disk identity and modification time.
+func (f *File) SetFileInfo(dev, inode uint64, mtime int64) {
+	f.StatKnown = true
+	f.Dev = dev
+	f.Inode = inode
+	f.Mtime = mtime
+}
+
+// ClearFileInfo forgets any recorded on-disk identity.
+func (f *File) ClearFileInfo() {
+	f.StatKnown = false
+	f.Dev = 0
+	f.Inode = 0
+	f.Mtime = 0
 }
 
 // ReadRune reads a single rune at q, returning -1 if out of range.

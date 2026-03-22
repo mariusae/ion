@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	ionaddr "ion/internal/core/addr"
 	ioncmd "ion/internal/core/cmdlang"
@@ -1023,13 +1024,18 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 
 	currentName := trimToken(f.Name.UTF8())
 	newFile := currentName == ""
+
 	if !newFile {
-		if _, err := os.Stat(currentName); err != nil {
-			if os.IsNotExist(err) {
-				newFile = true
-			} else {
+		if meta, ok, err := statFile(currentName); err != nil {
+			return err
+		} else if !ok {
+			newFile = true
+		} else if name == currentName && f.StatKnown && (f.Dev != meta.dev || f.Inode != meta.inode || f.Mtime < meta.mtime) {
+			f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+			if _, err := fmt.Fprintf(s.Diag, "?warning: write might change good version of `%s'\n", name); err != nil {
 				return err
 			}
+			return nil
 		}
 	}
 
@@ -1044,6 +1050,15 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	fullWrite := a.R.P1 == 0 && a.R.P2 == text.Posn(f.B.Len())
 	if fullWrite && (currentName == "" || name == currentName) {
 		f.MarkClean()
+	}
+	if currentName == "" || name == currentName {
+		if meta, ok, err := statFile(name); err != nil {
+			return err
+		} else if ok {
+			f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+		} else {
+			f.ClearFileInfo()
+		}
 	}
 	s.QuitOK = false
 
@@ -1148,6 +1163,11 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	}
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
+	}
+	if meta, ok, err := statFile(name); err != nil {
+		return err
+	} else if ok {
+		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
 	}
 	f.Dot = text.Range{}
 	f.NDot = text.Range{}
@@ -1661,6 +1681,7 @@ func loadUnreadFile(f *text.File) error {
 	name := trimToken(f.Name.UTF8())
 	if name == "" {
 		f.Unread = false
+		f.ClearFileInfo()
 		return nil
 	}
 	data, err := os.ReadFile(name)
@@ -1673,6 +1694,13 @@ func loadUnreadFile(f *text.File) error {
 	}
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
+	}
+	if meta, ok, err := statFile(name); err != nil {
+		return err
+	} else if ok {
+		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+	} else {
+		f.ClearFileInfo()
 	}
 	return nil
 }
@@ -1971,7 +1999,31 @@ func resetFileContents(f *text.File) error {
 	f.PrevMark = text.Range{}
 	f.PrevSeq = 0
 	f.PrevMod = false
+	f.ClearFileInfo()
 	return nil
+}
+
+type fileStat struct {
+	dev   uint64
+	inode uint64
+	mtime int64
+}
+
+func statFile(name string) (fileStat, bool, error) {
+	info, err := os.Stat(name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fileStat{}, false, nil
+		}
+		return fileStat{}, false, err
+	}
+	meta := fileStat{mtime: info.ModTime().Unix()}
+	meta.mtime = info.ModTime().UnixNano()
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		meta.dev = uint64(st.Dev)
+		meta.inode = uint64(st.Ino)
+	}
+	return meta, true, nil
 }
 
 func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.String) error {

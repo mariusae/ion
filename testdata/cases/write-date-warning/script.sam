@@ -1,0 +1,3 @@
+!sleep 1; printf 'y\n' > a.txt
+w
+q

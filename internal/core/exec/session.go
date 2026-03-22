@@ -179,6 +179,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'r':
+		if err := s.readFileInto(f, a, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case '=':
 		if err := s.printAddress(f, a, cmd.Text); err != nil {
 			return false, err
@@ -678,6 +684,42 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 	return s.printFileStatus(f, true)
 }
 
+func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.String) error {
+	name := fileNameForWrite(f, nameToken)
+	if name == "" {
+		return fmt.Errorf("no file name")
+	}
+	wasEmpty := f.B.Len() == 0 && trimToken(f.Name.UTF8()) == ""
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	txt, runeCount, err := textStringFromBytes(data)
+	if err != nil {
+		return err
+	}
+	if err := s.mutate(f, func(seq uint32) error {
+		if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
+			return err
+		}
+		if err := s.appendLogged(f, txt, a.R.P2, seq); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(data)); err != nil {
+			return err
+		}
+		f.NDot = text.Range{P1: a.R.P2, P2: a.R.P2 + runeCount}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if wasEmpty && !containsNullByte(data) {
+		f.MarkClean()
+		s.QuitOK = true
+	}
+	return nil
+}
+
 func (s *Session) switchFile(nameToken *text.String) error {
 	name := trimToken(nameTokenUTF8(nameToken))
 	if name == "" {
@@ -766,6 +808,30 @@ func nameTokenUTF8(s *text.String) string {
 		return ""
 	}
 	return s.UTF8()
+}
+
+func textStringFromBytes(data []byte) (*text.String, text.Posn, error) {
+	s := text.NewString()
+	count := text.Posn(0)
+	for _, r := range string(data) {
+		if err := s.Add(r); err != nil {
+			return nil, 0, err
+		}
+		count++
+	}
+	if err := s.Add(0); err != nil {
+		return nil, 0, err
+	}
+	return &s, count, nil
+}
+
+func containsNullByte(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.String) error {

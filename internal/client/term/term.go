@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"ion/internal/client/download"
 	"ion/internal/core/cmdlang"
@@ -29,6 +30,7 @@ const (
 )
 
 type bufferState struct {
+	name     string
 	text     []rune
 	cursor   int
 	origin   int
@@ -36,6 +38,7 @@ type bufferState struct {
 	dotEnd   int
 	markMode bool
 	markPos  int
+	status   string
 }
 
 // Run executes the initial terminal-client slice.
@@ -169,7 +172,36 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					buffer = nil
 					continue
 				}
-				if key == 17 {
+				buffer, err = applyBufferKey(svc, buffer, key)
+				if err != nil {
+					return err
+				}
+				if err := drawBufferMode(stdout, buffer); err != nil {
+					return err
+				}
+				continue
+			}
+			switch r {
+			case 0x11:
+				if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
+					return err
+				}
+				if err := exitBufferMode(stdout); err != nil {
+					return err
+				}
+				inBufferMode = false
+				buffer = nil
+				pending = append(pending, []rune("q\n")...)
+				done, err := executePending(false)
+				if err != nil {
+					return err
+				}
+				if done {
+					return nil
+				}
+				continue
+			case 0x17:
+				if strings.TrimSpace(buffer.name) == "" {
 					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
 						return err
 					}
@@ -178,19 +210,44 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService) erro
 					}
 					inBufferMode = false
 					buffer = nil
-					pending = append(pending, []rune("q\n")...)
-					done, err := executePending(false)
-					if err != nil {
-						return err
-					}
-					if done {
-						return nil
-					}
+					pending = append(pending, []rune("w ")...)
 					continue
 				}
-				buffer, err = applyBufferKey(svc, buffer, key)
+				msg, err := svc.Save()
+				if err != nil {
+					buffer.status = "?" + err.Error()
+				} else {
+					buffer.status = msg
+				}
+				if err := drawBufferMode(stdout, buffer); err != nil {
+					return err
+				}
+				continue
+			case 0x0c:
+				next, ok, err := lookInBuffer(svc, buffer, true)
 				if err != nil {
 					return err
+				}
+				if ok {
+					buffer = next
+					buffer.status = ""
+				} else {
+					buffer.status = "?no match"
+				}
+				if err := drawBufferMode(stdout, buffer); err != nil {
+					return err
+				}
+				continue
+			case 0x12:
+				next, ok, err := lookInBuffer(svc, buffer, false)
+				if err != nil {
+					return err
+				}
+				if ok {
+					buffer = next
+					buffer.status = ""
+				} else {
+					buffer.status = "?no match"
 				}
 				if err := drawBufferMode(stdout, buffer); err != nil {
 					return err
@@ -318,10 +375,11 @@ func newBufferState(view wire.BufferView) *bufferState {
 	dotEnd := clampIndex(view.DotEnd, len(text))
 	origin := lineStart(text, cursor)
 	return &bufferState{
+		name:     view.Name,
 		text:     text,
 		cursor:   cursor,
 		origin:   origin,
-		dotStart: cursor,
+		dotStart: clampIndex(view.DotStart, len(text)),
 		dotEnd:   dotEnd,
 	}
 }
@@ -390,7 +448,9 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	if err != nil {
 		return nil, err
 	}
-	return newBufferState(view), nil
+	next := newBufferState(view)
+	next.status = state.status
+	return next, nil
 }
 
 func drawBufferMode(stdout io.Writer, state *bufferState) error {
@@ -422,6 +482,18 @@ func drawBufferMode(stdout io.Writer, state *bufferState) error {
 			break
 		}
 		p = next
+	}
+	if state.status != "" {
+		if _, err := io.WriteString(stdout, "\x1b[24;1H\x1b[2K"); err != nil {
+			return err
+		}
+		status := []rune(state.status)
+		if len(status) > bufferCols {
+			status = status[:bufferCols]
+		}
+		if _, err := io.WriteString(stdout, string(status)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -698,4 +770,64 @@ func updateSelection(state *bufferState) {
 	}
 	state.dotStart = state.markPos
 	state.dotEnd = state.cursor
+}
+
+func lookInBuffer(svc wire.TermService, state *bufferState, forward bool) (*bufferState, bool, error) {
+	if state == nil || state.dotEnd <= state.dotStart {
+		return state, false, nil
+	}
+	target := append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+	start, ok := findSelection(state.text, state.dotStart, state.dotEnd, target, forward)
+	if !ok {
+		return state, false, nil
+	}
+	view, err := svc.SetDot(start, start+len(target))
+	if err != nil {
+		return nil, false, err
+	}
+	next := newBufferState(view)
+	next.status = state.status
+	return next, true, nil
+}
+
+func findSelection(text []rune, start, end int, target []rune, forward bool) (int, bool) {
+	if len(target) == 0 || len(text) < len(target) {
+		return 0, false
+	}
+	if forward {
+		for pos := end; pos <= len(text)-len(target); pos++ {
+			if hasRunesAt(text, pos, target) {
+				return pos, true
+			}
+		}
+		for pos := 0; pos < start; pos++ {
+			if hasRunesAt(text, pos, target) {
+				return pos, true
+			}
+		}
+		return 0, false
+	}
+	for pos := len(text) - len(target); pos > start; pos-- {
+		if hasRunesAt(text, pos, target) {
+			return pos, true
+		}
+	}
+	for pos := start - 1; pos >= 0; pos-- {
+		if hasRunesAt(text, pos, target) {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func hasRunesAt(text []rune, pos int, target []rune) bool {
+	if pos < 0 || pos+len(target) > len(text) {
+		return false
+	}
+	for i, r := range target {
+		if text[pos+i] != r {
+			return false
+		}
+	}
+	return true
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 
 	"ion/internal/core/cmdlang"
 	"ion/internal/core/exec"
@@ -94,14 +95,24 @@ func (w *Workspace) Undo() (wire.BufferView, error) {
 	return w.currentView()
 }
 
+// Save writes the current file and returns the resulting status message.
+func (w *Workspace) Save() (string, error) {
+	return w.session.SaveCurrent()
+}
+
 func (w *Workspace) currentView() (wire.BufferView, error) {
 	text, err := w.session.CurrentText()
 	if err != nil {
 		return wire.BufferView{}, err
 	}
 	dot := w.session.CurrentDot()
+	name := ""
+	if w.session.Current != nil {
+		name = strings.TrimRight(strings.TrimSpace(w.session.Current.Name.UTF8()), "\x00")
+	}
 	return wire.BufferView{
 		Text:     text,
+		Name:     name,
 		DotStart: int(dot.P1),
 		DotEnd:   int(dot.P2),
 	}, nil

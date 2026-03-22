@@ -47,6 +47,10 @@ func (f *fakeTermService) Undo() (wire.BufferView, error) {
 	return f.view, nil
 }
 
+func (f *fakeTermService) Save() (string, error) {
+	return "saved", nil
+}
+
 func TestNewBufferStateStartsAtDot(t *testing.T) {
 	t.Parallel()
 
@@ -169,5 +173,23 @@ func TestApplyBufferKeyCtrlKDeletesToLineEnd(t *testing.T) {
 	}
 	if got, want := next.cursor, 2; got != want {
 		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestFindSelectionForwardWraps(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta alpha")
+	if got, ok := findSelection(text, 11, 16, []rune("alpha"), true); !ok || got != 0 {
+		t.Fatalf("findSelection(forward wrap) = (%d,%v), want (0,true)", got, ok)
+	}
+}
+
+func TestFindSelectionBackwardFindsPrevious(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta alpha")
+	if got, ok := findSelection(text, 11, 16, []rune("alpha"), false); !ok || got != 0 {
+		t.Fatalf("findSelection(backward) = (%d,%v), want (0,true)", got, ok)
 	}
 }

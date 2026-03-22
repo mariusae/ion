@@ -1428,6 +1428,23 @@ func (s *Session) UndoCurrent() error {
 	return nil
 }
 
+// SaveCurrent writes the current file and returns sam's status line.
+func (s *Session) SaveCurrent() (string, error) {
+	if s.Current == nil {
+		return "", fmt.Errorf("no current file")
+	}
+	oldDiag := s.Diag
+	var b bytes.Buffer
+	s.Diag = &b
+	defer func() {
+		s.Diag = oldDiag
+	}()
+	if err := s.writeFile(s.Current, nil); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
 		if f != nil && f.Mod {

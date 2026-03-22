@@ -345,6 +345,116 @@ func TestIonTermBufferModeCtrlQQuits(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeCtrlWSaves(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1bZ\x17"); err != nil {
+		t.Fatalf("enter buffer mode, edit, and save: %v", err)
+	}
+	if _, err := sess.WaitFor("in.txt: #11", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for save status: %v\n%s", err, sess.Snapshot())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got, want := string(data), "Zalpha\nbeta\n"; got != want {
+		t.Fatalf("saved file = %q, want %q", got, want)
+	}
+
+	if err := sess.WriteString("\x11"); err != nil {
+		t.Fatalf("send Ctrl-Q: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
+func TestIonTermBufferModeCtrlLFindsNextSelection(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha beta alpha\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("/alpha/\n"); err != nil {
+		t.Fatalf("select first alpha in command mode: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for command-mode selection output: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b\x0c"); err != nil {
+		t.Fatalf("enter buffer mode and look forward: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha beta \x1b[7ma\x1b[27m", 2*time.Second); err != nil {
+		t.Fatalf("wait for moved selection/cursor: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x11"); err != nil {
+		t.Fatalf("send Ctrl-Q: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func findModuleRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

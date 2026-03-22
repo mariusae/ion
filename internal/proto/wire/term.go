@@ -4,6 +4,7 @@ package wire
 // the terminal client.
 type BufferView struct {
 	Text     string
+	Name     string
 	DotStart int
 	DotEnd   int
 }
@@ -15,4 +16,5 @@ type TermService interface {
 	SetDot(start, end int) (BufferView, error)
 	Replace(start, end int, text string) (BufferView, error)
 	Undo() (BufferView, error)
+	Save() (string, error)
 }

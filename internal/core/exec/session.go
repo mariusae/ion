@@ -43,6 +43,7 @@ type execFrame struct {
 // AddFile registers a file with the session and makes it current if needed.
 func (s *Session) AddFile(f *text.File) {
 	oldFirst := s.firstFile()
+	s.warnDuplicateName(trimToken(f.Name.UTF8()))
 	s.Files = append(s.Files, f)
 	s.sortFiles()
 	if s.Current == nil || s.Current == oldFirst {
@@ -740,6 +741,29 @@ func (s *Session) shellPipe(f *text.File, a ionaddr.Address, token *text.String)
 	return s.printShellPrompt()
 }
 
+func (s *Session) shellFileList(src string) ([]string, error) {
+	token := text.NewStringFromUTF8(src)
+	cmd, err := s.resolveShellCommand(&token)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.runShellCommand(nil, cmd, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.writeShellWarnings(res, true); err != nil {
+		return nil, err
+	}
+	if err := s.writeShellStreams(res, false); err != nil {
+		return nil, err
+	}
+	if err := s.printShellPrompt(); err != nil {
+		return nil, err
+	}
+	out := strings.ReplaceAll(string(res.Stdout), "\x00", "")
+	return strings.Fields(out), nil
+}
+
 func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	if cmd.Re == nil {
 		return s.lineXCmd(f, cmd, a)
@@ -1091,12 +1115,25 @@ func (s *Session) changeDirectory(nameToken *text.String) error {
 }
 
 func (s *Session) openFiles(nameToken *text.String) error {
-	names := tokenFields(nameToken)
-	if len(names) == 0 {
+	fields, noArg, emptyList, err := s.loadFileList(nameToken)
+	if err != nil {
+		return err
+	}
+	if noArg {
 		return fmt.Errorf("blank expected")
 	}
+	if emptyList {
+		d, err := text.NewDisk()
+		if err != nil {
+			return err
+		}
+		f := text.NewFile(d)
+		s.AddFile(f)
+		s.Current = f
+		return s.printFileStatus(f, true)
+	}
 	var current *text.File
-	for _, name := range names {
+	for _, name := range fields {
 		f := s.findFileByName(name)
 		if f == nil {
 			d, err := text.NewDisk()
@@ -1125,14 +1162,20 @@ func (s *Session) openFiles(nameToken *text.String) error {
 }
 
 func (s *Session) closeFiles(nameToken *text.String) error {
-	names := tokenFields(nameToken)
-	if len(names) == 0 {
+	fields, noArg, emptyList, err := s.loadFileList(nameToken)
+	if err != nil {
+		return err
+	}
+	if noArg {
 		if s.Current == nil {
 			return fmt.Errorf("no current file")
 		}
 		return s.removeFile(s.Current)
 	}
-	for _, name := range names {
+	if emptyList {
+		return fmt.Errorf("newline expected")
+	}
+	for _, name := range fields {
 		f := s.findFileByName(name)
 		if f == nil {
 			continue
@@ -1145,9 +1188,16 @@ func (s *Session) closeFiles(nameToken *text.String) error {
 }
 
 func (s *Session) switchFile(nameToken *text.String) error {
-	name := trimToken(nameTokenUTF8(nameToken))
-	if name == "" {
+	fields, noArg, _, err := s.loadFileList(nameToken)
+	if err != nil {
+		return err
+	}
+	if noArg {
 		return fmt.Errorf("blank expected")
+	}
+	name := ""
+	if len(fields) > 0 {
+		name = fields[0]
 	}
 	for _, f := range s.Files {
 		if trimToken(f.Name.UTF8()) != name {
@@ -1253,6 +1303,16 @@ func (s *Session) listFiles() error {
 		}
 	}
 	return nil
+}
+
+func (s *Session) warnDuplicateName(name string) {
+	for _, f := range s.Files {
+		if trimToken(f.Name.UTF8()) != name {
+			continue
+		}
+		_, _ = fmt.Fprintf(s.Diag, "?warning: duplicate file name `%s'\n", name)
+		return
+	}
 }
 
 func (s *Session) printFileStatus(f *text.File, current bool) error {
@@ -1377,6 +1437,29 @@ func rawTokenUTF8(s *text.String) string {
 		return ""
 	}
 	return strings.TrimRight(s.UTF8(), "\x00")
+}
+
+func (s *Session) loadFileList(token *text.String) (fields []string, noArg bool, emptyList bool, err error) {
+	raw := rawTokenUTF8(token)
+	if raw == "" {
+		return nil, true, false, nil
+	}
+	if raw[0] != ' ' && raw[0] != '\t' {
+		return nil, false, false, fmt.Errorf("blank expected")
+	}
+	rest := strings.TrimLeft(raw, " \t")
+	if rest == "" {
+		return nil, false, true, nil
+	}
+	if rest[0] == '<' {
+		fields, err = s.shellFileList(rest[1:])
+		if err != nil {
+			return nil, false, false, err
+		}
+		return fields, false, len(fields) == 0, nil
+	}
+	fields = strings.Fields(rest)
+	return fields, false, len(fields) == 0, nil
 }
 
 func normalizeNameForCWD(cwd, name string) string {

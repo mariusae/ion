@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	ionaddr "ion/internal/core/addr"
 	ioncmd "ion/internal/core/cmdlang"
@@ -1044,7 +1046,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 		return err
 	}
 	if err := os.WriteFile(name, []byte(b.String()), 0o666); err != nil {
-		return err
+		return createFileError(name, err)
 	}
 
 	fullWrite := a.R.P1 == 0 && a.R.P2 == text.Posn(f.B.Len())
@@ -1117,7 +1119,7 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	wasEmpty := f.B.Len() == 0 && trimToken(f.Name.UTF8()) == ""
 	data, err := os.ReadFile(name)
 	if err != nil {
-		return err
+		return openFileError(name, err)
 	}
 	txt, runeCount, err := textStringFromBytes(data)
 	if err != nil {
@@ -1152,7 +1154,7 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	}
 	data, err := os.ReadFile(name)
 	if err != nil {
-		return err
+		return openFileError(name, err)
 	}
 	if err := resetFileContents(f); err != nil {
 		return err
@@ -1687,7 +1689,7 @@ func loadUnreadFile(f *text.File) error {
 	data, err := os.ReadFile(name)
 	if err != nil {
 		f.Unread = false
-		return err
+		return openFileError(name, err)
 	}
 	if err := resetFileContents(f); err != nil {
 		return err
@@ -2024,6 +2026,27 @@ func statFile(name string) (fileStat, bool, error) {
 		meta.inode = uint64(st.Ino)
 	}
 	return meta, true, nil
+}
+
+func openFileError(name string, err error) error {
+	return fmt.Errorf("can't open %q: %s", name, ioErrText(err))
+}
+
+func createFileError(name string, err error) error {
+	return fmt.Errorf("can't create %q: %s", name, ioErrText(err))
+}
+
+func ioErrText(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		err = pathErr.Err
+	}
+	text := err.Error()
+	r, size := utf8.DecodeRuneInString(text)
+	if r == utf8.RuneError && size == 0 {
+		return text
+	}
+	return string(unicode.ToUpper(r)) + text[size:]
 }
 
 func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.String) error {

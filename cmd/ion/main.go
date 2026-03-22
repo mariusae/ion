@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"ion/internal/client/download"
+	"ion/internal/client/term"
 	"ion/internal/server/workspace"
 )
 
@@ -34,8 +35,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "ion: terminal mode is not implemented yet")
-	return 1
+	if err := runTerm(cfg, stdin, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "ion: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func parseArgs(args []string) (config, error) {
@@ -53,4 +57,8 @@ func parseArgs(args []string) (config, error) {
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	return download.Run(cfg.files, stdin, stderr, workspace.New(stdout, stderr))
+}
+
+func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	return term.Run(cfg.files, stdin, stderr, workspace.New(stdout, stderr))
 }

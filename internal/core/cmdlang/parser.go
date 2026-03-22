@@ -176,7 +176,7 @@ func (p *Parser) parseCmd(nest int) (*Cmd, error) {
 				p.skipBl()
 				delim := p.getch()
 				if delim == -1 || delim == '\n' {
-					return nil, fmt.Errorf("missing pattern")
+					return nil, fmt.Errorf("pattern expected")
 				}
 				if err := okDelim(rune(delim)); err != nil {
 					return nil, err
@@ -468,7 +468,7 @@ func (p *Parser) getRegexp(delim rune) (*text.String, error) {
 		}
 	}
 	if p.lastPat.Len() <= 1 {
-		return nil, fmt.Errorf("missing pattern")
+		return nil, fmt.Errorf("pattern expected")
 	}
 	out := text.NewString()
 	if err := out.DupString(&p.lastPat); err != nil {
@@ -511,7 +511,7 @@ func (p *Parser) atNL() error {
 	if ch := p.getch(); ch == -1 && !p.final {
 		return ErrNeedMoreInput
 	} else if ch != int('\n') {
-		return fmt.Errorf("expected newline")
+		return fmt.Errorf("newline expected")
 	}
 	return nil
 }

@@ -108,7 +108,12 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 				if errors.Is(err, cmdlang.ErrNeedMoreInput) {
 					return false, nil
 				}
-				return false, err
+				if reportCommandError(stderr, err); !final {
+					pending = discardFailedCommand(pending)
+				} else {
+					pending = nil
+				}
+				return false, nil
 			}
 
 			consumed := parser.Consumed()
@@ -122,7 +127,10 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 
 			ok, err := sess.Execute(cmd)
 			if err != nil {
-				return false, err
+				if err := reportCommandError(stderr, err); err != nil {
+					return false, err
+				}
+				continue
 			}
 			if !ok {
 				return true, nil
@@ -166,6 +174,20 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil
 		}
 	}
+}
+
+func reportCommandError(w io.Writer, err error) error {
+	_, writeErr := fmt.Fprintf(w, "?%v\n", err)
+	return writeErr
+}
+
+func discardFailedCommand(pending []rune) []rune {
+	for i, r := range pending {
+		if r == '\n' {
+			return pending[i+1:]
+		}
+	}
+	return nil
 }
 
 func printFileStatus(w io.Writer, f *text.File, current bool) error {

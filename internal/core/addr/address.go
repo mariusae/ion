@@ -277,7 +277,7 @@ func nextMatch(f *text.File, re *text.String, p text.Posn, sign int) (text.Range
 			return text.Range{}, err
 		}
 		if !ok {
-			return text.Range{}, fmt.Errorf("search failed")
+			return text.Range{}, fmt.Errorf("search")
 		}
 		if match.P[0].P1 == match.P[0].P2 && match.P[0].P1 == p {
 			p++
@@ -289,7 +289,7 @@ func nextMatch(f *text.File, re *text.String, p text.Posn, sign int) (text.Range
 				return text.Range{}, err
 			}
 			if !ok {
-				return text.Range{}, fmt.Errorf("search failed")
+				return text.Range{}, fmt.Errorf("search")
 			}
 		}
 		return match.P[0], nil
@@ -300,7 +300,7 @@ func nextMatch(f *text.File, re *text.String, p text.Posn, sign int) (text.Range
 		return text.Range{}, err
 	}
 	if !ok {
-		return text.Range{}, fmt.Errorf("search failed")
+		return text.Range{}, fmt.Errorf("search")
 	}
 	if match.P[0].P1 == match.P[0].P2 && match.P[0].P2 == p {
 		p--
@@ -312,7 +312,7 @@ func nextMatch(f *text.File, re *text.String, p text.Posn, sign int) (text.Range
 			return text.Range{}, err
 		}
 		if !ok {
-			return text.Range{}, fmt.Errorf("search failed")
+			return text.Range{}, fmt.Errorf("search")
 		}
 	}
 	return match.P[0], nil
@@ -361,7 +361,7 @@ func (e *Evaluator) matchFile(re *text.String) (*text.File, error) {
 		}
 	}
 	if match == nil {
-		return nil, fmt.Errorf("no file matches")
+		return nil, fmt.Errorf("file search")
 	}
 	return match, nil
 }

@@ -27,11 +27,17 @@ type Session struct {
 	QuitOK       bool
 	LastShellCmd string
 	execDepth    int
+	frame        *execFrame
 }
 
 // NewSession constructs an execution session.
 func NewSession(out io.Writer) *Session {
 	return &Session{Out: out, Diag: io.Discard}
+}
+
+type execFrame struct {
+	seq     uint32
+	touched map[*text.File]struct{}
 }
 
 // AddFile registers a file with the session and makes it current if needed.
@@ -45,12 +51,20 @@ func (s *Session) AddFile(f *text.File) {
 }
 
 // Execute runs one parsed command. It returns false when execution should stop.
-func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
+func (s *Session) Execute(cmd *ioncmd.Cmd) (ok bool, err error) {
 	if cmd == nil {
 		return false, nil
 	}
 	s.execDepth++
+	startedFrame := s.beginFrame()
 	defer func() {
+		if startedFrame {
+			ferr := s.finishFrame(err == nil)
+			if err == nil && ferr != nil {
+				err = ferr
+				ok = false
+			}
+		}
 		s.execDepth--
 	}()
 
@@ -391,16 +405,93 @@ func (s *Session) appendLogged(f *text.File, txt *text.String, p text.Posn, seq 
 }
 
 func (s *Session) mutate(f *text.File, fn func(seq uint32) error) error {
-	s.Seq++
-	seq := s.Seq
+	seq := s.currentSeq()
 	if err := fn(seq); err != nil {
 		return err
 	}
-	_, _, _, err := f.Update(false)
-	if err == nil {
-		s.QuitOK = false
+	s.touchFile(f)
+	return nil
+}
+
+func (s *Session) beginFrame() bool {
+	if s.frame != nil {
+		return false
 	}
-	return err
+	s.frame = &execFrame{
+		seq:     s.Seq + 1,
+		touched: make(map[*text.File]struct{}),
+	}
+	return true
+}
+
+func (s *Session) finishFrame(apply bool) error {
+	frame := s.frame
+	s.frame = nil
+	if frame == nil {
+		return nil
+	}
+	if !apply {
+		return s.rollbackFrame(frame)
+	}
+	if err := s.applyFrame(frame); err != nil {
+		return err
+	}
+	if len(frame.touched) != 0 {
+		s.Seq = frame.seq
+	}
+	return nil
+}
+
+func (s *Session) currentSeq() uint32 {
+	if s.frame != nil {
+		return s.frame.seq
+	}
+	return s.Seq + 1
+}
+
+func (s *Session) touchFile(f *text.File) {
+	if f == nil || s.frame == nil {
+		return
+	}
+	s.frame.touched[f] = struct{}{}
+	s.QuitOK = false
+}
+
+func (s *Session) applyFrame(frame *execFrame) error {
+	for _, f := range s.orderedTouchedFiles(frame) {
+		if _, _, _, err := f.Update(false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Session) rollbackFrame(frame *execFrame) error {
+	for f := range frame.touched {
+		if err := f.AbortPendingSequence(frame.seq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Session) orderedTouchedFiles(frame *execFrame) []*text.File {
+	ordered := make([]*text.File, 0, len(frame.touched))
+	seen := make(map[*text.File]struct{}, len(frame.touched))
+	for _, f := range s.Files {
+		if _, ok := frame.touched[f]; !ok {
+			continue
+		}
+		ordered = append(ordered, f)
+		seen[f] = struct{}{}
+	}
+	for f := range frame.touched {
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		ordered = append(ordered, f)
+	}
+	return ordered
 }
 
 func (s *Session) substitute(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
@@ -417,8 +508,7 @@ func (s *Session) substitute(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) e
 	}
 	op := text.Posn(-1)
 
-	s.Seq++
-	seq := s.Seq
+	seq := s.currentSeq()
 	for p1 := a.R.P1; p1 <= a.R.P2; {
 		match, ok, err := pat.Execute(f, p1, a.R.P2)
 		if err != nil {
@@ -468,8 +558,8 @@ func (s *Session) substitute(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) e
 		return fmt.Errorf("no substitution")
 	}
 	f.NDot = text.Range{P1: a.R.P1, P2: a.R.P2 + delta}
-	_, _, _, err = f.Update(false)
-	return err
+	s.touchFile(f)
+	return nil
 }
 
 func (s *Session) xCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
@@ -793,16 +883,12 @@ func (s *Session) copyRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 	if err != nil {
 		return err
 	}
-	s.Seq++
-	seq := s.Seq
+	seq := s.currentSeq()
 	if err := s.copyRangeLogged(seq, src, dest); err != nil {
 		return err
 	}
-	_, _, _, err = dest.F.Update(false)
-	if err == nil {
-		s.QuitOK = false
-	}
-	return err
+	s.touchFile(dest.F)
+	return nil
 }
 
 func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
@@ -810,8 +896,7 @@ func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 	if err != nil {
 		return err
 	}
-	s.Seq++
-	seq := s.Seq
+	seq := s.currentSeq()
 
 	switch {
 	case src.F == dest.F && src.R.P2 <= dest.R.P2:
@@ -832,17 +917,9 @@ func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 		}
 	}
 
-	if src.F == dest.F {
-		_, _, _, err = src.F.Update(false)
-	} else {
-		if _, _, _, err = dest.F.Update(false); err == nil {
-			_, _, _, err = src.F.Update(false)
-		}
-	}
-	if err == nil {
-		s.QuitOK = false
-	}
-	return err
+	s.touchFile(dest.F)
+	s.touchFile(src.F)
+	return nil
 }
 
 func (s *Session) resolveAddrArg(current *text.File, ap *ionaddr.Addr) (ionaddr.Address, error) {
@@ -1581,12 +1658,20 @@ func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.Stri
 		return err
 	}
 	if l1 == l2 {
-		_, err = fmt.Fprintf(s.Diag, "%d; #%d", l1, a.R.P1)
+		_, err = fmt.Fprintf(s.Diag, "%d", l1)
 	} else {
-		_, err = fmt.Fprintf(s.Diag, "%d,%d; #%d,#%d", l1, l2, a.R.P1, a.R.P2)
+		_, err = fmt.Fprintf(s.Diag, "%d,%d", l1, l2)
 	}
 	if err != nil {
 		return err
+	}
+	if _, err = fmt.Fprintf(s.Diag, "; #%d", a.R.P1); err != nil {
+		return err
+	}
+	if a.R.P2 != a.R.P1 {
+		if _, err = fmt.Fprintf(s.Diag, ",#%d", a.R.P2); err != nil {
+			return err
+		}
 	}
 	_, err = fmt.Fprintln(s.Diag)
 	return err

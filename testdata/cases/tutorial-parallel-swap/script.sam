@@ -1,0 +1,9 @@
+a
+Emacs vi Emacs
+.
+,x/Emacs|vi/{
+g/Emacs/ c/vi/
+g/vi/ c/Emacs/
+}
+,p
+q

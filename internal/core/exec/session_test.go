@@ -92,6 +92,49 @@ func TestExecuteChangeDirectoryCommand(t *testing.T) {
 	}
 }
 
+func TestGroupedChangesApplyInParallel(t *testing.T) {
+	t.Parallel()
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	if _, _, err := f.LoadInitial(bytes.NewReader([]byte("Emacs vi Emacs\n"))); err != nil {
+		t.Fatalf("load initial: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	sess.AddFile(f)
+
+	parser := cmdlang.NewParser(",x/Emacs|vi/{\ng/Emacs/ c/vi/\ng/vi/ c/Emacs/\n}\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !ok {
+		t.Fatal("execute requested stop")
+	}
+
+	var out bytes.Buffer
+	if _, err := f.WriteTo(&out); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if got, want := out.String(), "vi Emacs vi\n"; got != want {
+		t.Fatalf("file contents = %q, want %q", got, want)
+	}
+}
+
 func sameFilePath(t *testing.T, got, want string) bool {
 	t.Helper()
 

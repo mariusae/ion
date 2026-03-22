@@ -381,6 +381,28 @@ func (f *File) Update(notrans bool) (changed bool, q0, q1 Posn, err error) {
 	return true, q0, q1, nil
 }
 
+// AbortPendingSequence discards an unflushed epsilon sequence and restores the
+// file metadata captured by MarkState.
+func (f *File) AbortPendingSequence(seq uint32) error {
+	f.mergeOpen = false
+	f.merge.n = 0
+	f.merge.nbuf = 0
+	f.HiPosn = 0
+	if f.Epsilon.Len() > 0 {
+		if err := f.Epsilon.Delete(0, Posn(f.Epsilon.Len())); err != nil {
+			return err
+		}
+	}
+	if f.Seq == seq {
+		f.Seq = f.PrevSeq
+		f.Dot = f.PrevDot
+		f.NDot = f.PrevDot
+		f.Mark = f.PrevMark
+		f.Mod = f.PrevMod
+	}
+	return nil
+}
+
 // Undo undoes or redoes one sequence of changes.
 func (f *File) Undo(isUndo, canRedo bool) (q0, q1 Posn, err error) {
 	var delta, epsilon *Buffer

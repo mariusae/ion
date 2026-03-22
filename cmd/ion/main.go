@@ -1,18 +1,13 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"ion/internal/core/cmdlang"
-	"ion/internal/core/exec"
-	"ion/internal/core/text"
+	"ion/internal/client/download"
+	"ion/internal/server/workspace"
 )
 
 type config struct {
@@ -57,149 +52,5 @@ func parseArgs(args []string) (config, error) {
 }
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	sess := exec.NewSession(stdout)
-	sess.Diag = stderr
-
-	if len(cfg.files) == 0 {
-		d, err := text.NewDisk()
-		if err != nil {
-			return err
-		}
-		f := text.NewFile(d)
-		f.Unread = false
-		sess.AddFile(f)
-	} else {
-		for _, name := range cfg.files {
-			d, err := text.NewDisk()
-			if err != nil {
-				return err
-			}
-			f := text.NewFile(d)
-			s := text.NewStringFromUTF8(name)
-			if err := f.Name.DupString(&s); err != nil {
-				return err
-			}
-			data, err := os.ReadFile(name)
-			if err != nil {
-				return err
-			}
-			if _, _, err := f.LoadInitial(bytes.NewReader(data)); err != nil {
-				return err
-			}
-			sess.AddFile(f)
-		}
-	}
-
-	if sess.Current != nil {
-		if err := printFileStatus(stderr, sess.Current, true); err != nil {
-			return err
-		}
-	}
-
-	parser := cmdlang.NewParserRunes(nil)
-	reader := bufio.NewReader(stdin)
-	var pending []rune
-
-	executePending := func(final bool) (bool, error) {
-		for {
-			parser.ResetRunes(pending)
-			cmd, err := parser.ParseWithFinal(final)
-			if err != nil {
-				if errors.Is(err, cmdlang.ErrNeedMoreInput) {
-					return false, nil
-				}
-				if reportCommandError(stderr, err); !final {
-					pending = discardFailedCommand(pending)
-				} else {
-					pending = nil
-				}
-				return false, nil
-			}
-
-			consumed := parser.Consumed()
-			if consumed > 0 {
-				pending = pending[consumed:]
-			}
-
-			if cmd == nil {
-				return false, nil
-			}
-
-			ok, err := sess.Execute(cmd)
-			if err != nil {
-				if err := reportCommandError(stderr, err); err != nil {
-					return false, err
-				}
-				continue
-			}
-			if !ok {
-				return true, nil
-			}
-		}
-	}
-
-	for {
-		done, err := executePending(false)
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return err
-			}
-			if len(line) > 0 {
-				pending = append(pending, []rune(line)...)
-			}
-			done, err := executePending(true)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			return nil
-		}
-
-		pending = append(pending, []rune(line)...)
-		done, err = executePending(false)
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-	}
-}
-
-func reportCommandError(w io.Writer, err error) error {
-	_, writeErr := fmt.Fprintf(w, "?%v\n", err)
-	return writeErr
-}
-
-func discardFailedCommand(pending []rune) []rune {
-	for i, r := range pending {
-		if r == '\n' {
-			return pending[i+1:]
-		}
-	}
-	return nil
-}
-
-func printFileStatus(w io.Writer, f *text.File, current bool) error {
-	mod := ' '
-	if f.Mod {
-		mod = '\''
-	}
-	rasp := '-'
-	cur := ' '
-	if current {
-		cur = '.'
-	}
-	_, err := fmt.Fprintf(w, "%c%c%c %s\n", mod, rasp, cur, strings.TrimRight(f.Name.UTF8(), "\x00"))
-	return err
+	return download.Run(cfg.files, stdin, stderr, workspace.New(stdout, stderr))
 }

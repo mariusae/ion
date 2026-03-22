@@ -1,12 +1,64 @@
 package workspace
 
-// Workspace will own the authoritative shared editing state.
-//
-// The real implementation will wrap the sam-compatible core engine and expose
-// client-facing operations through the protocol layer.
-type Workspace struct{}
+import (
+	"bytes"
+	"io"
+	"os"
 
-// New constructs an empty workspace.
-func New() *Workspace {
-	return &Workspace{}
+	"ion/internal/core/cmdlang"
+	"ion/internal/core/exec"
+	"ion/internal/core/text"
+)
+
+// Workspace owns the authoritative shared editing state for the current server
+// process. It is the initial server-side wrapper around the sam-compatible core.
+type Workspace struct {
+	session *exec.Session
+}
+
+// New constructs a workspace backed by a core execution session.
+func New(stdout, stderr io.Writer) *Workspace {
+	sess := exec.NewSession(stdout)
+	sess.Diag = stderr
+	return &Workspace{session: sess}
+}
+
+// Bootstrap loads the initial file set for a download-mode client.
+func (w *Workspace) Bootstrap(files []string) error {
+	if len(files) == 0 {
+		d, err := text.NewDisk()
+		if err != nil {
+			return err
+		}
+		f := text.NewFile(d)
+		f.Unread = false
+		w.session.AddFile(f)
+	} else {
+		for _, name := range files {
+			d, err := text.NewDisk()
+			if err != nil {
+				return err
+			}
+			f := text.NewFile(d)
+			s := text.NewStringFromUTF8(name)
+			if err := f.Name.DupString(&s); err != nil {
+				return err
+			}
+			data, err := os.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			if _, _, err := f.LoadInitial(bytes.NewReader(data)); err != nil {
+				return err
+			}
+			w.session.AddFile(f)
+		}
+	}
+
+	return w.session.PrintCurrentStatus()
+}
+
+// Execute forwards one parsed command into the authoritative core session.
+func (w *Workspace) Execute(cmd *cmdlang.Cmd) (bool, error) {
+	return w.session.Execute(cmd)
 }

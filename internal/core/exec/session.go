@@ -1331,6 +1331,14 @@ func (s *Session) printFileStatus(f *text.File, current bool) error {
 	return err
 }
 
+// PrintCurrentStatus prints the current file status line, if any.
+func (s *Session) PrintCurrentStatus() error {
+	if s.Current == nil {
+		return nil
+	}
+	return s.printFileStatus(s.Current, true)
+}
+
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
 		if f != nil && f.Mod {

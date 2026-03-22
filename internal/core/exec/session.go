@@ -964,7 +964,7 @@ func (s *Session) moveRange(src ionaddr.Address, ap *ionaddr.Addr) error {
 			return err
 		}
 	case src.F == dest.F && src.R.P1 < dest.R.P2:
-		return fmt.Errorf("move overlaps itself")
+		return fmt.Errorf("addresses overlap")
 	default:
 		if err := s.copyRangeLogged(seq, src, dest); err != nil {
 			return err

@@ -1,9 +1,12 @@
 package exec
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,12 +19,14 @@ import (
 
 // Session executes parsed sam commands over a set of files.
 type Session struct {
-	Files   []*text.File
-	Current *text.File
-	Seq     uint32
-	Out     io.Writer
-	Diag    io.Writer
-	QuitOK  bool
+	Files        []*text.File
+	Current      *text.File
+	Seq          uint32
+	Out          io.Writer
+	Diag         io.Writer
+	QuitOK       bool
+	LastShellCmd string
+	execDepth    int
 }
 
 // NewSession constructs an execution session.
@@ -44,6 +49,10 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 	if cmd == nil {
 		return false, nil
 	}
+	s.execDepth++
+	defer func() {
+		s.execDepth--
+	}()
 
 	f, a, err := s.resolveCommandAddress(cmd)
 	if err != nil {
@@ -221,6 +230,30 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 
 	case 'c' | 0x100:
 		if err := s.changeDirectory(cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case '!':
+		if err := s.shellBang(f, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case '<':
+		if err := s.shellPipeIn(f, a, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case '>':
+		if err := s.shellPipeOut(f, a, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	case '|':
+		if err := s.shellPipe(f, a, cmd.Text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -535,6 +568,86 @@ func (s *Session) lineXCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) err
 		a3.R = linesel
 	}
 	return nil
+}
+
+func (s *Session) shellBang(f *text.File, token *text.String) error {
+	cmd, err := s.resolveShellCommand(token)
+	if err != nil {
+		return err
+	}
+	res, err := s.runShellCommand(f, cmd, nil, false)
+	if err != nil {
+		return err
+	}
+	if err := s.writeShellStreams(res, true); err != nil {
+		return err
+	}
+	return s.printShellPrompt()
+}
+
+func (s *Session) shellPipeIn(f *text.File, a ionaddr.Address, token *text.String) error {
+	cmd, err := s.resolveShellCommand(token)
+	if err != nil {
+		return err
+	}
+	res, err := s.runShellCommand(f, cmd, nil, true)
+	if err != nil {
+		return err
+	}
+	if err := s.replaceWithShellOutput(f, a, res.Stdout); err != nil {
+		return err
+	}
+	if err := s.writeShellWarnings(res, true); err != nil {
+		return err
+	}
+	if err := s.writeShellStreams(res, false); err != nil {
+		return err
+	}
+	return s.printShellPrompt()
+}
+
+func (s *Session) shellPipeOut(f *text.File, a ionaddr.Address, token *text.String) error {
+	cmd, err := s.resolveShellCommand(token)
+	if err != nil {
+		return err
+	}
+	input, err := readRangeBytes(f, a.R)
+	if err != nil {
+		return err
+	}
+	res, err := s.runShellCommand(f, cmd, input, false)
+	if err != nil {
+		return err
+	}
+	if err := s.writeShellStreams(res, true); err != nil {
+		return err
+	}
+	return s.printShellPrompt()
+}
+
+func (s *Session) shellPipe(f *text.File, a ionaddr.Address, token *text.String) error {
+	cmd, err := s.resolveShellCommand(token)
+	if err != nil {
+		return err
+	}
+	input, err := readRangeBytes(f, a.R)
+	if err != nil {
+		return err
+	}
+	res, err := s.runShellCommand(f, cmd, input, true)
+	if err != nil {
+		return err
+	}
+	if err := s.replaceWithShellOutput(f, a, res.Stdout); err != nil {
+		return err
+	}
+	if err := s.writeShellWarnings(res, true); err != nil {
+		return err
+	}
+	if err := s.writeShellStreams(res, false); err != nil {
+		return err
+	}
+	return s.printShellPrompt()
 }
 
 func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
@@ -1103,7 +1216,7 @@ func defaultAddrFor(cmdc rune) rune {
 
 func commandNeedsCurrent(cmdc rune) bool {
 	switch cmdc {
-	case 'b', 'B', 'D', 'n', 'q', 'X', 'Y':
+	case '!', 'b', 'B', 'D', 'n', 'q', 'X', 'Y', 'c' | 0x100:
 		return false
 	default:
 		return true
@@ -1182,6 +1295,13 @@ func tokenFields(s *text.String) []string {
 	return strings.Fields(trimToken(s.UTF8()))
 }
 
+func rawTokenUTF8(s *text.String) string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimRight(s.UTF8(), "\x00")
+}
+
 func normalizeNameForCWD(cwd, name string) string {
 	clean := filepath.Clean(name)
 	if clean == "." {
@@ -1204,6 +1324,132 @@ func isUnderDir(dir, path string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+type shellResult struct {
+	Stdout   []byte
+	Stderr   []byte
+	ExitCode int
+}
+
+func (s *Session) resolveShellCommand(token *text.String) (string, error) {
+	raw := rawTokenUTF8(token)
+	if raw == "" {
+		if s.LastShellCmd == "" {
+			return "", fmt.Errorf("plan 9 command")
+		}
+		return s.LastShellCmd, nil
+	}
+	s.LastShellCmd = raw
+	return raw, nil
+}
+
+func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captureStdout bool) (shellResult, error) {
+	c := osexec.Command("/bin/sh", "-c", cmd)
+	c.Env = append(os.Environ(), shellEnv(f)...)
+	if stdin != nil {
+		c.Stdin = bytes.NewReader(stdin)
+	} else {
+		c.Stdin = bytes.NewReader(nil)
+	}
+	if captureStdout {
+		var stderr bytes.Buffer
+		c.Stderr = &stderr
+		stdout, err := c.Output()
+		res := shellResult{Stdout: stdout, Stderr: stderr.Bytes()}
+		if err == nil {
+			return res, nil
+		}
+		var exitErr *osexec.ExitError
+		if errors.As(err, &exitErr) {
+			res.ExitCode = exitErr.ExitCode()
+			return res, nil
+		}
+		return shellResult{}, err
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	err := c.Run()
+	res := shellResult{
+		Stdout: stdout.Bytes(),
+		Stderr: stderr.Bytes(),
+	}
+	if err == nil {
+		return res, nil
+	}
+	var exitErr *osexec.ExitError
+	if errors.As(err, &exitErr) {
+		res.ExitCode = exitErr.ExitCode()
+		return res, nil
+	}
+	return shellResult{}, err
+}
+
+func shellEnv(f *text.File) []string {
+	name := ""
+	if f != nil {
+		name = trimToken(f.Name.UTF8())
+	}
+	return []string{
+		"samfile=" + name,
+		"%=" + name,
+	}
+}
+
+func (s *Session) writeShellWarnings(res shellResult, warnOnExit bool) error {
+	if warnOnExit && res.ExitCode != 0 {
+		if _, err := fmt.Fprintln(s.Diag, "?warning: exit status not 0"); err != nil {
+			return err
+		}
+	}
+	if containsNullByte(res.Stdout) {
+		if _, err := fmt.Fprintln(s.Diag, "?warning: null characters elided"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Session) writeShellStreams(res shellResult, writeStdout bool) error {
+	if writeStdout && len(res.Stdout) > 0 {
+		if _, err := s.Out.Write(res.Stdout); err != nil {
+			return err
+		}
+	}
+	if len(res.Stderr) > 0 {
+		if _, err := s.Diag.Write(res.Stderr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Session) printShellPrompt() error {
+	if s.execDepth != 1 {
+		return nil
+	}
+	_, err := fmt.Fprintln(s.Diag, "!")
+	return err
+}
+
+func (s *Session) replaceWithShellOutput(f *text.File, a ionaddr.Address, data []byte) error {
+	txt, runeCount, err := textStringFromBytesElidingNulls(data)
+	if err != nil {
+		return err
+	}
+	return s.mutate(f, func(seq uint32) error {
+		if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
+			return err
+		}
+		if err := s.appendLogged(f, txt, a.R.P2, seq); err != nil {
+			return err
+		}
+		f.NDot = text.Range{P1: a.R.P2, P2: a.R.P2 + runeCount}
+		return nil
+	})
 }
 
 func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {
@@ -1233,6 +1479,49 @@ func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {
 		return false, err
 	}
 	return ok && got.P[0].P1 >= 0, nil
+}
+
+func readRangeBytes(f *text.File, r text.Range) ([]byte, error) {
+	if r.P2 < r.P1 {
+		return nil, fmt.Errorf("addresses out of order")
+	}
+	if r.P1 == r.P2 {
+		return nil, nil
+	}
+	var b strings.Builder
+	for p := r.P1; p < r.P2; {
+		n := r.P2 - p
+		if n > text.MaxBlock-1 {
+			n = text.MaxBlock - 1
+		}
+		buf := make([]rune, n)
+		if err := f.B.Read(p, buf); err != nil {
+			return nil, err
+		}
+		if _, err := b.WriteString(string(buf)); err != nil {
+			return nil, err
+		}
+		p += n
+	}
+	return []byte(b.String()), nil
+}
+
+func textStringFromBytesElidingNulls(data []byte) (*text.String, text.Posn, error) {
+	s := text.NewString()
+	count := text.Posn(0)
+	for _, r := range string(data) {
+		if r == 0 {
+			continue
+		}
+		if err := s.Add(r); err != nil {
+			return nil, 0, err
+		}
+		count++
+	}
+	if err := s.Add(0); err != nil {
+		return nil, 0, err
+	}
+	return &s, count, nil
 }
 
 func resetFileContents(f *text.File) error {

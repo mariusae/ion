@@ -185,6 +185,12 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (bool, error) {
 		}
 		return true, nil
 
+	case 'e':
+		if err := s.editFileFromDisk(f, cmd.Text); err != nil {
+			return false, err
+		}
+		return true, nil
+
 	case '=':
 		if err := s.printAddress(f, a, cmd.Text); err != nil {
 			return false, err
@@ -720,6 +726,33 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	return nil
 }
 
+func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
+	name := fileNameForWrite(f, nameToken)
+	if name == "" {
+		return fmt.Errorf("no file name")
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	if err := resetFileContents(f); err != nil {
+		return err
+	}
+	sname := text.NewStringFromUTF8(name)
+	if err := f.Name.DupString(&sname); err != nil {
+		return err
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+		return err
+	}
+	f.Dot = text.Range{}
+	f.NDot = text.Range{}
+	f.Mark = text.Range{}
+	s.Current = f
+	s.QuitOK = !containsNullByte(data)
+	return s.printFileStatus(f, true)
+}
+
 func (s *Session) switchFile(nameToken *text.String) error {
 	name := trimToken(nameTokenUTF8(nameToken))
 	if name == "" {
@@ -832,6 +865,31 @@ func containsNullByte(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func resetFileContents(f *text.File) error {
+	if err := f.B.Reset(); err != nil {
+		return err
+	}
+	if err := f.Delta.Reset(); err != nil {
+		return err
+	}
+	if err := f.Epsilon.Reset(); err != nil {
+		return err
+	}
+	f.Unread = false
+	f.Mod = false
+	f.Seq = 0
+	f.CleanSeq = 0
+	f.HiPosn = 0
+	f.Dot = text.Range{}
+	f.NDot = text.Range{}
+	f.Mark = text.Range{}
+	f.PrevDot = text.Range{}
+	f.PrevMark = text.Range{}
+	f.PrevSeq = 0
+	f.PrevMod = false
+	return nil
 }
 
 func (s *Session) printAddress(f *text.File, a ionaddr.Address, token *text.String) error {

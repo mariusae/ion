@@ -32,11 +32,29 @@ func TestMovePageDownByLines(t *testing.T) {
 	}
 }
 
-func TestLastPageOrigin(t *testing.T) {
+func TestMoveLineDownPreservesColumn(t *testing.T) {
 	t.Parallel()
 
-	text := []rune("l1\nl2\nl3\nl4\nl5\n")
-	if got, want := lastPageOrigin(text, 2), 12; got != want {
-		t.Fatalf("lastPageOrigin() = %d, want %d", got, want)
+	text := []rune("alpha\nxy\nomega\n")
+	if got, want := moveLineDown(text, 3), 8; got != want {
+		t.Fatalf("moveLineDown() = %d, want %d", got, want)
+	}
+}
+
+func TestHandleBufferKeyCtrlAAndCtrlE(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\nbeta\n",
+		DotStart: 8,
+		DotEnd:   8,
+	})
+	handleBufferKey(state, 1)
+	if got, want := state.cursor, 6; got != want {
+		t.Fatalf("Ctrl-A cursor = %d, want %d", got, want)
+	}
+	handleBufferKey(state, 5)
+	if got, want := state.cursor, 10; got != want {
+		t.Fatalf("Ctrl-E cursor = %d, want %d", got, want)
 	}
 }

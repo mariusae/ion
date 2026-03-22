@@ -371,22 +371,31 @@ func handleBufferKey(state *bufferState, key int) {
 	case keyDown, keyPgDn:
 		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
 		state.origin = lineStart(state.text, state.cursor)
-	case keyHome:
-		state.cursor = 0
-		state.origin = 0
-	case keyEnd:
-		state.cursor = len(state.text)
-		state.origin = lastPageOrigin(state.text, bufferRows)
-	case keyLeft:
+	case 16:
+		state.cursor = moveLineUp(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case 14:
+		state.cursor = moveLineDown(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case keyHome, 1:
+		state.cursor = lineStart(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case keyEnd, 5:
+		state.cursor = lineEnd(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case keyLeft, 2:
 		if state.cursor > 0 {
 			state.cursor--
 		}
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
-	case keyRight:
+	case keyRight, 6:
 		if state.cursor < len(state.text) {
 			state.cursor++
 		}
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case 22:
+		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
+		state.origin = lineStart(state.text, state.cursor)
 	}
 }
 
@@ -473,21 +482,6 @@ func movePageDown(text []rune, pos, rows int) int {
 	return pos
 }
 
-func lastPageOrigin(text []rune, rows int) int {
-	pos := len(text)
-	if pos > 0 {
-		pos = lineStart(text, pos)
-	}
-	for i := 1; i < rows && pos > 0; i++ {
-		next := prevLineStart(text, pos)
-		if next == pos {
-			break
-		}
-		pos = next
-	}
-	return pos
-}
-
 func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 	if cursor < origin {
 		return lineStart(text, cursor)
@@ -504,6 +498,35 @@ func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 		p = next
 	}
 	return lineStart(text, cursor)
+}
+
+func moveLineUp(text []rune, pos int) int {
+	start := lineStart(text, pos)
+	if start == 0 {
+		return pos
+	}
+	col := pos - start
+	prev := prevLineStart(text, pos)
+	return linePosAtColumn(text, prev, col)
+}
+
+func moveLineDown(text []rune, pos int) int {
+	start := lineStart(text, pos)
+	col := pos - start
+	next := nextLineStart(text, pos)
+	if next == start {
+		return pos
+	}
+	return linePosAtColumn(text, next, col)
+}
+
+func linePosAtColumn(text []rune, start, col int) int {
+	end := lineEnd(text, start)
+	pos := start + col
+	if pos > end {
+		return end
+	}
+	return pos
 }
 
 func lineStart(text []rune, pos int) int {

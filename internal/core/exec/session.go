@@ -407,7 +407,7 @@ func (s *Session) substitute(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) e
 
 func (s *Session) xCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 	if cmd.Re == nil {
-		return fmt.Errorf("line-based x not implemented")
+		return s.lineXCmd(f, cmd, a)
 	}
 	pat, err := ionregexp.Compile(cmd.Re)
 	if err != nil {
@@ -450,6 +450,55 @@ func (s *Session) xCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Session) lineXCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
+	r := a.R
+	a3 := ionaddr.Address{F: f, R: text.Range{P1: r.P1, P2: r.P1}}
+	for p := r.P1; p < r.P2; p = a3.R.P2 {
+		a3.R.P1 = a3.R.P2
+		var linesel text.Range
+		if p != r.P1 {
+			next, err := ionaddr.LineAddr(1, a3, 1)
+			if err != nil {
+				return err
+			}
+			linesel = next.R
+		} else {
+			next, err := ionaddr.LineAddr(0, a3, 1)
+			if err != nil {
+				return err
+			}
+			linesel = next.R
+			if linesel.P2 == p {
+				next, err = ionaddr.LineAddr(1, a3, 1)
+				if err != nil {
+					return err
+				}
+				linesel = next.R
+			}
+		}
+		if linesel.P1 >= r.P2 {
+			break
+		}
+		if linesel.P2 >= r.P2 {
+			linesel.P2 = r.P2
+		}
+		if !(linesel.P2 > linesel.P1 && linesel.P1 >= a3.R.P2 && linesel.P2 > a3.R.P2) {
+			break
+		}
+		f.Dot = linesel
+		f.NDot = linesel
+		ok, err := s.runLoopBody(cmd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		a3.R = linesel
 	}
 	return nil
 }

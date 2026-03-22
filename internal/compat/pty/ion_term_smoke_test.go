@@ -455,6 +455,54 @@ func TestIonTermBufferModeCtrlLFindsNextSelection(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeMetaBackspaceDeletesWord(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha beta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x1b\x7f"); err != nil {
+		t.Fatalf("enter buffer mode, move to line end, and meta-backspace: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha \x1b[7m \x1b[27m", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for deleted-word view: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x11"); err != nil {
+		t.Fatalf("send Ctrl-Q: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func findModuleRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

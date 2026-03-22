@@ -27,6 +27,9 @@ const (
 	keyPgUp
 	keyPgDn
 	keyDel
+	keyAltLeft
+	keyAltRight
+	keyAltBackspace
 )
 
 type bufferState struct {
@@ -414,6 +417,15 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 			return state, nil
 		}
 		return replaceBufferRange(svc, state, state.cursor, state.cursor+1, "")
+	case keyAltBackspace:
+		if state.dotStart != state.dotEnd {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+		}
+		start := prevWordStart(state.text, state.cursor)
+		if start == state.cursor {
+			return state, nil
+		}
+		return replaceBufferRange(svc, state, start, state.cursor, "")
 	case 21, 26:
 		view, err := svc.Undo()
 		if err != nil {
@@ -573,6 +585,12 @@ func handleBufferKey(state *bufferState, key int) {
 	case 22:
 		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
 		state.origin = lineStart(state.text, state.cursor)
+	case keyAltLeft:
+		state.cursor = prevWordStart(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+	case keyAltRight:
+		state.cursor = nextWordStart(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
 	}
 	updateSelection(state)
 }
@@ -639,6 +657,12 @@ func readBufferKey(reader *bufio.Reader) (int, error) {
 		case 'F':
 			return keyEnd, nil
 		}
+	case 'b':
+		return keyAltLeft, nil
+	case 'f':
+		return keyAltRight, nil
+	case 0x08, 0x7f:
+		return keyAltBackspace, nil
 	}
 	return keyEsc, nil
 }
@@ -752,6 +776,35 @@ func clampIndex(n, max int) int {
 		return max
 	}
 	return n
+}
+
+func isWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '_'
+}
+
+func prevWordStart(text []rune, pos int) int {
+	pos = clampIndex(pos, len(text))
+	for pos > 0 && !isWordRune(text[pos-1]) {
+		pos--
+	}
+	for pos > 0 && isWordRune(text[pos-1]) {
+		pos--
+	}
+	return pos
+}
+
+func nextWordStart(text []rune, pos int) int {
+	pos = clampIndex(pos, len(text))
+	for pos < len(text) && isWordRune(text[pos]) {
+		pos++
+	}
+	for pos < len(text) && !isWordRune(text[pos]) {
+		pos++
+	}
+	return pos
 }
 
 func updateSelection(state *bufferState) {

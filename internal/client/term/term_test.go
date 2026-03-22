@@ -193,3 +193,39 @@ func TestFindSelectionBackwardFindsPrevious(t *testing.T) {
 		t.Fatalf("findSelection(backward) = (%d,%v), want (0,true)", got, ok)
 	}
 }
+
+func TestPrevAndNextWordStart(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta_gamma delta")
+	if got, want := nextWordStart(text, 0), 6; got != want {
+		t.Fatalf("nextWordStart() = %d, want %d", got, want)
+	}
+	if got, want := prevWordStart(text, len(text)), 17; got != want {
+		t.Fatalf("prevWordStart() = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyAltBackspaceDeletesWord(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha beta\n",
+			DotStart: 10,
+			DotEnd:   10,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, keyAltBackspace)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := string(next.text), "alpha \n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 6; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}

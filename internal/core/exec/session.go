@@ -1253,9 +1253,18 @@ func (s *Session) openFiles(nameToken *text.String) error {
 	if emptyList {
 		return s.openNamelessFile()
 	}
+	lineNo, colNo := 0, 0
+	if len(fields) > 0 {
+		fields[len(fields)-1], lineNo, colNo = splitFileLineSuffix(fields[len(fields)-1])
+	}
 	if len(fields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
-			return s.openNamelessFile()
+			if lineNo > 0 || colNo > 0 {
+				return s.openNamelessFileFromPath(fields[0], lineNo, colNo)
+			}
+			if lineNo == 0 && colNo == 0 {
+				return s.openNamelessFile()
+			}
 		}
 	}
 	var current *text.File
@@ -1284,6 +1293,11 @@ func (s *Session) openFiles(nameToken *text.String) error {
 			return err
 		}
 	}
+	if lineNo > 0 {
+		if err := setFilePosition(current, lineNo, colNo); err != nil {
+			return err
+		}
+	}
 	return s.printFileStatus(current, true)
 }
 
@@ -1296,6 +1310,53 @@ func (s *Session) openNamelessFile() error {
 	s.AddFile(f)
 	s.Current = f
 	return s.printFileStatus(f, true)
+}
+
+func (s *Session) openNamelessFileFromPath(name string, lineNo, colNo int) error {
+	d, err := text.NewDisk()
+	if err != nil {
+		return err
+	}
+	f := text.NewFile(d)
+	data, err := os.ReadFile(name)
+	if err != nil {
+		_ = f.Close()
+		return openFileError(name, err)
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := setFilePosition(f, lineNo, colNo); err != nil {
+		_ = f.Close()
+		return err
+	}
+	s.AddFile(f)
+	s.Current = f
+	return s.printFileStatus(f, true)
+}
+
+func setFilePosition(f *text.File, lineNo, colNo int) error {
+	if f == nil || lineNo <= 0 {
+		return nil
+	}
+	a, err := ionaddr.LineAddr(text.Posn(lineNo), ionaddr.Address{
+		F: f,
+		R: text.Range{},
+	}, 0)
+	if err != nil {
+		return err
+	}
+	if colNo > 0 {
+		a.R.P2 = a.R.P1
+		a, err = ionaddr.CharAddr(text.Posn(colNo-1), a, 1)
+		if err != nil {
+			return err
+		}
+	}
+	f.Dot = a.R
+	f.NDot = a.R
+	return nil
 }
 
 func (s *Session) closeFiles(nameToken *text.String) error {
@@ -1724,6 +1785,43 @@ func textStringFromBytes(data []byte) (*text.String, text.Posn, error) {
 		return nil, 0, err
 	}
 	return &s, count, nil
+}
+
+func splitFileLineSuffix(name string) (base string, lineNo, colNo int) {
+	base = name
+	last := strings.LastIndexByte(name, ':')
+	if last <= 0 || last+1 >= len(name) {
+		return base, 0, 0
+	}
+	n, ok := parseDecimal(name[last+1:])
+	if !ok {
+		return base, 0, 0
+	}
+	lineNo = n
+	base = name[:last]
+	prev := strings.LastIndexByte(base, ':')
+	if prev > 0 {
+		if c, ok := parseDecimal(base[prev+1:]); ok {
+			colNo = lineNo
+			lineNo = c
+			base = base[:prev]
+		}
+	}
+	return base, lineNo, colNo
+}
+
+func parseDecimal(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, true
 }
 
 func containsNullByte(data []byte) bool {

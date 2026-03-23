@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,6 +62,39 @@ type bufferState struct {
 
 type diagnosticReporter interface {
 	Diagnostic() string
+}
+
+type overlayOutputQueue struct {
+	mu     sync.Mutex
+	lines  []string
+	notify chan struct{}
+}
+
+func newOverlayOutputQueue() *overlayOutputQueue {
+	return &overlayOutputQueue{
+		notify: make(chan struct{}, 1),
+	}
+}
+
+func (q *overlayOutputQueue) push(line string) {
+	q.mu.Lock()
+	q.lines = append(q.lines, line)
+	q.mu.Unlock()
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (q *overlayOutputQueue) popAll() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.lines) == 0 {
+		return nil
+	}
+	lines := append([]string(nil), q.lines...)
+	q.lines = q.lines[:0]
+	return lines
 }
 
 // Run executes the initial terminal-client slice.
@@ -284,17 +318,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		pending = append(pending, []rune(line)...)
 		pending = append(pending, '\n')
 		overlay.resetInput()
-		lineCh := make(chan string, 256)
+		queue := newOverlayOutputQueue()
 		resultCh := make(chan overlayResult, 1)
-		drainOverlayLines := func(first string) {
-			overlay.addOutput(first)
-			for {
-				select {
-				case line := <-lineCh:
-					overlay.addOutput(line)
-				default:
-					return
-				}
+		drainOverlayLines := func() {
+			for _, line := range queue.popAll() {
+				overlay.addOutput(line)
 			}
 		}
 		overlay.setRunning(true)
@@ -305,7 +333,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		go func() {
 			if capture != nil {
 				capture.Start(func(line string) {
-					lineCh <- line
+					queue.push(line)
 				})
 			}
 			done, err := executePending(false)
@@ -320,8 +348,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 		for {
 			select {
-			case line := <-lineCh:
-				drainOverlayLines(line)
+			case <-queue.notify:
+				drainOverlayLines()
 				if err := redraw(); err != nil {
 					overlay.setRunning(false)
 					return false, err
@@ -332,26 +360,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 			case result := <-resultCh:
-				for {
-					select {
-					case line := <-lineCh:
-						drainOverlayLines(line)
-					default:
-						overlay.setRunning(false)
-						if result.err != nil {
-							return false, result.err
-						}
-						if !result.done {
-							if err := refreshBuffer(); err != nil {
-								return false, err
-							}
-						}
-						if err := redraw(); err != nil {
-							return false, err
-						}
-						return result.done, nil
+				drainOverlayLines()
+				overlay.setRunning(false)
+				if result.err != nil {
+					return false, result.err
+				}
+				if !result.done {
+					if err := refreshBuffer(); err != nil {
+						return false, err
 					}
 				}
+				if err := redraw(); err != nil {
+					return false, err
+				}
+				return result.done, nil
 			}
 		}
 	}

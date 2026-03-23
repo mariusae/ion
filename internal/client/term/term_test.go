@@ -282,7 +282,7 @@ func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
 	}
 }
 
-func TestDrawShimmerHUDLineRendersRunningTextWithoutSpinnerGlyphs(t *testing.T) {
+func TestDrawShimmerHUDLineRendersTextWithoutSpinnerGlyphs(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20
 	t.Cleanup(func() {
@@ -291,15 +291,39 @@ func TestDrawShimmerHUDLineRendersRunningTextWithoutSpinnerGlyphs(t *testing.T) 
 
 	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
 	var out bytes.Buffer
-	if err := drawShimmerHUDLine(&out, 0, "running", theme); err != nil {
+	if err := drawShimmerHUDLine(&out, 0, ",p", theme.commandPrefix(), theme); err != nil {
 		t.Fatalf("drawShimmerHUDLine() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "running") {
-		t.Fatalf("drawShimmerHUDLine() = %q, want running text", got)
+	if !strings.Contains(got, ",p") {
+		t.Fatalf("drawShimmerHUDLine() = %q, want command text", got)
 	}
 	if strings.ContainsAny(got, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
 		t.Fatalf("drawShimmerHUDLine() = %q, want shimmer text instead of braille spinner", got)
+	}
+}
+
+func TestDrawOverlayHistoryLineShimmersRunningCommand(t *testing.T) {
+	prevCols := termCols
+	termCols = 20
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	line := overlayRenderLine{text: ",p", history: 0, command: true, running: true}
+
+	var out bytes.Buffer
+	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayHistoryLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, ",p") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want running command text", got)
+	}
+	if strings.Contains(got, "running") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want no separate running line text", got)
 	}
 }
 

@@ -207,6 +207,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return drawBufferMode(stdout, buffer, overlay, menu, theme)
 	}
 
+	redrawRunningCommand := func() error {
+		if overlay == nil || !overlay.visible || !overlay.running {
+			return nil
+		}
+		height := overlayHeight(overlay)
+		lines := overlay.renderLines(height - 1)
+		topRow := overlayTopRow(overlay)
+		for idx, line := range lines {
+			if !line.running {
+				continue
+			}
+			if err := drawOverlayHistoryLine(stdout, topRow+idx, line, overlay, theme); err != nil {
+				return err
+			}
+			return positionTerminalCursor(stdout, buffer, overlay)
+		}
+		return nil
+	}
+
 	flashBufferSelection := func() error {
 		if buffer == nil || buffer.dotStart == buffer.dotEnd {
 			return nil
@@ -297,7 +316,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 			case <-ticker.C:
-				if err := redraw(); err != nil {
+				if err := redrawRunningCommand(); err != nil {
 					overlay.setRunning(false)
 					return false, err
 				}
@@ -1243,9 +1262,6 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
 	if line.history < 0 {
-		if line.running {
-			return drawShimmerHUDLine(stdout, row, line.text, theme)
-		}
 		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
 	}
 	start, end, ok := overlay.selectionBounds()
@@ -1332,6 +1348,9 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 	}
 
 	prefix := overlayLinePrefix(theme, line.command)
+	if line.running {
+		return drawShimmerHUDLine(stdout, row, line.text, prefix, theme)
+	}
 	if prefix != "" {
 		if _, err := io.WriteString(stdout, prefix); err != nil {
 			return err
@@ -1477,17 +1496,13 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 	return err
 }
 
-func drawShimmerHUDLine(stdout io.Writer, row int, text string, theme *uiTheme) error {
+func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, theme *uiTheme) error {
 	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 		return err
 	}
 	runes := []rune(text)
 	if len(runes) > termCols {
 		runes = runes[:termCols]
-	}
-	basePrefix := ""
-	if theme != nil {
-		basePrefix = theme.hudPrefix()
 	}
 	currentPrefix := basePrefix
 	if currentPrefix != "" {

@@ -209,7 +209,7 @@ func TestIsOverlayClickSelection(t *testing.T) {
 	}
 }
 
-func TestOverlayRenderLinesIncludesRunningStatus(t *testing.T) {
+func TestOverlayRenderLinesMarksLatestCommandAsRunning(t *testing.T) {
 	prev := termRows
 	termRows = 10
 	t.Cleanup(func() {
@@ -218,15 +218,19 @@ func TestOverlayRenderLinesIncludesRunningStatus(t *testing.T) {
 
 	overlay := newOverlayState()
 	overlay.visible = true
+	overlay.addCommand(",p")
 	overlay.addOutput("alpha")
 	overlay.setRunning(true)
 
 	lines := overlay.renderLines(3)
-	if got, want := overlayTexts(lines), []string{"█ alpha", "running"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(lines), []string{",p", "█ alpha"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(running) = %q, want %q", got, want)
 	}
-	if !lines[len(lines)-1].running {
-		t.Fatalf("running line flag = false, want true")
+	if !lines[0].running {
+		t.Fatalf("command running flag = false, want true")
+	}
+	if lines[1].running {
+		t.Fatalf("output running flag = true, want false")
 	}
 }
 

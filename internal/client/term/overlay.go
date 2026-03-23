@@ -231,12 +231,6 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		return nil
 	}
 	historyLimit := limit
-	if o.running {
-		historyLimit--
-		if historyLimit < 0 {
-			historyLimit = 0
-		}
-	}
 	end := len(o.history) - o.scroll
 	if end < 0 {
 		end = 0
@@ -246,10 +240,15 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		start = 0
 	}
 	lines := make([]overlayRenderLine, 0, end-start)
+	runningIdx := -1
+	if o.running {
+		runningIdx = o.findCommand(0)
+	}
 	for idx, entry := range o.history[start:end] {
 		line := overlayRenderLine{
 			history: start + idx,
 			command: entry.command,
+			running: start+idx == runningIdx,
 		}
 		if entry.command {
 			line.text = entry.text
@@ -259,9 +258,6 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		line.text = "█ " + entry.text
 		line.offset = 2
 		lines = append(lines, line)
-	}
-	if o.running && len(lines) < limit {
-		lines = append(lines, overlayRenderLine{text: "running", history: -1, running: true})
 	}
 	return lines
 }

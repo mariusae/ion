@@ -8,6 +8,7 @@ import (
 )
 
 const minOverlayRows = 1
+const overlayPadRows = 1
 
 type overlayEntry struct {
 	command bool
@@ -300,6 +301,20 @@ func overlayTopRow(o *overlayState) int {
 	return termRows - overlayHeight(o)
 }
 
+func overlayTopPadRows(o *overlayState) int {
+	if o == nil || !o.visible {
+		return 0
+	}
+	return overlayPadRows
+}
+
+func overlayBottomPadRows(o *overlayState) int {
+	if o == nil || !o.visible {
+		return 0
+	}
+	return overlayPadRows
+}
+
 func overlayPromptRows(o *overlayState) int {
 	if o == nil || !o.visible || o.running {
 		return 0
@@ -309,22 +324,32 @@ func overlayPromptRows(o *overlayState) int {
 
 func overlayHistoryRows(o *overlayState) int {
 	height := overlayHeight(o)
-	promptRows := overlayPromptRows(o)
-	if height < promptRows {
+	usedRows := overlayTopPadRows(o) + overlayPromptRows(o) + overlayBottomPadRows(o)
+	if height < usedRows {
 		return 0
 	}
-	return height - promptRows
+	return height - usedRows
 }
 
 func overlayHeight(o *overlayState) int {
 	if o == nil || !o.visible {
 		return 0
 	}
-	height := len(o.history) + overlayPromptRows(o)
+	topPad := overlayTopPadRows(o)
+	prompt := overlayPromptRows(o)
+	bottomPad := overlayBottomPadRows(o)
+	height := len(o.history) + topPad + prompt + bottomPad
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
 	maxHeight := termRows / 2
+	minVisible := topPad + prompt + bottomPad
+	if len(o.history) > 0 {
+		minVisible++
+	}
+	if maxHeight < minVisible {
+		maxHeight = minVisible
+	}
 	if maxHeight < minOverlayRows {
 		maxHeight = minOverlayRows
 	}
@@ -344,7 +369,7 @@ func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {
 	}
 	lines := o.renderLines(overlayHistoryRows(o))
 	top := overlayTopRow(o)
-	lineRow := row - top
+	lineRow := row - top - overlayTopPadRows(o)
 	if lineRow < 0 || lineRow >= len(lines) {
 		return pos
 	}

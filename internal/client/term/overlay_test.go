@@ -88,7 +88,7 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	}
 
 	overlay.visible = true
-	if got, want := overlayHeight(overlay), 1; got != want {
+	if got, want := overlayHeight(overlay), 3; got != want {
 		t.Fatalf("overlayHeight(empty) = %d, want %d", got, want)
 	}
 
@@ -115,12 +115,12 @@ func TestOverlayHeightHidesPromptRowWhileRunning(t *testing.T) {
 	overlay := newOverlayState()
 	overlay.visible = true
 	overlay.addCommand("!sleep 5")
-	if got, want := overlayHeight(overlay), 2; got != want {
+	if got, want := overlayHeight(overlay), 4; got != want {
 		t.Fatalf("overlayHeight(idle) = %d, want %d", got, want)
 	}
 
 	overlay.setRunning(true)
-	if got, want := overlayHeight(overlay), 1; got != want {
+	if got, want := overlayHeight(overlay), 3; got != want {
 		t.Fatalf("overlayHeight(running) = %d, want %d", got, want)
 	}
 	if got, want := overlayHistoryRows(overlay), 1; got != want {
@@ -168,17 +168,17 @@ func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 	overlay.addOutput("alpha")
 	overlay.addCommand("b")
 
-	pos := overlay.screenToPos(overlayTopRow(overlay), 2)
+	pos := overlay.screenToPos(overlayTopRow(overlay)+1, 2)
 	if pos.line != 0 || pos.col != 0 {
 		t.Fatalf("screenToPos(output gutter) = (%d, %d), want (0, 0)", pos.line, pos.col)
 	}
 
-	pos = overlay.screenToPos(overlayTopRow(overlay), 4)
+	pos = overlay.screenToPos(overlayTopRow(overlay)+1, 4)
 	if pos.line != 0 || pos.col != 2 {
 		t.Fatalf("screenToPos(output text) = (%d, %d), want (0, 2)", pos.line, pos.col)
 	}
 
-	pos = overlay.screenToPos(overlayTopRow(overlay)+1, 1)
+	pos = overlay.screenToPos(overlayTopRow(overlay)+2, 1)
 	if pos.line != 1 || pos.col != 1 {
 		t.Fatalf("screenToPos(command) = (%d, %d), want (1, 1)", pos.line, pos.col)
 	}

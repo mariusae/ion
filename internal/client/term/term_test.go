@@ -110,7 +110,7 @@ func TestBufferViewRowsUsesLiveTerminalHeight(t *testing.T) {
 
 	overlay := newOverlayState()
 	overlay.visible = true
-	if got, want := bufferViewRows(overlay), 40-minOverlayRows; got != want {
+	if got, want := bufferViewRows(overlay), 40-overlayHeight(overlay); got != want {
 		t.Fatalf("bufferViewRows(overlay) = %d, want %d", got, want)
 	}
 }
@@ -199,6 +199,46 @@ func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	}
 }
 
+func TestPositionTerminalCursorHidesCursorWhileOverlayRuns(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.running = true
+
+	var out bytes.Buffer
+	if err := positionTerminalCursor(&out, nil, overlay); err != nil {
+		t.Fatalf("positionTerminalCursor() error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25l"; got != want {
+		t.Fatalf("positionTerminalCursor() = %q, want %q", got, want)
+	}
+}
+
+func TestPositionTerminalCursorShowsCursorWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := positionTerminalCursor(&out, state, nil); err != nil {
+		t.Fatalf("positionTerminalCursor() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[1;2H") {
+		t.Fatalf("positionTerminalCursor() = %q, want visible cursor positioning sequence", got)
+	}
+}
+
 func TestBuildThemeUsesOverlayAndOutputTintsInLightMode(t *testing.T) {
 	t.Parallel()
 
@@ -280,6 +320,37 @@ func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
 	}
 	if strings.Contains(got, "\x1b[1;") {
 		t.Fatalf("drawOverlayPrompt() = %q, want non-bold live prompt", got)
+	}
+}
+
+func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.input = []rune(",p")
+	overlay.cursor = len(overlay.input)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, overlay, newMenuState(), theme); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[4;1H\x1b[2K"+theme.hudPrefix()) {
+		t.Fatalf("drawBufferMode() = %q, want tinted top HUD padding row", got)
+	}
+	if !strings.Contains(got, "\x1b[6;1H\x1b[2K"+theme.hudPrefix()) {
+		t.Fatalf("drawBufferMode() = %q, want tinted bottom HUD padding row", got)
 	}
 }
 

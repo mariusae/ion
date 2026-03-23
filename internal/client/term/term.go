@@ -1226,18 +1226,30 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if overlay != nil && overlay.visible {
 		historyRows := overlayHistoryRows(overlay)
 		lines := overlay.renderLines(historyRows)
-		startRow := viewRows + 1
+		topRow := overlayTopRow(overlay)
+		for row := 0; row < overlayTopPadRows(overlay); row++ {
+			if err := drawHUDLine(stdout, topRow+row, "", theme.hudPrefix(), theme); err != nil {
+				return err
+			}
+		}
+		startRow := topRow + overlayTopPadRows(overlay)
 		for row := 0; row < historyRows; row++ {
 			line := overlayRenderLine{}
 			if row < len(lines) {
 				line = lines[row]
 			}
-			if err := drawOverlayHistoryLine(stdout, startRow+row-1, line, overlay, theme); err != nil {
+			if err := drawOverlayHistoryLine(stdout, startRow+row, line, overlay, theme); err != nil {
 				return err
 			}
 		}
 		if overlayPromptRows(overlay) > 0 {
 			if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
+				return err
+			}
+		}
+		bottomStart := topRow + overlayTopPadRows(overlay) + historyRows + overlayPromptRows(overlay)
+		for row := 0; row < overlayBottomPadRows(overlay); row++ {
+			if err := drawHUDLine(stdout, bottomStart+row, "", theme.hudPrefix(), theme); err != nil {
 				return err
 			}
 		}
@@ -1433,10 +1445,11 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 	if overlay == nil {
 		return nil
 	}
-	if err := drawHUDLine(stdout, termRows-1, "", theme.hudPrefix(), theme); err != nil {
+	row := termRows - 1 - overlayBottomPadRows(overlay)
+	if err := drawHUDLine(stdout, row, "", theme.hudPrefix(), theme); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", termRows); err != nil {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", row+1); err != nil {
 		return err
 	}
 	if theme != nil {
@@ -1624,6 +1637,10 @@ func blendColors(base, target rgbColor, alpha float64) rgbColor {
 }
 
 func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overlayState) error {
+	if overlay != nil && overlay.visible && overlay.running {
+		_, err := io.WriteString(stdout, "\x1b[?25l")
+		return err
+	}
 	row, col := terminalCursorPosition(state, overlay)
 	if row < 0 {
 		row = 0
@@ -1637,20 +1654,18 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 	if col >= termCols {
 		col = termCols - 1
 	}
-	_, err := fmt.Fprintf(stdout, "\x1b[%d;%dH", row+1, col+1)
+	_, err := fmt.Fprintf(stdout, "\x1b[?25h\x1b[%d;%dH", row+1, col+1)
 	return err
 }
 
 func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {
 	if overlay != nil && overlay.visible {
-		if overlay.running {
-			return overlayTopRow(overlay), 0
-		}
+		row := termRows - 1 - overlayBottomPadRows(overlay)
 		col := 2 + overlay.cursor
 		if col > termCols-1 {
 			col = termCols - 1
 		}
-		return termRows - 1, col
+		return row, col
 	}
 	if state == nil {
 		return 0, 0

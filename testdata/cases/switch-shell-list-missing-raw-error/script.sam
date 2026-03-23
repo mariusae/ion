@@ -1,0 +1,3 @@
+D b.txt
+b <printf "b.txt\n"
+q

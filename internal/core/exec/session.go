@@ -22,17 +22,17 @@ import (
 
 // Session executes parsed sam commands over a set of files.
 type Session struct {
-	Files        []*text.File
-	Current      *text.File
-	Seq          uint32
-	Out          io.Writer
-	Diag         io.Writer
-	QuitOK       bool
-	LastShellCmd string
-	closeOK      map[*text.File]bool
-	execDepth    int
+	Files         []*text.File
+	Current       *text.File
+	Seq           uint32
+	Out           io.Writer
+	Diag          io.Writer
+	QuitOK        bool
+	LastShellCmd  string
+	closeOK       map[*text.File]bool
+	execDepth     int
 	fileLoopDepth int
-	frame        *execFrame
+	frame         *execFrame
 }
 
 type diagnosticError struct {
@@ -1494,10 +1494,15 @@ func (s *Session) switchFile(nameToken *text.String) error {
 		return fmt.Errorf("blank expected")
 	}
 	name := ""
+	displayName := ""
 	if len(list.fields) > 0 {
 		name = list.fields[0]
+		displayName = name
 	} else if list.fromShell {
-		name = list.raw
+		displayName = list.raw
+	}
+	if list.fromShell && list.raw != "" {
+		displayName = list.raw
 	}
 	for _, f := range s.Files {
 		if trimToken(f.Name.UTF8()) != name {
@@ -1515,7 +1520,7 @@ func (s *Session) switchFile(nameToken *text.String) error {
 		s.Current = f
 		return s.printFileStatus(f, true)
 	}
-	return diagnosticError{msg: fmt.Sprintf("?not in menu: \"%s\"", name)}
+	return diagnosticError{msg: fmt.Sprintf("?not in menu: \"%s\"", displayName)}
 }
 
 func (s *Session) findFileByName(name string) *text.File {

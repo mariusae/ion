@@ -17,6 +17,7 @@ type DownloadSession struct {
 	ws     *workspace.Workspace
 	stdout io.Writer
 	stderr io.Writer
+	parser *cmdlang.Parser
 }
 
 // NewDownload constructs a server-side download session over one workspace.
@@ -26,6 +27,7 @@ func NewDownload(ws *workspace.Workspace, stdout, stderr io.Writer) *DownloadSes
 		ws:     ws,
 		stdout: stdout,
 		stderr: stderr,
+		parser: cmdlang.NewParserRunes(nil),
 	}
 }
 
@@ -42,8 +44,20 @@ func (s *DownloadSession) Bootstrap(files []string) error {
 	return s.ws.Bootstrap(files, s.stdout, s.stderr)
 }
 
-// Execute forwards one parsed command for this client.
-func (s *DownloadSession) Execute(cmd *cmdlang.Cmd) (bool, error) {
+// Execute parses and forwards one command script for this client.
+func (s *DownloadSession) Execute(script string) (bool, error) {
+	runes := []rune(script)
+	s.parser.ResetRunes(runes)
+	cmd, err := s.parser.ParseWithFinal(true)
+	if err != nil {
+		return false, err
+	}
+	if consumed := s.parser.Consumed(); consumed != len(runes) {
+		return false, cmdlang.ErrNeedMoreInput
+	}
+	if cmd == nil {
+		return true, nil
+	}
 	return s.ws.Execute(cmd, s.stdout, s.stderr)
 }
 

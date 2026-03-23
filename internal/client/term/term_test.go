@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
 
@@ -20,8 +19,8 @@ func (f *fakeTermService) Bootstrap(files []string) error {
 	return nil
 }
 
-func (f *fakeTermService) Execute(cmd *cmdlang.Cmd) (bool, error) {
-	_ = cmd
+func (f *fakeTermService) Execute(script string) (bool, error) {
+	_ = script
 	return true, nil
 }
 

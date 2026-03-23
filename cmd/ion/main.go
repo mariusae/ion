@@ -1,14 +1,18 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 
 	"ion/internal/client/download"
+	clientsession "ion/internal/client/session"
 	"ion/internal/client/term"
-	serversession "ion/internal/server/session"
+	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
 
@@ -57,12 +61,82 @@ func parseArgs(args []string) (config, error) {
 }
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	ws := workspace.New()
-	return download.Run(cfg.files, stdin, stderr, serversession.NewDownload(ws, stdout, stderr))
+	return withLocalServer(stdout, stderr, func(client *clientsession.Client) error {
+		return download.Run(cfg.files, stdin, stderr, client)
+	})
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	capture := term.NewOutputCapture(stdout, stderr)
+	return withLocalServer(capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
+		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
+	})
+}
+
+func withLocalServer(stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
 	ws := workspace.New()
-	return term.Run(cfg.files, stdin, stdout, stderr, serversession.NewTerm(ws, capture.Stdout(), capture.Stderr()), capture)
+	server := transport.New(ws)
+
+	socketPath, cleanup, err := makeSocketPath()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return err
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+
+	client, err := clientsession.DialUnix(socketPath, stdout, stderr)
+	if err != nil {
+		_ = listener.Close()
+		<-serverErr
+		return err
+	}
+
+	clientErr := runClient(client)
+	closeErr := client.Close()
+	listenerErr := listener.Close()
+	serveErr := <-serverErr
+
+	if clientErr != nil {
+		return clientErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if listenerErr != nil && !errors.Is(listenerErr, net.ErrClosed) {
+		return listenerErr
+	}
+	if serveErr != nil && !errors.Is(serveErr, net.ErrClosed) {
+		return serveErr
+	}
+	return nil
+}
+
+func makeSocketPath() (string, func(), error) {
+	dir := "/tmp"
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		dir = os.TempDir()
+	}
+	f, err := os.CreateTemp(dir, "ion-*.sock")
+	if err != nil {
+		return "", nil, err
+	}
+	path := filepath.Clean(f.Name())
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", nil, err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", nil, err
+	}
+	return path, func() {
+		_ = os.Remove(path)
+	}, nil
 }

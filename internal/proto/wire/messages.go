@@ -35,6 +35,13 @@ func (m *BootstrapRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// OKResponse acknowledges one successful request with no typed payload.
+type OKResponse struct{}
+
+func (m *OKResponse) Kind() Kind { return KindOKResponse }
+
+func (m *OKResponse) MarshalBinary() ([]byte, error) { return nil, nil }
+
 // CommandRequest carries one sam command string from client to server.
 type CommandRequest struct {
 	Script string
@@ -87,14 +94,35 @@ func (m *CommandResponse) UnmarshalBinary(data []byte) error {
 
 // ErrorResponse returns one protocol-level or command-level error string.
 type ErrorResponse struct {
-	Message string
+	Message        string
+	DiagnosticText string
 }
 
 func (m *ErrorResponse) Kind() Kind { return KindErrorResponse }
 
+func (m *ErrorResponse) Error() string {
+	if m == nil {
+		return ""
+	}
+	return m.Message
+}
+
+func (m *ErrorResponse) Diagnostic() string {
+	if m == nil {
+		return ""
+	}
+	if m.DiagnosticText != "" {
+		return m.DiagnosticText
+	}
+	return "?" + m.Message
+}
+
 func (m *ErrorResponse) MarshalBinary() ([]byte, error) {
 	var b bytes.Buffer
 	if err := writeString(&b, m.Message); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.DiagnosticText); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
@@ -106,12 +134,64 @@ func (m *ErrorResponse) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return err
 	}
+	diag, err := readString(r)
+	if err != nil {
+		return err
+	}
 	if r.Len() != 0 {
 		return fmt.Errorf("error response has trailing data")
 	}
 	m.Message = s
+	m.DiagnosticText = diag
 	return nil
 }
+
+// OutputEvent carries one stdout/stderr chunk emitted while a request runs.
+type OutputEvent struct {
+	Data string
+}
+
+func (m *OutputEvent) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeString(&b, m.Data); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *OutputEvent) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	s, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("output event has trailing data")
+	}
+	m.Data = s
+	return nil
+}
+
+// StdoutEvent carries one stdout chunk emitted while a request runs.
+type StdoutEvent struct {
+	OutputEvent
+}
+
+func (m *StdoutEvent) Kind() Kind { return KindStdoutEvent }
+
+// StderrEvent carries one stderr chunk emitted while a request runs.
+type StderrEvent struct {
+	OutputEvent
+}
+
+func (m *StderrEvent) Kind() Kind { return KindStderrEvent }
+
+// CurrentViewRequest asks for the current buffer snapshot.
+type CurrentViewRequest struct{}
+
+func (m *CurrentViewRequest) Kind() Kind { return KindCurrentViewRequest }
+
+func (m *CurrentViewRequest) MarshalBinary() ([]byte, error) { return nil, nil }
 
 // BufferViewMessage transports one buffer snapshot or update event.
 type BufferViewMessage struct {
@@ -166,6 +246,13 @@ func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 	}
 	return nil
 }
+
+// MenuFilesRequest asks for the current file-menu snapshot.
+type MenuFilesRequest struct{}
+
+func (m *MenuFilesRequest) Kind() Kind { return KindMenuFilesRequest }
+
+func (m *MenuFilesRequest) MarshalBinary() ([]byte, error) { return nil, nil }
 
 // MenuFilesMessage transports one full file-menu snapshot or update event.
 type MenuFilesMessage struct {
@@ -351,6 +438,13 @@ type UndoRequest struct{}
 func (m *UndoRequest) Kind() Kind { return KindUndoRequest }
 
 func (m *UndoRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+// SaveRequest requests a save of the current file.
+type SaveRequest struct{}
+
+func (m *SaveRequest) Kind() Kind { return KindSaveRequest }
+
+func (m *SaveRequest) MarshalBinary() ([]byte, error) { return nil, nil }
 
 // SaveResponse carries the server-produced save status line.
 type SaveResponse struct {

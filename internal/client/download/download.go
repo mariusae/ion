@@ -24,8 +24,8 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 	reader := bufio.NewReader(stdin)
 	var pending []rune
 
-	execute := func(cmd *cmdlang.Cmd) (bool, error) {
-		ok, err := svc.Execute(cmd)
+	execute := func(script string) (bool, error) {
+		ok, err := svc.Execute(script)
 		if err != nil {
 			if err := reportCommandError(stderr, err); err != nil {
 				return false, err
@@ -51,6 +51,7 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 			}
 
 			consumed := parser.Consumed()
+			script := string(pending[:consumed])
 			if consumed > 0 {
 				pending = pending[consumed:]
 			}
@@ -59,7 +60,7 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 				return false, nil
 			}
 
-			done, err := execute(cmd)
+			done, err := execute(script)
 			if err != nil {
 				return false, err
 			}
@@ -84,7 +85,7 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 				return err
 			}
 			pending = nil
-			_, err = execute(&cmdlang.Cmd{Cmdc: 'q'})
+			_, err = execute("q\n")
 			return err
 		}
 

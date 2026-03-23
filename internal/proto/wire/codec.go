@@ -18,15 +18,21 @@ type Kind uint16
 
 const (
 	KindBootstrapRequest Kind = iota + 1
+	KindOKResponse
 	KindCommandRequest
 	KindCommandResponse
 	KindErrorResponse
+	KindStdoutEvent
+	KindStderrEvent
+	KindCurrentViewRequest
 	KindCurrentViewResponse
+	KindMenuFilesRequest
 	KindMenuFilesResponse
 	KindFocusRequest
 	KindSetDotRequest
 	KindReplaceRequest
 	KindUndoRequest
+	KindSaveRequest
 	KindSaveResponse
 	KindBufferUpdateEvent
 	KindMenuUpdateEvent
@@ -134,6 +140,8 @@ func DecodeMessage(frame Frame) (any, error) {
 	case KindBootstrapRequest:
 		var msg BootstrapRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindOKResponse:
+		return &OKResponse{}, nil
 	case KindCommandRequest:
 		var msg CommandRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
@@ -143,9 +151,16 @@ func DecodeMessage(frame Frame) (any, error) {
 	case KindErrorResponse:
 		var msg ErrorResponse
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindStdoutEvent, KindStderrEvent:
+		var msg OutputEvent
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindCurrentViewRequest:
+		return &CurrentViewRequest{}, nil
 	case KindCurrentViewResponse, KindBufferUpdateEvent:
 		var msg BufferViewMessage
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindMenuFilesRequest:
+		return &MenuFilesRequest{}, nil
 	case KindMenuFilesResponse, KindMenuUpdateEvent:
 		var msg MenuFilesMessage
 		return &msg, msg.UnmarshalBinary(frame.Payload)
@@ -160,6 +175,8 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindUndoRequest:
 		return &UndoRequest{}, nil
+	case KindSaveRequest:
+		return &SaveRequest{}, nil
 	case KindSaveResponse:
 		var msg SaveResponse
 		return &msg, msg.UnmarshalBinary(frame.Payload)

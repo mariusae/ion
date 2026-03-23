@@ -102,6 +102,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 
 			consumed := parser.Consumed()
+			script := string(pending[:consumed])
 			if consumed > 0 {
 				pending = pending[consumed:]
 			}
@@ -109,7 +110,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, nil
 			}
 
-			ok, err := svc.Execute(cmd)
+			ok, err := svc.Execute(script)
 			if err != nil {
 				if _, werr := fmt.Fprintf(stderr, "?%v\n", err); werr != nil {
 					return false, werr
@@ -182,7 +183,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				lines = append(lines, line)
 			})
 		}
-		ok, err := svc.Execute(cmd)
+		ok, err := svc.Execute(line)
 		if capture != nil && captureOutput {
 			capture.Stop()
 		}

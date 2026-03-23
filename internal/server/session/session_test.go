@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ion/internal/core/cmdlang"
 	"ion/internal/server/workspace"
 )
 
@@ -33,16 +32,10 @@ func TestDownloadSessionBindsClientStreams(t *testing.T) {
 		t.Fatal("bootstrap stderr empty, want status output")
 	}
 
-	parser := cmdlang.NewParser(",p\n")
-	cmd, err := parser.Parse()
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-
 	var stdout2 bytes.Buffer
 	var stderr2 bytes.Buffer
 	run := NewDownload(ws, &stdout2, &stderr2)
-	if _, err := run.Execute(cmd); err != nil {
+	if _, err := run.Execute(",p\n"); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if got, want := stdout2.String(), "alpha\n"; got != want {

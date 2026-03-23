@@ -153,11 +153,11 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY
 	if menu.y < 0 {
 		menu.y = 0
 	}
-	if menu.x+menu.width > bufferCols {
-		menu.x = bufferCols - menu.width
+	if menu.x+menu.width > termCols {
+		menu.x = termCols - menu.width
 	}
-	if menu.y+menu.height > bufferRows {
-		menu.y = bufferRows - menu.height
+	if menu.y+menu.height > termRows {
+		menu.y = termRows - menu.height
 	}
 	if menu.x < 0 {
 		menu.x = 0

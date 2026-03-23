@@ -10,9 +10,12 @@ type mouseEvent struct {
 }
 
 func bufferViewRows(overlay *overlayState) int {
-	rows := bufferRows
+	rows := termRows
 	if overlay != nil && overlay.visible {
 		rows -= overlayRows
+	}
+	if rows < 1 {
+		return 1
 	}
 	return rows
 }

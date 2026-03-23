@@ -486,8 +486,8 @@ func TestIonTermBufferModeCtrlJOpensCommandHUD(t *testing.T) {
 		_ = sess.Close()
 	}()
 
-	if err := sess.WriteString("\nq\n"); err != nil {
-		t.Fatalf("open command HUD with Ctrl-J and quit: %v", err)
+	if err := sess.WriteString("\nq\r"); err != nil {
+		t.Fatalf("open command HUD with Ctrl-J and submit quit: %v", err)
 	}
 	if err := sess.WaitExit(2 * time.Second); err != nil {
 		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {

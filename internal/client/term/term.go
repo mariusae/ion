@@ -14,9 +14,6 @@ import (
 )
 
 const (
-	bufferRows = 24
-	bufferCols = 80
-
 	keyEsc = 0x1000 + iota
 	keyUp
 	keyDown
@@ -33,6 +30,11 @@ const (
 	keyAltRight
 	keyAltSnarf
 	keyAltBackspace
+)
+
+var (
+	termRows = 24
+	termCols = 80
 )
 
 type bufferState struct {
@@ -72,6 +74,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return err
 	}
 	defer state.restore()
+	if rows, cols, err := terminalSize(stdin); err == nil {
+		if rows > 0 {
+			termRows = rows
+		}
+		if cols > 0 {
+			termCols = cols
+		}
+	}
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -608,6 +618,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			switch r {
 			case '\n':
+				overlay.open("")
+				if err := redraw(); err != nil {
+					return err
+				}
+				continue
 			case ':':
 				overlay.open("")
 				if err := redraw(); err != nil {
@@ -924,7 +939,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	next.dotEnd = cursor
 	next.markMode = false
 	if state != nil {
-		next.origin = adjustOriginForCursor(next.text, state.origin, cursor, bufferRows)
+		next.origin = adjustOriginForCursor(next.text, state.origin, cursor, termRows)
 		next.status = state.status
 	}
 	return next, nil
@@ -958,7 +973,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 			p = len(state.text) + 1
 		}
 	}
-	for row := viewRows + 1; row <= bufferRows; row++ {
+	for row := viewRows + 1; row <= termRows; row++ {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row); err != nil {
 			return err
 		}
@@ -982,10 +997,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	}
 	if state.status != "" {
 		status := []rune(state.status)
-		if len(status) > bufferCols {
-			status = status[:bufferCols]
+		if len(status) > termCols {
+			status = status[:termCols]
 		}
-		if err := drawHUDLine(stdout, bufferRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
+		if err := drawHUDLine(stdout, termRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
 			return err
 		}
 	}
@@ -994,7 +1009,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {
 	col := 0
-	for p := start; p < end && col < bufferCols; p++ {
+	for p := start; p < end && col < termCols; p++ {
 		selected := p >= state.dotStart && p < state.dotEnd
 		if selected {
 			if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
@@ -1016,7 +1031,7 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme 
 		}
 		col++
 	}
-	if state.cursor == end && state.dotStart == state.dotEnd && col < bufferCols {
+	if state.cursor == end && state.dotStart == state.dotEnd && col < termCols {
 		if _, err := io.WriteString(stdout, highlightPrefix(theme, true)+" "+highlightReset(theme)); err != nil {
 			return err
 		}
@@ -1026,8 +1041,8 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme 
 
 func drawOverlayText(stdout io.Writer, text string) error {
 	line := []rune(text)
-	if len(line) > bufferCols {
-		line = line[:bufferCols]
+	if len(line) > termCols {
+		line = line[:termCols]
 	}
 	_, err := io.WriteString(stdout, string(line))
 	return err
@@ -1037,10 +1052,10 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 	if overlay == nil {
 		return nil
 	}
-	if err := drawHUDLine(stdout, bufferRows-1, "", theme.hudPrefix(), theme); err != nil {
+	if err := drawHUDLine(stdout, termRows-1, "", theme.hudPrefix(), theme); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", bufferRows); err != nil {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", termRows); err != nil {
 		return err
 	}
 	if theme != nil {
@@ -1058,7 +1073,7 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 	}
 	col := 2
 	for _, r := range []rune(overlay.promptLine()) {
-		if col >= bufferCols {
+		if col >= termCols {
 			break
 		}
 		if r == 0 {
@@ -1094,11 +1109,11 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 		return drawOverlayText(stdout, text)
 	}
 	line := []rune(text)
-	if len(line) > bufferCols {
-		line = line[:bufferCols]
+	if len(line) > termCols {
+		line = line[:termCols]
 	}
 	plain := string(line)
-	if pad := bufferCols - len(line); pad > 0 {
+	if pad := termCols - len(line); pad > 0 {
 		plain += strings.Repeat(" ", pad)
 	}
 	_, err := io.WriteString(stdout, prefix+plain+styleReset())
@@ -1126,6 +1141,7 @@ func handleBufferKey(state *bufferState, key int) {
 	if state == nil {
 		return
 	}
+	rows := bufferViewRows(nil)
 	switch key {
 	case 0:
 		if state.markMode {
@@ -1135,42 +1151,42 @@ func handleBufferKey(state *bufferState, key int) {
 			state.markPos = state.cursor
 		}
 	case keyUp, keyPgUp:
-		state.cursor = movePageUp(state.text, state.cursor, bufferRows)
+		state.cursor = movePageUp(state.text, state.cursor, rows)
 		state.origin = lineStart(state.text, state.cursor)
 	case keyDown, keyPgDn:
-		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
+		state.cursor = movePageDown(state.text, state.cursor, rows)
 		state.origin = lineStart(state.text, state.cursor)
 	case 16:
 		state.cursor = moveLineUp(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 14:
 		state.cursor = moveLineDown(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyHome, 1:
 		state.cursor = lineStart(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyEnd, 5:
 		state.cursor = lineEnd(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyLeft, 2:
 		if state.cursor > 0 {
 			state.cursor--
 		}
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyRight, 6:
 		if state.cursor < len(state.text) {
 			state.cursor++
 		}
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 22:
-		state.cursor = movePageDown(state.text, state.cursor, bufferRows)
+		state.cursor = movePageDown(state.text, state.cursor, rows)
 		state.origin = lineStart(state.text, state.cursor)
 	case keyAltLeft:
 		state.cursor = prevWordStart(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyAltRight:
 		state.cursor = nextWordStart(state.text, state.cursor)
-		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, bufferRows)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	}
 	updateSelection(state)
 }

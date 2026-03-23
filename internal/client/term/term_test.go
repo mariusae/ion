@@ -95,6 +95,24 @@ func TestMovePageDownByLines(t *testing.T) {
 	}
 }
 
+func TestBufferViewRowsUsesLiveTerminalHeight(t *testing.T) {
+	prev := termRows
+	termRows = 40
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	if got, want := bufferViewRows(nil), 40; got != want {
+		t.Fatalf("bufferViewRows(nil) = %d, want %d", got, want)
+	}
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	if got, want := bufferViewRows(overlay), 40-overlayRows; got != want {
+		t.Fatalf("bufferViewRows(overlay) = %d, want %d", got, want)
+	}
+}
+
 func TestMoveLineDownPreservesColumn(t *testing.T) {
 	t.Parallel()
 

@@ -74,7 +74,7 @@ func TestRunDownloadProcessesCommandsIncrementally(t *testing.T) {
 	}
 }
 
-func TestRunTermExecutesInitialCommandModeSlice(t *testing.T) {
+func TestRunTermRejectsNonTTY(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "README.md")
@@ -90,37 +90,21 @@ func TestRunTermExecutesInitialCommandModeSlice(t *testing.T) {
 	go func() {
 		done <- run([]string{path}, stdinR, &stdout, &stderr)
 	}()
-
-	waitFor(t, func() bool {
-		return strings.Contains(stderr.String(), " -. "+path+"\n")
-	}, "initial file status")
-
-	if _, err := io.WriteString(stdinW, ",\n"); err != nil {
-		t.Fatalf("WriteString(first command) error = %v", err)
-	}
-
-	waitFor(t, func() bool {
-		return strings.Contains(stdout.String(), "alpha\nbeta\n")
-	}, "command output before EOF")
-
-	if _, err := io.WriteString(stdinW, "q\n"); err != nil {
-		t.Fatalf("WriteString(quit) error = %v", err)
-	}
 	if err := stdinW.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 
 	select {
 	case code := <-done:
-		if code != 0 {
-			t.Fatalf("run() exit code = %d, want 0", code)
+		if code != 1 {
+			t.Fatalf("run() exit code = %d, want 1", code)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run() did not return")
 	}
 
-	if strings.Contains(stderr.String(), "terminal mode is not implemented yet") {
-		t.Fatalf("stderr unexpectedly contained placeholder error:\n%s", stderr.String())
+	if got := stderr.String(); !strings.Contains(got, "terminal mode requires a tty; use ion -d for command mode") {
+		t.Fatalf("stderr = %q, want non-tty terminal-mode error", got)
 	}
 }
 

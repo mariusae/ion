@@ -169,37 +169,41 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY
 	return menu
 }
 
-func drawMenu(stdout io.Writer, menu *menuState) error {
+func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 	if menu == nil || !menu.visible {
 		return nil
 	}
 	inner := menu.width - 2
 	row := menu.y
-	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner)); err != nil {
+	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner), theme.titlePrefix(), theme); err != nil {
 		return err
 	}
 	row++
 	for i, item := range menu.items {
-		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == i); err != nil {
+		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == i, theme); err != nil {
 			return err
 		}
 		row++
 		if item.sepAfter && i < len(menu.items)-1 {
-			if err := writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+"); err != nil {
+			if err := writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+", theme.subtlePrefix(), theme); err != nil {
 				return err
 			}
 			row++
 		}
 	}
-	return writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+")
+	return writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+", theme.subtlePrefix(), theme)
 }
 
-func writeMenuLine(stdout io.Writer, row, col int, line string) error {
-	_, err := fmt.Fprintf(stdout, "\x1b[%d;%dH%s", row+1, col+1, line)
+func writeMenuLine(stdout io.Writer, row, col int, line, prefix string, theme *uiTheme) error {
+	if theme == nil || prefix == "" {
+		_, err := fmt.Fprintf(stdout, "\x1b[%d;%dH%s", row+1, col+1, line)
+		return err
+	}
+	_, err := fmt.Fprintf(stdout, "\x1b[%d;%dH%s%s%s", row+1, col+1, prefix, line, styleReset())
 	return err
 }
 
-func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover bool) error {
+func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover bool, theme *uiTheme) error {
 	content := item.label
 	if item.shortcut != "" {
 		padding := inner - len([]rune(item.label)) - len([]rune(item.shortcut)) - 1
@@ -216,10 +220,17 @@ func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover b
 	if pad := inner - len([]rune(content)); pad > 0 {
 		content += strings.Repeat(" ", pad)
 	}
-	if hover {
-		content = "\x1b[7m" + content + "\x1b[27m"
+	if theme == nil {
+		if hover {
+			content = "\x1b[7m" + content + "\x1b[27m"
+		}
+		return writeMenuLine(stdout, row, col, "|"+content+"|", "", nil)
 	}
-	return writeMenuLine(stdout, row, col, "|"+content+"|")
+	prefix := theme.subtlePrefix()
+	if hover {
+		prefix = theme.hoverPrefix()
+	}
+	return writeMenuLine(stdout, row, col, "|"+content+"|", prefix, theme)
 }
 
 func formatMenuBorder(title string, inner int) string {

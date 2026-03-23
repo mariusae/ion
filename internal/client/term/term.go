@@ -2,13 +2,13 @@ package term
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
-	"ion/internal/client/download"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
@@ -47,6 +47,10 @@ type bufferState struct {
 	status   string
 }
 
+type diagnosticReporter interface {
+	Diagnostic() string
+}
+
 // Run executes the initial terminal-client slice.
 //
 // For now this shares the command-mode loop with the download client while the
@@ -54,7 +58,7 @@ type bufferState struct {
 func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
 	inFile, ok := stdin.(*os.File)
 	if !ok || !isTTY(inFile) {
-		return download.Run(files, stdin, stderr, svc)
+		return fmt.Errorf("terminal mode requires a tty; use ion -d for command mode")
 	}
 	if err := svc.Bootstrap(files); err != nil {
 		return err
@@ -70,17 +74,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	defer state.restore()
 
 	parser := cmdlang.NewParserRunes(nil)
-	reader := bufio.NewReader(stdin)
+	theme, prefetched := detectTerminalTheme(stdin, stdout)
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefetched), stdin))
 	var pending []rune
 	var linebuf []rune
-	inBufferMode := false
-	var buffer *bufferState
+	inBufferMode := true
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuLastItem := -1
+	buffer, err := enterBufferMode(stdout, svc, overlay, menu, theme)
+	if err != nil {
+		return err
+	}
+	defer exitBufferMode(stdout)
 
 	executePending := func(final bool) (bool, error) {
 		for {
@@ -155,7 +164,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		view, err := svc.CurrentView()
 		if err != nil {
 			if overlay.visible {
-				overlay.addOutput("?" + err.Error())
+				overlay.addOutput(diagnosticText(err))
 				return nil
 			}
 			return err
@@ -165,7 +174,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	redraw := func() error {
-		return drawBufferMode(stdout, buffer, overlay, menu)
+		return drawBufferMode(stdout, buffer, overlay, menu, theme)
 	}
 
 	executeDirect := func(line string, captureOutput bool) (bool, []string, error) {
@@ -243,7 +252,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		case menuWrite:
 			msg, err := svc.Save()
 			if err != nil {
-				buffer.status = "?" + err.Error()
+				buffer.status = diagnosticText(err)
 			} else {
 				buffer.status = msg
 			}
@@ -297,7 +306,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			done, _, err := executeDirect("/"+escapeSearchPattern(pattern)+"/\n", false)
 			if err != nil {
-				buffer.status = "?" + err.Error()
+				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			if done {
@@ -315,7 +324,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			done, _, err := executeDirect("B "+token+"\n", false)
 			if err != nil {
-				buffer.status = "?" + err.Error()
+				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			if done {
@@ -329,7 +338,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		case menuFile:
 			view, err := svc.FocusFile(item.fileID)
 			if err != nil {
-				buffer.status = "?" + err.Error()
+				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			buffer = newBufferState(view)
@@ -517,17 +526,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 						continue
 					}
-					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
-						return err
-					}
-					if err := exitBufferMode(stdout); err != nil {
-						return err
-					}
-					inBufferMode = false
-					buffer = nil
-					overlay.close()
-					menu.dismiss()
+					buffer.markMode = false
+					buffer.dotStart = buffer.cursor
+					buffer.dotEnd = buffer.cursor
+					buffer.status = ""
 					mouseSelecting = false
+					if err := redraw(); err != nil {
+						return err
+					}
 					continue
 				}
 				if key == keyMouse {
@@ -635,45 +641,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				continue
 			case 0x11:
-				if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
-					return err
-				}
-				if err := exitBufferMode(stdout); err != nil {
-					return err
-				}
-				inBufferMode = false
-				buffer = nil
-				overlay.close()
-				menu.dismiss()
-				mouseSelecting = false
-				pending = append(pending, []rune("q\n")...)
-				done, err := executePending(false)
+				done, _, err := executeDirect("q\n", false)
 				if err != nil {
-					return err
+					buffer.status = diagnosticText(err)
+					if err := redraw(); err != nil {
+						return err
+					}
+					continue
 				}
 				if done {
 					return nil
 				}
+				buffer.status = ""
+				if err := redraw(); err != nil {
+					return err
+				}
 				continue
 			case 0x17:
 				if strings.TrimSpace(buffer.name) == "" {
-					if _, err := svc.SetDot(buffer.dotStart, buffer.dotEnd); err != nil {
+					overlay.open("w ")
+					if err := redraw(); err != nil {
 						return err
 					}
-					if err := exitBufferMode(stdout); err != nil {
-						return err
-					}
-					inBufferMode = false
-					buffer = nil
-					overlay.close()
-					menu.dismiss()
-					mouseSelecting = false
-					pending = append(pending, []rune("w ")...)
 					continue
 				}
 				msg, err := svc.Save()
 				if err != nil {
-					buffer.status = "?" + err.Error()
+					buffer.status = diagnosticText(err)
 				} else {
 					buffer.status = msg
 				}
@@ -730,19 +724,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			continue
 		}
-		if r == 0x1b {
-			overlay.close()
-			menu.dismiss()
-			next, err := enterBufferMode(stdout, svc, overlay, menu)
-			if err != nil {
-				return err
-			}
-			buffer = next
-			inBufferMode = true
-			mouseSelecting = false
-			continue
-		}
-
 		switch r {
 		case '\n', '\r':
 			done, err := submitLine()
@@ -805,13 +786,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState, theme *uiTheme) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
 	}
 	state := newBufferState(view)
-	if err := drawBufferMode(stdout, state, overlay, menu); err != nil {
+	if err := drawBufferMode(stdout, state, overlay, menu, theme); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -820,6 +801,14 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlaySta
 func exitBufferMode(stdout io.Writer) error {
 	_, err := io.WriteString(stdout, "\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
 	return err
+}
+
+func diagnosticText(err error) string {
+	var diag diagnosticReporter
+	if errors.As(err, &diag) {
+		return diag.Diagnostic()
+	}
+	return "?" + err.Error()
 }
 
 func isTTY(f *os.File) bool {
@@ -932,7 +921,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState) error {
+func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme) error {
 	if state == nil {
 		return nil
 	}
@@ -947,7 +936,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		}
 		if p <= len(state.text) {
 			lineEndPos := lineEnd(state.text, p)
-			if err := drawBufferLine(stdout, state, p, lineEndPos); err != nil {
+			if err := drawBufferLine(stdout, state, p, lineEndPos, theme); err != nil {
 				return err
 			}
 			if p < len(state.text) {
@@ -968,48 +957,43 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if overlay != nil && overlay.visible {
 		lines := overlay.renderLines(overlayRows - 1)
 		startRow := viewRows + 1
-		for i, line := range lines {
-			if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", startRow+i); err != nil {
+		for row := 0; row < overlayRows-1; row++ {
+			line := ""
+			if row < len(lines) {
+				line = lines[row]
+			}
+			if err := drawHUDLine(stdout, startRow+row-1, line, theme.hudPrefix(), theme); err != nil {
 				return err
 			}
-			if err := drawOverlayText(stdout, line); err != nil {
-				return err
-			}
 		}
-		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", bufferRows); err != nil {
+		if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
 			return err
 		}
-		if err := drawOverlayPrompt(stdout, overlay); err != nil {
-			return err
-		}
-		return drawMenu(stdout, menu)
+		return drawMenu(stdout, menu, theme)
 	}
 	if state.status != "" {
-		if _, err := io.WriteString(stdout, "\x1b[24;1H"); err != nil {
-			return err
-		}
 		status := []rune(state.status)
 		if len(status) > bufferCols {
 			status = status[:bufferCols]
 		}
-		if err := drawOverlayText(stdout, string(status)); err != nil {
+		if err := drawHUDLine(stdout, bufferRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
 			return err
 		}
 	}
-	return drawMenu(stdout, menu)
+	return drawMenu(stdout, menu, theme)
 }
 
-func drawBufferLine(stdout io.Writer, state *bufferState, start, end int) error {
+func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {
 	col := 0
 	for p := start; p < end && col < bufferCols; p++ {
 		selected := p >= state.dotStart && p < state.dotEnd
 		if selected {
-			if _, err := io.WriteString(stdout, "\x1b[7m"); err != nil {
+			if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
 				return err
 			}
 		}
 		if p == state.cursor && state.dotStart == state.dotEnd {
-			if _, err := io.WriteString(stdout, "\x1b[7m"); err != nil {
+			if _, err := io.WriteString(stdout, highlightPrefix(theme, true)); err != nil {
 				return err
 			}
 		}
@@ -1017,14 +1001,14 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int) error 
 			return err
 		}
 		if selected || (p == state.cursor && state.dotStart == state.dotEnd) {
-			if _, err := io.WriteString(stdout, "\x1b[27m"); err != nil {
+			if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
 				return err
 			}
 		}
 		col++
 	}
 	if state.cursor == end && state.dotStart == state.dotEnd && col < bufferCols {
-		if _, err := io.WriteString(stdout, "\x1b[7m \x1b[27m"); err != nil {
+		if _, err := io.WriteString(stdout, highlightPrefix(theme, true)+" "+highlightReset(theme)); err != nil {
 			return err
 		}
 	}
@@ -1040,12 +1024,28 @@ func drawOverlayText(stdout io.Writer, text string) error {
 	return err
 }
 
-func drawOverlayPrompt(stdout io.Writer, overlay *overlayState) error {
+func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) error {
 	if overlay == nil {
 		return nil
 	}
+	if err := drawHUDLine(stdout, bufferRows-1, "", theme.hudPrefix(), theme); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", bufferRows); err != nil {
+		return err
+	}
+	if theme != nil {
+		if _, err := io.WriteString(stdout, theme.titlePrefix()); err != nil {
+			return err
+		}
+	}
 	if _, err := io.WriteString(stdout, ": "); err != nil {
 		return err
+	}
+	if theme != nil {
+		if _, err := io.WriteString(stdout, theme.hudPrefix()); err != nil {
+			return err
+		}
 	}
 	col := 2
 	for _, r := range []rune(overlay.promptLine()) {
@@ -1053,8 +1053,13 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState) error {
 			break
 		}
 		if r == 0 {
-			if _, err := io.WriteString(stdout, "\x1b[7m \x1b[27m"); err != nil {
+			if _, err := io.WriteString(stdout, highlightPrefix(theme, true)+" "+highlightReset(theme)); err != nil {
 				return err
+			}
+			if theme != nil {
+				if _, err := io.WriteString(stdout, theme.hudPrefix()); err != nil {
+					return err
+				}
 			}
 			col++
 			continue
@@ -1064,7 +1069,48 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState) error {
 		}
 		col++
 	}
+	if theme != nil {
+		if _, err := io.WriteString(stdout, styleReset()); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme) error {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+		return err
+	}
+	if theme == nil || prefix == "" {
+		return drawOverlayText(stdout, text)
+	}
+	line := []rune(text)
+	if len(line) > bufferCols {
+		line = line[:bufferCols]
+	}
+	plain := string(line)
+	if pad := bufferCols - len(line); pad > 0 {
+		plain += strings.Repeat(" ", pad)
+	}
+	_, err := io.WriteString(stdout, prefix+plain+styleReset())
+	return err
+}
+
+func highlightPrefix(theme *uiTheme, cursor bool) string {
+	if theme == nil {
+		return "\x1b[7m"
+	}
+	if cursor {
+		return theme.cursorPrefix()
+	}
+	return theme.selectionPrefix()
+}
+
+func highlightReset(theme *uiTheme) string {
+	if theme == nil {
+		return "\x1b[27m"
+	}
+	return styleReset()
 }
 
 func handleBufferKey(state *bufferState, key int) {

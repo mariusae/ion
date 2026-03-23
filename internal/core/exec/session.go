@@ -1047,6 +1047,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	}
 
 	currentName := trimToken(f.Name.UTF8())
+	explicitName := trimToken(nameTokenUTF8(nameToken))
 	newFile := currentName == ""
 
 	if !newFile {
@@ -1060,6 +1061,14 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 				return err
 			}
 			return nil
+		}
+	}
+	if currentName == "" && explicitName != "" {
+		next := text.NewStringFromUTF8(explicitName)
+		if err := s.mutate(f, func(seq uint32) error {
+			return f.LogSetName(&next, seq)
+		}); err != nil {
+			return err
 		}
 	}
 
@@ -1149,7 +1158,9 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	if name == "" {
 		return fmt.Errorf("no file name")
 	}
-	wasEmpty := f.B.Len() == 0 && trimToken(f.Name.UTF8()) == ""
+	currentName := trimToken(f.Name.UTF8())
+	explicitName := trimToken(nameTokenUTF8(nameToken))
+	wasEmpty := f.B.Len() == 0 && (currentName == "" || currentName == name)
 	data, err := os.ReadFile(name)
 	if err != nil {
 		return openFileError(name, err)
@@ -1159,6 +1170,12 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 		return err
 	}
 	if err := s.mutate(f, func(seq uint32) error {
+		if currentName == "" && explicitName != "" {
+			next := text.NewStringFromUTF8(explicitName)
+			if err := f.LogSetName(&next, seq); err != nil {
+				return err
+			}
+		}
 		if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
 			return err
 		}
@@ -1175,6 +1192,13 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	}
 	if wasEmpty && !containsNullByte(data) {
 		f.MarkClean()
+		if meta, ok, err := statFile(name); err != nil {
+			return err
+		} else if ok {
+			f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+		} else {
+			f.ClearFileInfo()
+		}
 		s.QuitOK = true
 	}
 	return nil

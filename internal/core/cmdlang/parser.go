@@ -475,7 +475,7 @@ func (p *Parser) getRegexp(delim rune) (*text.String, error) {
 		}
 	}
 	if p.lastPat.Len() <= 1 {
-		return nil, fmt.Errorf("pattern expected")
+		return nil, fmt.Errorf("pattern")
 	}
 	out := text.NewString()
 	if err := out.DupString(&p.lastPat); err != nil {

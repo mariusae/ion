@@ -111,6 +111,15 @@ func TestOutputCaptureStopFlushesTailWithoutDeadlock(t *testing.T) {
 	}
 }
 
+func TestSanitizeOverlayOutputStripsANSISequences(t *testing.T) {
+	t.Parallel()
+
+	got := sanitizeOverlayOutput("\x1b[31mred\x1b[0m \x1b]2;title\x07plain")
+	if want := "red plain"; got != want {
+		t.Fatalf("sanitizeOverlayOutput() = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	prev := termRows
 	termRows = 20

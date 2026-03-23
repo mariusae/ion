@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 const minOverlayRows = 1
@@ -160,8 +161,71 @@ func (o *overlayState) addCommand(text string) {
 }
 
 func (o *overlayState) addOutput(text string) {
-	o.history = append(o.history, overlayEntry{text: text})
+	o.history = append(o.history, overlayEntry{text: sanitizeOverlayOutput(text)})
 	o.scroll = 0
+}
+
+func sanitizeOverlayOutput(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+	for i := 0; i < len(text); {
+		switch text[i] {
+		case 0x1b:
+			next := skipANSIEscape(text, i)
+			if next == i {
+				i++
+			} else {
+				i = next
+			}
+		default:
+			r, size := utf8.DecodeRuneInString(text[i:])
+			if r == utf8.RuneError && size == 1 {
+				i++
+				continue
+			}
+			if r < 0x20 && r != '\t' {
+				i += size
+				continue
+			}
+			b.WriteRune(r)
+			i += size
+		}
+	}
+	return b.String()
+}
+
+func skipANSIEscape(text string, start int) int {
+	if start+1 >= len(text) {
+		return start + 1
+	}
+	switch text[start+1] {
+	case '[':
+		i := start + 2
+		for i < len(text) {
+			c := text[i]
+			if c >= 0x40 && c <= 0x7e {
+				return i + 1
+			}
+			i++
+		}
+		return len(text)
+	case ']':
+		i := start + 2
+		for i < len(text) {
+			switch text[i] {
+			case 0x07:
+				return i + 1
+			case 0x1b:
+				if i+1 < len(text) && text[i+1] == '\\' {
+					return i + 2
+				}
+			}
+			i++
+		}
+		return len(text)
+	default:
+		return start + 2
+	}
 }
 
 func (o *overlayState) lastCommand() (string, bool) {

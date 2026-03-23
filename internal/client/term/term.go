@@ -284,8 +284,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		pending = append(pending, []rune(line)...)
 		pending = append(pending, '\n')
 		overlay.resetInput()
-		lineCh := make(chan string, 64)
+		lineCh := make(chan string, 256)
 		resultCh := make(chan overlayResult, 1)
+		drainOverlayLines := func(first string) {
+			overlay.addOutput(first)
+			for {
+				select {
+				case line := <-lineCh:
+					overlay.addOutput(line)
+				default:
+					return
+				}
+			}
+		}
 		overlay.setRunning(true)
 		if err := redraw(); err != nil {
 			return false, err
@@ -310,7 +321,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		for {
 			select {
 			case line := <-lineCh:
-				overlay.addOutput(line)
+				drainOverlayLines(line)
 				if err := redraw(); err != nil {
 					overlay.setRunning(false)
 					return false, err
@@ -324,7 +335,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				for {
 					select {
 					case line := <-lineCh:
-						overlay.addOutput(line)
+						drainOverlayLines(line)
 					default:
 						overlay.setRunning(false)
 						if result.err != nil {

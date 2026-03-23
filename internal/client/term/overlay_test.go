@@ -3,6 +3,7 @@ package term
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestOverlayRecallRestoresSavedInput(t *testing.T) {
@@ -72,6 +73,41 @@ func TestOutputCaptureFlushesBufferedLines(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("captured output leaked to passthrough writers: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestOutputCaptureStopFlushesTailWithoutDeadlock(t *testing.T) {
+	t.Parallel()
+
+	capture := NewOutputCapture(nil, nil)
+	lines := make(chan string, 1)
+
+	capture.Start(func(line string) {
+		lines <- line
+	})
+	if _, err := capture.Stdout().Write([]byte("tail")); err != nil {
+		t.Fatalf("stdout write: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		capture.Stop()
+		close(done)
+	}()
+
+	select {
+	case got := <-lines:
+		if got != "tail" {
+			t.Fatalf("captured tail = %q, want %q", got, "tail")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for captured tail line")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() blocked while flushing tail")
 	}
 }
 

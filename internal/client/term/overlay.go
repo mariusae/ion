@@ -571,13 +571,18 @@ func (c *OutputCapture) Start(onLine func(string)) {
 
 func (c *OutputCapture) Stop() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var tail string
+	onLine := c.onLine
 	if c.capturing && len(c.partial) > 0 && c.onLine != nil {
-		c.onLine(strings.TrimSuffix(string(c.partial), "\r"))
+		tail = strings.TrimSuffix(string(c.partial), "\r")
 	}
 	c.capturing = false
 	c.partial = c.partial[:0]
 	c.onLine = nil
+	c.mu.Unlock()
+	if tail != "" && onLine != nil {
+		onLine(tail)
+	}
 }
 
 type captureWriter struct {
@@ -591,24 +596,30 @@ func (w captureWriter) Write(p []byte) (int, error) {
 
 func (c *OutputCapture) writeTo(dst io.Writer, p []byte) (int, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if !c.capturing {
+		c.mu.Unlock()
 		if dst == nil {
 			return len(p), nil
 		}
 		return dst.Write(p)
 	}
 	c.partial = append(c.partial, p...)
+	var lines []string
 	for {
 		idx := bytes.IndexByte(c.partial, '\n')
 		if idx < 0 {
 			break
 		}
 		line := strings.TrimSuffix(string(c.partial[:idx]), "\r")
-		if c.onLine != nil {
-			c.onLine(line)
-		}
+		lines = append(lines, line)
 		c.partial = append([]byte(nil), c.partial[idx+1:]...)
+	}
+	onLine := c.onLine
+	c.mu.Unlock()
+	if onLine != nil {
+		for _, line := range lines {
+			onLine(line)
+		}
 	}
 	return len(p), nil
 }

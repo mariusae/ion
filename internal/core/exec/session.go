@@ -811,27 +811,27 @@ func (s *Session) shellPipe(f *text.File, a ionaddr.Address, token *text.String)
 	return s.printShellPrompt()
 }
 
-func (s *Session) shellFileList(src string) ([]string, error) {
+func (s *Session) shellFileList(src string) (string, []string, error) {
 	token := text.NewStringFromUTF8(src)
 	cmd, err := s.resolveShellCommand(&token)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	res, err := s.runShellCommand(nil, cmd, nil, true)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if err := s.writeShellWarnings(res, true); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if err := s.writeShellStreams(res, false); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if err := s.printShellPrompt(); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	out := strings.ReplaceAll(string(res.Stdout), "\x00", "")
-	return strings.Fields(out), nil
+	return out, strings.Fields(out), nil
 }
 
 func (s *Session) yCmd(f *text.File, cmd *ioncmd.Cmd, a ionaddr.Address) error {
@@ -1312,16 +1312,20 @@ func (s *Session) changeDirectory(nameToken *text.String) error {
 }
 
 func (s *Session) openFiles(nameToken *text.String) error {
-	fields, noArg, emptyList, err := s.loadFileList(nameToken)
+	list, err := s.loadFileList(nameToken)
 	if err != nil {
 		return err
 	}
-	if noArg {
+	if list.noArg {
 		return fmt.Errorf("blank expected")
 	}
-	if emptyList {
+	if list.emptyList {
+		if list.fromShell {
+			return fmt.Errorf("blank expected")
+		}
 		return s.openNamelessFile()
 	}
+	fields := list.fields
 	lineNo, colNo := 0, 0
 	if len(fields) > 0 {
 		fields[len(fields)-1], lineNo, colNo = splitFileLineSuffix(fields[len(fields)-1])
@@ -1450,20 +1454,23 @@ func shouldOpenNamelessForCurrent(f *text.File) bool {
 }
 
 func (s *Session) closeFiles(nameToken *text.String) error {
-	fields, noArg, emptyList, err := s.loadFileList(nameToken)
+	list, err := s.loadFileList(nameToken)
 	if err != nil {
 		return err
 	}
-	if noArg {
+	if list.noArg {
 		if s.Current == nil {
 			return fmt.Errorf("no current file")
 		}
 		return s.removeFile(s.Current)
 	}
-	if emptyList {
+	if list.emptyList {
+		if list.fromShell {
+			return nil
+		}
 		return fmt.Errorf("newline expected")
 	}
-	for _, name := range fields {
+	for _, name := range list.fields {
 		f := s.findFileByName(name)
 		if f == nil {
 			if err := s.printNoSuchFileWarning(name); err != nil {
@@ -1479,16 +1486,18 @@ func (s *Session) closeFiles(nameToken *text.String) error {
 }
 
 func (s *Session) switchFile(nameToken *text.String) error {
-	fields, noArg, _, err := s.loadFileList(nameToken)
+	list, err := s.loadFileList(nameToken)
 	if err != nil {
 		return err
 	}
-	if noArg {
+	if list.noArg {
 		return fmt.Errorf("blank expected")
 	}
 	name := ""
-	if len(fields) > 0 {
-		name = fields[0]
+	if len(list.fields) > 0 {
+		name = list.fields[0]
+	} else if list.fromShell {
+		name = list.raw
 	}
 	for _, f := range s.Files {
 		if trimToken(f.Name.UTF8()) != name {
@@ -1506,7 +1515,7 @@ func (s *Session) switchFile(nameToken *text.String) error {
 		s.Current = f
 		return s.printFileStatus(f, true)
 	}
-	return fmt.Errorf("not in menu: %q", name)
+	return diagnosticError{msg: fmt.Sprintf("?not in menu: \"%s\"", name)}
 }
 
 func (s *Session) findFileByName(name string) *text.File {
@@ -2008,27 +2017,44 @@ func rawTokenUTF8(s *text.String) string {
 	return strings.TrimRight(s.UTF8(), "\x00")
 }
 
-func (s *Session) loadFileList(token *text.String) (fields []string, noArg bool, emptyList bool, err error) {
+type fileListSpec struct {
+	raw       string
+	fields    []string
+	noArg     bool
+	emptyList bool
+	fromShell bool
+}
+
+func (s *Session) loadFileList(token *text.String) (fileListSpec, error) {
 	raw := rawTokenUTF8(token)
 	if raw == "" {
-		return nil, true, false, nil
+		return fileListSpec{noArg: true}, nil
 	}
 	if raw[0] != ' ' && raw[0] != '\t' {
-		return nil, false, false, fmt.Errorf("blank expected")
+		return fileListSpec{}, fmt.Errorf("blank expected")
 	}
 	rest := strings.TrimLeft(raw, " \t")
 	if rest == "" {
-		return nil, false, true, nil
+		return fileListSpec{emptyList: true}, nil
 	}
 	if rest[0] == '<' {
-		fields, err = s.shellFileList(rest[1:])
+		shellRaw, fields, err := s.shellFileList(rest[1:])
 		if err != nil {
-			return nil, false, false, err
+			return fileListSpec{}, err
 		}
-		return fields, false, len(fields) == 0, nil
+		return fileListSpec{
+			raw:       shellRaw,
+			fields:    fields,
+			emptyList: len(fields) == 0,
+			fromShell: true,
+		}, nil
 	}
-	fields = strings.Fields(rest)
-	return fields, false, len(fields) == 0, nil
+	fields := strings.Fields(rest)
+	return fileListSpec{
+		raw:       rest,
+		fields:    fields,
+		emptyList: len(fields) == 0,
+	}, nil
 }
 
 func normalizeNameForCWD(cwd, name string) string {

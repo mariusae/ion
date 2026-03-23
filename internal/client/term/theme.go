@@ -29,6 +29,7 @@ type uiTheme struct {
 	mode        colorMode
 	subtleBG    rgbColor
 	hudBG       rgbColor
+	outputBG    rgbColor
 	titleBG     rgbColor
 	highlightBG rgbColor
 	cursorBG    rgbColor
@@ -64,6 +65,7 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 		mode:        mode,
 		subtleBG:    blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
 		hudBG:       blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
+		outputBG:    blendTint(bg, light, alphaFor(light, 0.26, 0.32)),
 		titleBG:     blendTint(bg, light, alphaFor(light, 0.14, 0.26)),
 		highlightBG: blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
 		cursorBG:    blendTint(bg, light, alphaFor(light, 0.16, 0.30)),
@@ -240,6 +242,13 @@ func (t *uiTheme) hudPrefix() string {
 		return ""
 	}
 	return t.prefixFor(t.hudBG)
+}
+
+func (t *uiTheme) outputPrefix() string {
+	if t == nil {
+		return ""
+	}
+	return t.prefixFor(t.outputBG)
 }
 
 func (t *uiTheme) titlePrefix() string {

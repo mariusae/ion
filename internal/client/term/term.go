@@ -1244,17 +1244,16 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
 	}
 	start, end, ok := overlay.selectionBounds()
-	if !ok || line.history < start.line || line.history > end.line {
-		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
-	}
-
 	offset := line.offset
 	selStart := 0
-	selEnd := len([]rune(line.text))
-	if line.history == start.line {
+	selEnd := 0
+	if ok && line.history >= start.line && line.history <= end.line {
+		selEnd = len([]rune(line.text))
+	}
+	if ok && line.history == start.line {
 		selStart = start.col + offset
 	}
-	if line.history == end.line {
+	if ok && line.history == end.line {
 		selEnd = end.col + offset
 	}
 	if selStart < 0 {
@@ -1267,27 +1266,39 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 		return err
 	}
-	prefix := theme.hudPrefix()
-	if theme != nil && prefix != "" {
-		if _, err := io.WriteString(stdout, prefix); err != nil {
-			return err
-		}
-	}
-	runes := []rune(line.text)
-	selected := false
-	col := 0
-	for i, r := range runes {
-		if col >= termCols {
-			break
-		}
-		wantSelected := i >= selStart && i < selEnd
-		if wantSelected != selected {
-			selected = wantSelected
-			if selected {
-				if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
-					return err
+	if theme == nil {
+		prefix := ""
+		runes := []rune(line.text)
+		selected := false
+		col := 0
+		for i, r := range runes {
+			if col >= termCols {
+				break
+			}
+			wantSelected := i >= selStart && i < selEnd
+			if wantSelected != selected {
+				selected = wantSelected
+				if selected {
+					if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
+						return err
+					}
+				} else if prefix != "" {
+					if _, err := io.WriteString(stdout, highlightReset(theme)+prefix); err != nil {
+						return err
+					}
+				} else {
+					if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
+						return err
+					}
 				}
-			} else if theme != nil && prefix != "" {
+			}
+			if _, err := io.WriteString(stdout, string(r)); err != nil {
+				return err
+			}
+			col++
+		}
+		if selected {
+			if prefix != "" {
 				if _, err := io.WriteString(stdout, highlightReset(theme)+prefix); err != nil {
 					return err
 				}
@@ -1297,28 +1308,54 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 				}
 			}
 		}
-		if _, err := io.WriteString(stdout, string(r)); err != nil {
+		if pad := termCols - col; pad > 0 {
+			if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	prefix := theme.hudPrefix()
+	if prefix != "" {
+		if _, err := io.WriteString(stdout, prefix); err != nil {
+			return err
+		}
+	}
+	runes := []rune(line.text)
+	currentPrefix := prefix
+	col := 0
+	for i, r := range runes {
+		if col >= termCols {
+			break
+		}
+		nextPrefix := prefix
+		if i >= selStart && i < selEnd {
+			nextPrefix = highlightPrefix(theme, false)
+		} else if i == 0 && r == '█' {
+			nextPrefix = theme.outputPrefix()
+		}
+		if nextPrefix != currentPrefix {
+			if _, err := io.WriteString(stdout, nextPrefix); err != nil {
+				return err
+			}
+			currentPrefix = nextPrefix
+		}
+		drawRune := r
+		if i == 0 && r == '█' {
+			drawRune = ' '
+		}
+		if _, err := io.WriteString(stdout, string(drawRune)); err != nil {
 			return err
 		}
 		col++
-	}
-	if selected {
-		if theme != nil && prefix != "" {
-			if _, err := io.WriteString(stdout, highlightReset(theme)+prefix); err != nil {
-				return err
-			}
-		} else {
-			if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
-				return err
-			}
-		}
 	}
 	if pad := termCols - col; pad > 0 {
 		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
 			return err
 		}
 	}
-	if theme != nil && prefix != "" {
+	if prefix != "" {
 		if _, err := io.WriteString(stdout, styleReset()); err != nil {
 			return err
 		}

@@ -614,6 +614,68 @@ func TestIonTermOverlayUnhandledControlFallsThroughToBuffer(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeAltWordMotion(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha beta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("\x1b[7ma\x1b[27m", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial cursor highlight: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bf"); err != nil {
+		t.Fatalf("send Alt-Right: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha \x1b[7mb\x1b[27meta", 2*time.Second); err != nil {
+		t.Fatalf("wait for word-forward cursor move: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bb"); err != nil {
+		t.Fatalf("send Alt-Left: %v", err)
+	}
+	if _, err := sess.WaitFor("\x1b[7ma\x1b[27mlpha beta", 2*time.Second); err != nil {
+		t.Fatalf("wait for word-backward cursor move: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bq\n"); err != nil {
+		t.Fatalf("exit buffer mode and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermBufferModeMetaBackspaceDeletesWord(t *testing.T) {
 	t.Parallel()
 

@@ -29,6 +29,7 @@ type Session struct {
 	Diag         io.Writer
 	QuitOK       bool
 	LastShellCmd string
+	closeOK      map[*text.File]bool
 	execDepth    int
 	fileLoopDepth int
 	frame        *execFrame
@@ -55,7 +56,7 @@ type MenuFileInfo struct {
 
 // NewSession constructs an execution session.
 func NewSession(out io.Writer) *Session {
-	return &Session{Out: out, Diag: io.Discard}
+	return &Session{Out: out, Diag: io.Discard, closeOK: make(map[*text.File]bool)}
 }
 
 type execFrame struct {
@@ -69,6 +70,7 @@ func (s *Session) AddFile(f *text.File) {
 	s.warnDuplicateName(trimToken(f.Name.UTF8()))
 	s.Files = append(s.Files, f)
 	s.sortFiles()
+	s.syncCloseOK(f)
 	if s.Current == nil || s.Current == oldFirst {
 		s.Current = s.firstFile()
 	}
@@ -221,6 +223,7 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (ok bool, err error) {
 				n++
 			}
 		}
+		s.syncCloseOK(f)
 		s.QuitOK = false
 		return true, nil
 
@@ -492,6 +495,7 @@ func (s *Session) touchFile(f *text.File) {
 		return
 	}
 	s.frame.touched[f] = struct{}{}
+	s.closeOK[f] = false
 	s.QuitOK = false
 }
 
@@ -500,6 +504,7 @@ func (s *Session) applyFrame(frame *execFrame) error {
 		if _, _, _, err := f.Update(false); err != nil {
 			return err
 		}
+		s.syncCloseOK(f)
 	}
 	s.sortFiles()
 	return nil
@@ -1094,6 +1099,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 		}
 	}
 	s.QuitOK = false
+	s.syncCloseOK(f)
 
 	if _, err := fmt.Fprintf(s.Diag, "%s: ", name); err != nil {
 		return err
@@ -1233,6 +1239,7 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	f.Mark = text.Range{}
 	s.Current = f
 	s.QuitOK = !containsNullByte(data)
+	s.syncCloseOK(f)
 	return s.printFileStatus(f, true)
 }
 
@@ -1498,6 +1505,14 @@ func (s *Session) firstFile() *text.File {
 }
 
 func (s *Session) removeFile(target *text.File) error {
+	if target != nil && target.IsDirty() && !s.closeOK[target] {
+		s.closeOK[target] = true
+		name := trimToken(target.Name.UTF8())
+		if name == "" {
+			name = "nameless file"
+		}
+		return fmt.Errorf("changes to %q", name)
+	}
 	for i, f := range s.Files {
 		if f != target {
 			continue
@@ -1507,6 +1522,7 @@ func (s *Session) removeFile(target *text.File) error {
 		}
 		copy(s.Files[i:], s.Files[i+1:])
 		s.Files = s.Files[:len(s.Files)-1]
+		delete(s.closeOK, target)
 		return target.Close()
 	}
 	return nil
@@ -1676,6 +1692,7 @@ func (s *Session) UndoCurrent() error {
 	r := text.Range{P1: q0, P2: q1}
 	s.Current.Dot = r
 	s.Current.NDot = r
+	s.syncCloseOK(s.Current)
 	s.QuitOK = false
 	return nil
 }
@@ -1748,11 +1765,18 @@ func (s *Session) FocusFileIndex(idx int) error {
 
 func (s *Session) hasDirtyFiles() bool {
 	for _, f := range s.Files {
-		if f != nil && f.Mod {
+		if f != nil && f.IsDirty() {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Session) syncCloseOK(f *text.File) {
+	if f == nil {
+		return
+	}
+	s.closeOK[f] = !f.Mod
 }
 
 func defaultAddrFor(cmdc rune) rune {

@@ -3,6 +3,7 @@ package term
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -279,6 +280,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if len(snarf) == 0 {
 				return false, nil
 			}
+			if err := copyToClipboard(stdout, snarf); err != nil {
+				return false, err
+			}
 			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
 			if err != nil {
 				return false, err
@@ -289,6 +293,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		case menuSnarf:
 			snarf = snarfSelection(buffer)
 			if len(snarf) != 0 {
+				if err := copyToClipboard(stdout, snarf); err != nil {
+					return false, err
+				}
 				buffer.status = "snarfed"
 			}
 			return false, nil
@@ -613,6 +620,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				case keyAltSnarf:
 					snarf = snarfSelection(buffer)
 					if len(snarf) != 0 {
+						if err := copyToClipboard(stdout, snarf); err != nil {
+							return err
+						}
 						buffer.status = "snarfed"
 					}
 					if err := redraw(); err != nil {
@@ -666,6 +676,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				snarf = snarfSelection(buffer)
 				if len(snarf) == 0 {
 					continue
+				}
+				if err := copyToClipboard(stdout, snarf); err != nil {
+					return err
 				}
 				buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
 				if err != nil {
@@ -1341,6 +1354,15 @@ func snarfSelection(state *bufferState) []rune {
 		return nil
 	}
 	return append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+}
+
+func copyToClipboard(stdout io.Writer, text []rune) error {
+	if len(text) == 0 {
+		return nil
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(string(text)))
+	_, err := fmt.Fprintf(stdout, "\x1b]52;c;%s\x07", encoded)
+	return err
 }
 
 func readBracketedPaste(reader *bufio.Reader) ([]rune, error) {

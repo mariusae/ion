@@ -1258,10 +1258,7 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
 	}
 
-	offset := 0
-	if line.command {
-		offset = 2
-	}
+	offset := line.offset
 	selStart := 0
 	selEnd := len([]rune(line.text))
 	if line.history == start.line {

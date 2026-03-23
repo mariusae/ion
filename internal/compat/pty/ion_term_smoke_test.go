@@ -705,7 +705,7 @@ func TestIonTermBufferModeOverlayRecall(t *testing.T) {
 	if err := sess.WriteString("\n,p\r"); err != nil {
 		t.Fatalf("open overlay and run print command: %v", err)
 	}
-	if _, err := sess.WaitFor("> ,p", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor(",p", 2*time.Second); err != nil {
 		t.Fatalf("wait for overlay command history: %v\n%s", err, sess.Snapshot())
 	}
 	if _, err := sess.WaitFor("beta", 2*time.Second); err != nil {

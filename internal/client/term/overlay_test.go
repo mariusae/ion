@@ -118,17 +118,17 @@ func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
 		overlay.addOutput(string(rune('a' + i)))
 	}
 
-	if got, want := overlayTexts(overlay.renderLines(3)), []string{"d", "e", "f"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ d", "█ e", "█ f"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(tail) = %q, want %q", got, want)
 	}
 
 	overlay.scrollOlder(2)
-	if got, want := overlayTexts(overlay.renderLines(3)), []string{"b", "c", "d"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ b", "█ c", "█ d"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(scrolled) = %q, want %q", got, want)
 	}
 
 	overlay.scrollNewer(1)
-	if got, want := overlayTexts(overlay.renderLines(3)), []string{"c", "d", "e"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ c", "█ d", "█ e"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(partial return) = %q, want %q", got, want)
 	}
 }
@@ -146,11 +146,16 @@ func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 	overlay.addCommand("b")
 
 	pos := overlay.screenToPos(overlayTopRow(overlay), 2)
-	if pos.line != 0 || pos.col != 2 {
-		t.Fatalf("screenToPos(output) = (%d, %d), want (0, 2)", pos.line, pos.col)
+	if pos.line != 0 || pos.col != 0 {
+		t.Fatalf("screenToPos(output gutter) = (%d, %d), want (0, 0)", pos.line, pos.col)
 	}
 
-	pos = overlay.screenToPos(overlayTopRow(overlay)+1, 3)
+	pos = overlay.screenToPos(overlayTopRow(overlay), 4)
+	if pos.line != 0 || pos.col != 2 {
+		t.Fatalf("screenToPos(output text) = (%d, %d), want (0, 2)", pos.line, pos.col)
+	}
+
+	pos = overlay.screenToPos(overlayTopRow(overlay)+1, 1)
 	if pos.line != 1 || pos.col != 1 {
 		t.Fatalf("screenToPos(command) = (%d, %d), want (1, 1)", pos.line, pos.col)
 	}
@@ -217,7 +222,7 @@ func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
 	overlay.setRunning(true)
 
 	lines := overlay.renderLines(3)
-	if got, want := overlayTexts(lines), []string{"alpha", "⠋ running"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(lines), []string{"█ alpha", "⠋ running"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(spinner) = %q, want %q", got, want)
 	}
 

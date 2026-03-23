@@ -39,6 +39,7 @@ type overlayRenderLine struct {
 	text    string
 	history int
 	command bool
+	offset  int
 }
 
 func newOverlayState() *overlayState {
@@ -253,11 +254,12 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 			command: entry.command,
 		}
 		if entry.command {
-			line.text = "> " + entry.text
+			line.text = entry.text
 			lines = append(lines, line)
 			continue
 		}
-		line.text = entry.text
+		line.text = "█ " + entry.text
+		line.offset = 2
 		lines = append(lines, line)
 	}
 	if o.running && len(lines) < limit {
@@ -351,15 +353,11 @@ func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {
 		col = len(runes)
 	}
 	pos.line = line.history
-	if line.command && col >= 2 {
-		pos.col = col - 2
-		return pos
-	}
-	if line.command {
+	if col <= line.offset {
 		pos.col = 0
 		return pos
 	}
-	pos.col = col
+	pos.col = col - line.offset
 	return pos
 }
 

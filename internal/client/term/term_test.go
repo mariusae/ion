@@ -122,6 +122,21 @@ func TestMoveLineDownPreservesColumn(t *testing.T) {
 	}
 }
 
+func TestWordSpanAtSelectsWholeWord(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta")
+	if start, end := wordSpanAt(text, 2); start != 0 || end != 5 {
+		t.Fatalf("wordSpanAt(interior) = (%d, %d), want (0, 5)", start, end)
+	}
+	if start, end := wordSpanAt(text, 5); start != 0 || end != 5 {
+		t.Fatalf("wordSpanAt(boundary) = (%d, %d), want (0, 5)", start, end)
+	}
+	if start, end := wordSpanAt(text, 6); start != 6 || end != 10 {
+		t.Fatalf("wordSpanAt(next word) = (%d, %d), want (6, 10)", start, end)
+	}
+}
+
 func TestHandleBufferKeyCtrlAAndCtrlE(t *testing.T) {
 	t.Parallel()
 

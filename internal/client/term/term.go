@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
@@ -99,6 +100,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
+	lastMouseClick := time.Time{}
+	lastMouseClickPos := -1
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuLastItem := -1
@@ -633,6 +636,35 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 							}
 							continue
+						}
+						if mouse.button == 0 && mouse.pressed {
+							pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
+							if ok {
+								now := time.Now()
+								doubleClick := lastMouseClickPos == pos &&
+									!lastMouseClick.IsZero() &&
+									now.Sub(lastMouseClick) < 400*time.Millisecond
+								lastMouseClick = now
+								lastMouseClickPos = pos
+
+								if doubleClick {
+									buffer.markMode = false
+									start, end := wordSpanAt(buffer.text, pos)
+									if start < end {
+										mouseSelecting = false
+										buffer.cursor = start
+										buffer.dotStart = start
+										buffer.dotEnd = end
+										if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+											return err
+										}
+										if err := redraw(); err != nil {
+											return err
+										}
+										continue
+									}
+								}
+							}
 						}
 						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
 							if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {

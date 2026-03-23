@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const overlayRows = 6
+const minOverlayRows = 3
 
 type overlayEntry struct {
 	command bool
@@ -204,6 +204,27 @@ func (o *overlayState) renderLines(limit int) []string {
 		lines = append(lines, entry.text)
 	}
 	return lines
+}
+
+func overlayHeight(o *overlayState) int {
+	if o == nil || !o.visible {
+		return 0
+	}
+	height := len(o.history) + 1
+	if height < minOverlayRows {
+		height = minOverlayRows
+	}
+	maxHeight := termRows / 2
+	if maxHeight < minOverlayRows {
+		maxHeight = minOverlayRows
+	}
+	if height > maxHeight {
+		height = maxHeight
+	}
+	if height > termRows {
+		height = termRows
+	}
+	return height
 }
 
 func (o *overlayState) findCommand(n int) int {

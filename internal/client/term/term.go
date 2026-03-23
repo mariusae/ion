@@ -986,9 +986,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		}
 	}
 	if overlay != nil && overlay.visible {
-		lines := overlay.renderLines(overlayRows - 1)
+		height := overlayHeight(overlay)
+		lines := overlay.renderLines(height - 1)
 		startRow := viewRows + 1
-		for row := 0; row < overlayRows-1; row++ {
+		for row := 0; row < height-1; row++ {
 			line := ""
 			if row < len(lines) {
 				line = lines[row]

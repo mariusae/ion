@@ -108,7 +108,7 @@ func TestBufferViewRowsUsesLiveTerminalHeight(t *testing.T) {
 
 	overlay := newOverlayState()
 	overlay.visible = true
-	if got, want := bufferViewRows(overlay), 40-overlayRows; got != want {
+	if got, want := bufferViewRows(overlay), 40-minOverlayRows; got != want {
 		t.Fatalf("bufferViewRows(overlay) = %d, want %d", got, want)
 	}
 }

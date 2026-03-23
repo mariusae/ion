@@ -74,3 +74,28 @@ func TestOutputCaptureFlushesBufferedLines(t *testing.T) {
 		t.Fatalf("captured output leaked to passthrough writers: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
+
+func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
+	prev := termRows
+	termRows = 20
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	if got, want := overlayHeight(overlay), 0; got != want {
+		t.Fatalf("overlayHeight(hidden) = %d, want %d", got, want)
+	}
+
+	overlay.visible = true
+	if got, want := overlayHeight(overlay), minOverlayRows; got != want {
+		t.Fatalf("overlayHeight(empty) = %d, want %d", got, want)
+	}
+
+	for i := 0; i < 20; i++ {
+		overlay.addOutput("line")
+	}
+	if got, want := overlayHeight(overlay), termRows/2; got != want {
+		t.Fatalf("overlayHeight(full) = %d, want %d", got, want)
+	}
+}

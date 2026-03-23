@@ -198,10 +198,13 @@ func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	}
 }
 
-func TestBuildThemeUsesOutputTintInLightMode(t *testing.T) {
+func TestBuildThemeUsesOverlayAndOutputTintsInLightMode(t *testing.T) {
 	t.Parallel()
 
 	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	if got, want := theme.hudBG, (rgbColor{r: 244, g: 244, b: 244}); got != want {
+		t.Fatalf("hudBG = %#v, want %#v", got, want)
+	}
 	if got, want := theme.outputBG, (rgbColor{r: 229, g: 229, b: 229}); got != want {
 		t.Fatalf("outputBG = %#v, want %#v", got, want)
 	}
@@ -229,8 +232,8 @@ func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 	if strings.Contains(got, "█ alpha") {
 		t.Fatalf("drawOverlayHistoryLine() = %q, want background-backed gutter instead of literal block glyph", got)
 	}
-	if !strings.Contains(got, " alpha") {
-		t.Fatalf("drawOverlayHistoryLine() = %q, want output text preserved after the gutter cell", got)
+	if !strings.Contains(got, theme.hudPrefix()+" alpha") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want overlay tint restored for output text", got)
 	}
 }
 

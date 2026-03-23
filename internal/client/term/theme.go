@@ -64,7 +64,7 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 	return &uiTheme{
 		mode:        mode,
 		subtleBG:    blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
-		hudBG:       blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
+		hudBG:       blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
 		outputBG:    blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
 		titleBG:     blendTint(bg, light, alphaFor(light, 0.14, 0.26)),
 		highlightBG: blendTint(bg, light, alphaFor(light, 0.10, 0.20)),

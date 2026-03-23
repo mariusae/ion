@@ -12,7 +12,6 @@ import (
 	"ion/internal/client/download"
 	clientsession "ion/internal/client/session"
 	"ion/internal/client/term"
-	coreexec "ion/internal/core/exec"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
@@ -69,7 +68,7 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.NewWithShellInput(coreexec.ShellInputSocketEOF)
+	ws := workspace.New()
 	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
 		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
 	})

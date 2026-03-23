@@ -1183,11 +1183,11 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		lines := overlay.renderLines(height - 1)
 		startRow := viewRows + 1
 		for row := 0; row < height-1; row++ {
-			line := ""
+			line := overlayRenderLine{}
 			if row < len(lines) {
-				line = lines[row].text
+				line = lines[row]
 			}
-			if err := drawHUDLine(stdout, startRow+row-1, line, theme.hudPrefix(), theme); err != nil {
+			if err := drawOverlayHistoryLine(stdout, startRow+row-1, line, overlay, theme); err != nil {
 				return err
 			}
 		}
@@ -1206,6 +1206,96 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		}
 	}
 	return drawMenu(stdout, menu, theme)
+}
+
+func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
+	if line.history < 0 {
+		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
+	}
+	start, end, ok := overlay.selectionBounds()
+	if !ok || line.history < start.line || line.history > end.line {
+		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
+	}
+
+	offset := 0
+	if line.command {
+		offset = 2
+	}
+	selStart := 0
+	selEnd := len([]rune(line.text))
+	if line.history == start.line {
+		selStart = start.col + offset
+	}
+	if line.history == end.line {
+		selEnd = end.col + offset
+	}
+	if selStart < 0 {
+		selStart = 0
+	}
+	if selEnd < selStart {
+		selEnd = selStart
+	}
+
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+		return err
+	}
+	prefix := theme.hudPrefix()
+	if theme != nil && prefix != "" {
+		if _, err := io.WriteString(stdout, prefix); err != nil {
+			return err
+		}
+	}
+	runes := []rune(line.text)
+	selected := false
+	col := 0
+	for i, r := range runes {
+		if col >= termCols {
+			break
+		}
+		wantSelected := i >= selStart && i < selEnd
+		if wantSelected != selected {
+			selected = wantSelected
+			if selected {
+				if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
+					return err
+				}
+			} else if theme != nil && prefix != "" {
+				if _, err := io.WriteString(stdout, highlightReset(theme)+prefix); err != nil {
+					return err
+				}
+			} else {
+				if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := io.WriteString(stdout, string(r)); err != nil {
+			return err
+		}
+		col++
+	}
+	if selected {
+		if theme != nil && prefix != "" {
+			if _, err := io.WriteString(stdout, highlightReset(theme)+prefix); err != nil {
+				return err
+			}
+		} else {
+			if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
+				return err
+			}
+		}
+	}
+	if pad := termCols - col; pad > 0 {
+		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
+			return err
+		}
+	}
+	if theme != nil && prefix != "" {
+		if _, err := io.WriteString(stdout, styleReset()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {

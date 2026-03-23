@@ -1205,6 +1205,9 @@ func TestIonTermOverlayMouseSelectionCopiesToClipboard(t *testing.T) {
 	if err := sess.WriteString("\x1b[<0;1;22M\x1b[<32;4;22M\x1b[<0;4;22m"); err != nil {
 		t.Fatalf("drag inside overlay: %v", err)
 	}
+	if _, err := sess.WaitFor("\x1b[7mb\x1b[27m\x1b[7me\x1b[27m\x1b[7mt\x1b[27ma", 2*time.Second); err != nil {
+		t.Fatalf("wait for overlay selection highlight: %v\n%s", err, sess.Snapshot())
+	}
 	if _, err := sess.WaitFor("\x1b]52;c;YmV0\x07", 2*time.Second); err != nil {
 		t.Fatalf("wait for overlay clipboard sequence: %v\n%s", err, sess.Snapshot())
 	}

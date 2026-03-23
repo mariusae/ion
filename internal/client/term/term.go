@@ -74,7 +74,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return err
 	}
 	defer state.restore()
-	if rows, cols, err := terminalSize(stdin); err == nil {
+	refreshTerminalSize := func() {
+		rows, cols, err := terminalSize(stdin)
+		if err != nil {
+			return
+		}
 		if rows > 0 {
 			termRows = rows
 		}
@@ -82,6 +86,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			termCols = cols
 		}
 	}
+	refreshTerminalSize()
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -184,6 +189,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	redraw := func() error {
+		refreshTerminalSize()
 		return drawBufferMode(stdout, buffer, overlay, menu, theme)
 	}
 
@@ -247,6 +253,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	showMenu := func(clickX, clickY int) error {
+		refreshTerminalSize()
 		files, err := svc.MenuFiles()
 		if err != nil {
 			return err

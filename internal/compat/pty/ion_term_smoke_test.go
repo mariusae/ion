@@ -841,6 +841,9 @@ func TestIonTermBufferModeMouseSelectionSyncsBackToCommands(t *testing.T) {
 	if _, err := sess.WaitFor("\x1b[7ma\x1b[27m\x1b[7ml\x1b[27mpha", 2*time.Second); err != nil {
 		t.Fatalf("wait for mouse-selected highlight: %v\n%s", err, sess.Snapshot())
 	}
+	if _, err := sess.WaitFor("\x1b]52;c;YWw=\x07", 2*time.Second); err != nil {
+		t.Fatalf("wait for mouse-selection clipboard sequence: %v\n%s", err, sess.Snapshot())
+	}
 
 	if err := sess.WriteString("\x1bp\nq\n"); err != nil {
 		t.Fatalf("exit buffer mode, print selection, and quit: %v", err)

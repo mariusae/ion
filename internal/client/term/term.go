@@ -608,6 +608,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						}
 						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+							if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
+								if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+									return err
+								}
+							}
 							if err := redraw(); err != nil {
 								return err
 							}

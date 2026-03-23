@@ -607,7 +607,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				menu.dismiss()
 			}
 			switch r {
-			case '\n':
+			case ':':
 				overlay.open("")
 				if err := redraw(); err != nil {
 					return err

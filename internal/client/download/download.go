@@ -24,19 +24,29 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 	reader := bufio.NewReader(stdin)
 	var pending []rune
 
-	executePending := func(final bool) (bool, error) {
+	execute := func(cmd *cmdlang.Cmd) (bool, error) {
+		ok, err := svc.Execute(cmd)
+		if err != nil {
+			if err := reportCommandError(stderr, err); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		return !ok, nil
+	}
+
+	executePending := func() (bool, error) {
 		for {
 			parser.ResetRunes(pending)
-			cmd, err := parser.ParseWithFinal(final)
+			cmd, err := parser.ParseWithFinal(false)
 			if err != nil {
 				if errors.Is(err, cmdlang.ErrNeedMoreInput) {
 					return false, nil
 				}
-				if reportCommandError(stderr, err); !final {
-					pending = discardFailedCommand(pending)
-				} else {
-					pending = nil
+				if err := reportCommandError(stderr, err); err != nil {
+					return false, err
 				}
+				pending = discardFailedCommand(pending)
 				return false, nil
 			}
 
@@ -49,21 +59,18 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 				return false, nil
 			}
 
-			ok, err := svc.Execute(cmd)
+			done, err := execute(cmd)
 			if err != nil {
-				if err := reportCommandError(stderr, err); err != nil {
-					return false, err
-				}
-				continue
+				return false, err
 			}
-			if !ok {
+			if done {
 				return true, nil
 			}
 		}
 	}
 
 	for {
-		done, err := executePending(false)
+		done, err := executePending()
 		if err != nil {
 			return err
 		}
@@ -76,21 +83,13 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 			if !errors.Is(err, io.EOF) {
 				return err
 			}
-			if len(line) > 0 {
-				pending = append(pending, []rune(line)...)
-			}
-			done, err := executePending(true)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			return nil
+			pending = nil
+			_, err = execute(&cmdlang.Cmd{Cmdc: 'q'})
+			return err
 		}
 
 		pending = append(pending, []rune(line)...)
-		done, err = executePending(false)
+		done, err = executePending()
 		if err != nil {
 			return err
 		}

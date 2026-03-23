@@ -15,17 +15,35 @@ type overlayEntry struct {
 }
 
 type overlayState struct {
-	visible    bool
-	input      []rune
-	cursor     int
-	history    []overlayEntry
-	scroll     int
-	recallIdx  int
-	savedInput []rune
+	visible     bool
+	input       []rune
+	cursor      int
+	history     []overlayEntry
+	scroll      int
+	selecting   bool
+	selectStart overlaySelectionPos
+	selectEnd   overlaySelectionPos
+	recallIdx   int
+	savedInput  []rune
+}
+
+type overlaySelectionPos struct {
+	line int
+	col  int
+}
+
+type overlayRenderLine struct {
+	text    string
+	history int
+	command bool
 }
 
 func newOverlayState() *overlayState {
-	return &overlayState{recallIdx: -1}
+	return &overlayState{
+		recallIdx:   -1,
+		selectStart: overlaySelectionPos{line: -1},
+		selectEnd:   overlaySelectionPos{line: -1},
+	}
 }
 
 func (o *overlayState) open(prefill string) {
@@ -40,6 +58,9 @@ func (o *overlayState) open(prefill string) {
 func (o *overlayState) close() {
 	o.visible = false
 	o.scroll = 0
+	o.selecting = false
+	o.selectStart = overlaySelectionPos{line: -1}
+	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
@@ -47,6 +68,9 @@ func (o *overlayState) close() {
 func (o *overlayState) clearHistory() {
 	o.history = nil
 	o.scroll = 0
+	o.selecting = false
+	o.selectStart = overlaySelectionPos{line: -1}
+	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
@@ -194,7 +218,7 @@ func (o *overlayState) promptLine() string {
 	return string(out)
 }
 
-func (o *overlayState) renderLines(limit int) []string {
+func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 	if limit <= 0 {
 		return nil
 	}
@@ -206,13 +230,19 @@ func (o *overlayState) renderLines(limit int) []string {
 	if start < 0 {
 		start = 0
 	}
-	lines := make([]string, 0, end-start)
-	for _, entry := range o.history[start:end] {
+	lines := make([]overlayRenderLine, 0, end-start)
+	for idx, entry := range o.history[start:end] {
+		line := overlayRenderLine{
+			history: start + idx,
+			command: entry.command,
+		}
 		if entry.command {
-			lines = append(lines, "> "+entry.text)
+			line.text = "> " + entry.text
+			lines = append(lines, line)
 			continue
 		}
-		lines = append(lines, entry.text)
+		line.text = entry.text
+		lines = append(lines, line)
 	}
 	return lines
 }
@@ -274,6 +304,96 @@ func overlayHeight(o *overlayState) int {
 		height = termRows
 	}
 	return height
+}
+
+func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {
+	pos := overlaySelectionPos{line: -1}
+	if o == nil || !o.visible {
+		return pos
+	}
+	lines := o.renderLines(overlayHeight(o) - 1)
+	top := overlayTopRow(o)
+	lineRow := row - top
+	if lineRow < 0 || lineRow >= len(lines) {
+		return pos
+	}
+	line := lines[lineRow]
+	runes := []rune(line.text)
+	if col < 0 {
+		col = 0
+	}
+	if col > len(runes) {
+		col = len(runes)
+	}
+	pos.line = line.history
+	if line.command && col >= 2 {
+		pos.col = col - 2
+		return pos
+	}
+	if line.command {
+		pos.col = 0
+		return pos
+	}
+	pos.col = col
+	return pos
+}
+
+func (o *overlayState) hasSelection() bool {
+	if o == nil {
+		return false
+	}
+	return o.selectStart.line >= 0 && o.selectEnd.line >= 0 &&
+		(o.selectStart.line != o.selectEnd.line || o.selectStart.col != o.selectEnd.col)
+}
+
+func (o *overlayState) selectionBounds() (overlaySelectionPos, overlaySelectionPos, bool) {
+	if o == nil || o.selectStart.line < 0 || o.selectEnd.line < 0 {
+		return overlaySelectionPos{}, overlaySelectionPos{}, false
+	}
+	start, end := o.selectStart, o.selectEnd
+	if end.line < start.line || (end.line == start.line && end.col < start.col) {
+		start, end = end, start
+	}
+	return start, end, true
+}
+
+func (o *overlayState) selectedText() []rune {
+	start, end, ok := o.selectionBounds()
+	if !ok {
+		return nil
+	}
+	var out []rune
+	for i := start.line; i <= end.line && i < len(o.history); i++ {
+		if i < 0 {
+			continue
+		}
+		text := []rune(o.history[i].text)
+		lineStart := 0
+		lineEnd := len(text)
+		if i == start.line {
+			lineStart = start.col
+		}
+		if i == end.line {
+			lineEnd = end.col
+		}
+		if lineStart < 0 {
+			lineStart = 0
+		}
+		if lineStart > len(text) {
+			lineStart = len(text)
+		}
+		if lineEnd < lineStart {
+			lineEnd = lineStart
+		}
+		if lineEnd > len(text) {
+			lineEnd = len(text)
+		}
+		out = append(out, text[lineStart:lineEnd]...)
+		if i < end.line {
+			out = append(out, '\n')
+		}
+	}
+	return out
 }
 
 func (o *overlayState) findCommand(n int) int {

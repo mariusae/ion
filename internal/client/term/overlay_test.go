@@ -113,18 +113,55 @@ func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
 		overlay.addOutput(string(rune('a' + i)))
 	}
 
-	if got, want := overlay.renderLines(3), []string{"d", "e", "f"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"d", "e", "f"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(tail) = %q, want %q", got, want)
 	}
 
 	overlay.scrollOlder(2)
-	if got, want := overlay.renderLines(3), []string{"b", "c", "d"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"b", "c", "d"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(scrolled) = %q, want %q", got, want)
 	}
 
 	overlay.scrollNewer(1)
-	if got, want := overlay.renderLines(3), []string{"c", "d", "e"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"c", "d", "e"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(partial return) = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
+	prev := termRows
+	termRows = 10
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("alpha")
+	overlay.addCommand("b")
+
+	pos := overlay.screenToPos(overlayTopRow(overlay), 2)
+	if pos.line != 0 || pos.col != 2 {
+		t.Fatalf("screenToPos(output) = (%d, %d), want (0, 2)", pos.line, pos.col)
+	}
+
+	pos = overlay.screenToPos(overlayTopRow(overlay)+1, 3)
+	if pos.line != 1 || pos.col != 1 {
+		t.Fatalf("screenToPos(command) = (%d, %d), want (1, 1)", pos.line, pos.col)
+	}
+}
+
+func TestOverlaySelectedTextSpansLines(t *testing.T) {
+	overlay := newOverlayState()
+	overlay.history = []overlayEntry{
+		{text: "alpha"},
+		{command: true, text: "beta"},
+	}
+	overlay.selectStart = overlaySelectionPos{line: 0, col: 2}
+	overlay.selectEnd = overlaySelectionPos{line: 1, col: 2}
+
+	if got, want := string(overlay.selectedText()), "pha\nbe"; got != want {
+		t.Fatalf("selectedText() = %q, want %q", got, want)
 	}
 }
 
@@ -138,4 +175,12 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func overlayTexts(lines []overlayRenderLine) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, line.text)
+	}
+	return out
 }

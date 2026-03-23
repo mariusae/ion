@@ -424,8 +424,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		switch event.button {
 		case 64:
 			overlay.scrollOlder(3)
+			overlay.selecting = false
 		case 65:
 			overlay.scrollNewer(3)
+			overlay.selecting = false
+		default:
+			if event.button >= 32 && event.button < 64 {
+				if overlay.selecting {
+					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
+				}
+				return true
+			}
+			if event.button&3 == 0 {
+				if event.pressed {
+					pos := overlay.screenToPos(event.y, event.x)
+					if pos.line >= 0 {
+						overlay.selecting = true
+						overlay.selectStart = pos
+						overlay.selectEnd = pos
+						return true
+					}
+				} else if overlay.selecting {
+					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
+					overlay.selecting = false
+					_ = copyToClipboard(stdout, overlay.selectedText())
+					return true
+				}
+			}
 		}
 		return true
 	}
@@ -1095,7 +1120,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		for row := 0; row < height-1; row++ {
 			line := ""
 			if row < len(lines) {
-				line = lines[row]
+				line = lines[row].text
 			}
 			if err := drawHUDLine(stdout, startRow+row-1, line, theme.hudPrefix(), theme); err != nil {
 				return err

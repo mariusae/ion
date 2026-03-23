@@ -8,6 +8,7 @@ import (
 
 	"ion/internal/client/download"
 	"ion/internal/client/term"
+	serversession "ion/internal/server/session"
 	"ion/internal/server/workspace"
 )
 
@@ -56,10 +57,12 @@ func parseArgs(args []string) (config, error) {
 }
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	return download.Run(cfg.files, stdin, stderr, workspace.New(stdout, stderr))
+	ws := workspace.New()
+	return download.Run(cfg.files, stdin, stderr, serversession.NewDownload(ws, stdout, stderr))
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	capture := term.NewOutputCapture(stdout, stderr)
-	return term.Run(cfg.files, stdin, stdout, stderr, workspace.New(capture.Stdout(), capture.Stderr()), capture)
+	ws := workspace.New()
+	return term.Run(cfg.files, stdin, stdout, stderr, serversession.NewTerm(ws, capture.Stdout(), capture.Stderr()), capture)
 }

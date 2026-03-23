@@ -15,17 +15,19 @@ type overlayEntry struct {
 }
 
 type overlayState struct {
-	visible     bool
-	input       []rune
-	cursor      int
-	history     []overlayEntry
-	scroll      int
-	selecting   bool
-	selectBtn2  bool
-	selectStart overlaySelectionPos
-	selectEnd   overlaySelectionPos
-	recallIdx   int
-	savedInput  []rune
+	visible      bool
+	input        []rune
+	cursor       int
+	history      []overlayEntry
+	scroll       int
+	running      bool
+	spinnerFrame int
+	selecting    bool
+	selectBtn2   bool
+	selectStart  overlaySelectionPos
+	selectEnd    overlaySelectionPos
+	recallIdx    int
+	savedInput   []rune
 }
 
 type overlaySelectionPos struct {
@@ -59,6 +61,8 @@ func (o *overlayState) open(prefill string) {
 func (o *overlayState) close() {
 	o.visible = false
 	o.scroll = 0
+	o.running = false
+	o.spinnerFrame = 0
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -70,6 +74,8 @@ func (o *overlayState) close() {
 func (o *overlayState) clearHistory() {
 	o.history = nil
 	o.scroll = 0
+	o.running = false
+	o.spinnerFrame = 0
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -225,11 +231,18 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 	if limit <= 0 {
 		return nil
 	}
+	historyLimit := limit
+	if o.running {
+		historyLimit--
+		if historyLimit < 0 {
+			historyLimit = 0
+		}
+	}
 	end := len(o.history) - o.scroll
 	if end < 0 {
 		end = 0
 	}
-	start := end - limit
+	start := end - historyLimit
 	if start < 0 {
 		start = 0
 	}
@@ -246,6 +259,9 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		}
 		line.text = entry.text
 		lines = append(lines, line)
+	}
+	if o.running && len(lines) < limit {
+		lines = append(lines, overlayRenderLine{text: string(o.spinner()), history: -1})
 	}
 	return lines
 }
@@ -265,6 +281,9 @@ func (o *overlayState) scrollOlder(lines int) {
 		return
 	}
 	limit := overlayHeight(o) - 1
+	if o.running {
+		limit--
+	}
 	o.scroll += lines
 	if max := o.maxScroll(limit); o.scroll > max {
 		o.scroll = max
@@ -293,6 +312,9 @@ func overlayHeight(o *overlayState) int {
 		return 0
 	}
 	height := len(o.history) + 1
+	if o.running {
+		height++
+	}
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
@@ -452,6 +474,28 @@ func tokenRune(r rune) bool {
 
 func trimOverlaySelection(text []rune) string {
 	return strings.TrimSpace(string(text))
+}
+
+func (o *overlayState) setRunning(running bool) {
+	o.running = running
+	if !running {
+		o.spinnerFrame = 0
+	}
+}
+
+func (o *overlayState) advanceSpinner() {
+	if !o.running {
+		return
+	}
+	o.spinnerFrame++
+}
+
+func (o *overlayState) spinner() []rune {
+	frames := []rune{'|', '/', '-', '\\'}
+	if len(frames) == 0 {
+		return []rune("running")
+	}
+	return []rune(string(frames[o.spinnerFrame%len(frames)]) + " running")
 }
 
 func (o *overlayState) findCommand(n int) int {

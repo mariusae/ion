@@ -224,6 +224,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	submitOverlay := func() (bool, error) {
+		type overlayResult struct {
+			done bool
+			err  error
+		}
+
 		line := string(overlay.input)
 		if len(overlay.input) == 0 {
 			last, ok := overlay.lastCommand()
@@ -237,24 +242,66 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		pending = append(pending, []rune(line)...)
 		pending = append(pending, '\n')
 		overlay.resetInput()
-		if capture != nil {
-			capture.Start(func(line string) {
-				overlay.addOutput(line)
-			})
-		}
-		done, err := executePending(false)
-		if capture != nil {
-			capture.Stop()
-		}
-		if err != nil {
+		lineCh := make(chan string, 64)
+		resultCh := make(chan overlayResult, 1)
+		overlay.setRunning(true)
+		if err := redraw(); err != nil {
 			return false, err
 		}
-		if !done {
-			if err := refreshBuffer(); err != nil {
-				return false, err
+
+		go func() {
+			if capture != nil {
+				capture.Start(func(line string) {
+					lineCh <- line
+				})
+			}
+			done, err := executePending(false)
+			if capture != nil {
+				capture.Stop()
+			}
+			resultCh <- overlayResult{done: done, err: err}
+		}()
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case line := <-lineCh:
+				overlay.addOutput(line)
+				if err := redraw(); err != nil {
+					overlay.setRunning(false)
+					return false, err
+				}
+			case <-ticker.C:
+				overlay.advanceSpinner()
+				if err := redraw(); err != nil {
+					overlay.setRunning(false)
+					return false, err
+				}
+			case result := <-resultCh:
+				for {
+					select {
+					case line := <-lineCh:
+						overlay.addOutput(line)
+					default:
+						overlay.setRunning(false)
+						if result.err != nil {
+							return false, result.err
+						}
+						if !result.done {
+							if err := refreshBuffer(); err != nil {
+								return false, err
+							}
+						}
+						if err := redraw(); err != nil {
+							return false, err
+						}
+						return result.done, nil
+					}
+				}
 			}
 		}
-		return done, nil
 	}
 
 	showMenu := func(clickX, clickY int) error {

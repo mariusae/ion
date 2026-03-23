@@ -98,6 +98,11 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	if got, want := overlayHeight(overlay), termRows/2; got != want {
 		t.Fatalf("overlayHeight(full) = %d, want %d", got, want)
 	}
+
+	overlay.setRunning(true)
+	if got, want := overlayHeight(overlay), termRows/2; got != want {
+		t.Fatalf("overlayHeight(running) = %d, want %d", got, want)
+	}
 }
 
 func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
@@ -179,6 +184,30 @@ func TestOverlayTokenAtTrimsSuffixGarbage(t *testing.T) {
 func TestTrimOverlaySelection(t *testing.T) {
 	if got, want := trimOverlaySelection([]rune("  alpha beta \n")), "alpha beta"; got != want {
 		t.Fatalf("trimOverlaySelection() = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
+	prev := termRows
+	termRows = 10
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("alpha")
+	overlay.setRunning(true)
+
+	lines := overlay.renderLines(3)
+	if got, want := overlayTexts(lines), []string{"alpha", "| running"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(spinner) = %q, want %q", got, want)
+	}
+
+	overlay.advanceSpinner()
+	lines = overlay.renderLines(3)
+	if got, want := lines[len(lines)-1].text, "/ running"; got != want {
+		t.Fatalf("spinner frame = %q, want %q", got, want)
 	}
 }
 

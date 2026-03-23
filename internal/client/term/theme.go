@@ -251,6 +251,13 @@ func (t *uiTheme) outputPrefix() string {
 	return t.prefixFor(t.outputBG)
 }
 
+func (t *uiTheme) commandPrefix() string {
+	if t == nil {
+		return ""
+	}
+	return sgr("1", t.bgCode(t.hudBG))
+}
+
 func (t *uiTheme) titlePrefix() string {
 	if t == nil {
 		return ""

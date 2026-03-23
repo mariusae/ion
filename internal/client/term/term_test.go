@@ -237,6 +237,51 @@ func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 	}
 }
 
+func TestDrawOverlayHistoryLineBoldsCommittedCommand(t *testing.T) {
+	prevCols := termCols
+	termCols = 20
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	line := overlayRenderLine{text: ",p", history: 0, command: true}
+
+	var out bytes.Buffer
+	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayHistoryLine() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, theme.commandPrefix()+",p") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want bold committed command with overlay tint", got)
+	}
+}
+
+func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.input = []rune(",p")
+
+	var out bytes.Buffer
+	if err := drawOverlayPrompt(&out, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayPrompt() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.hudPrefix()+"› ,p") {
+		t.Fatalf("drawOverlayPrompt() = %q, want chevron prompt with overlay tint", got)
+	}
+	if strings.Contains(got, "\x1b[1;") {
+		t.Fatalf("drawOverlayPrompt() = %q, want non-bold live prompt", got)
+	}
+}
+
 func TestOverlayRenderLinesRespectsUpdatedTerminalHeight(t *testing.T) {
 	prev := termRows
 	termRows = 8

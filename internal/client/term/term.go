@@ -1267,10 +1267,15 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return err
 	}
 	if theme == nil {
-		prefix := ""
+		prefix := overlayLinePrefix(nil, line.command)
 		runes := []rune(line.text)
 		selected := false
 		col := 0
+		if prefix != "" {
+			if _, err := io.WriteString(stdout, prefix); err != nil {
+				return err
+			}
+		}
 		for i, r := range runes {
 			if col >= termCols {
 				break
@@ -1313,10 +1318,15 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 				return err
 			}
 		}
+		if prefix != "" {
+			if _, err := io.WriteString(stdout, styleReset()); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
-	prefix := theme.hudPrefix()
+	prefix := overlayLinePrefix(theme, line.command)
 	if prefix != "" {
 		if _, err := io.WriteString(stdout, prefix); err != nil {
 			return err
@@ -1405,17 +1415,12 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 		return err
 	}
 	if theme != nil {
-		if _, err := io.WriteString(stdout, theme.titlePrefix()); err != nil {
-			return err
-		}
-	}
-	if _, err := io.WriteString(stdout, ": "); err != nil {
-		return err
-	}
-	if theme != nil {
 		if _, err := io.WriteString(stdout, theme.hudPrefix()); err != nil {
 			return err
 		}
+	}
+	if _, err := io.WriteString(stdout, "› "); err != nil {
+		return err
 	}
 	col := 2
 	for _, r := range overlay.input {
@@ -1433,6 +1438,19 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 		}
 	}
 	return nil
+}
+
+func overlayLinePrefix(theme *uiTheme, command bool) string {
+	if command {
+		if theme != nil {
+			return theme.commandPrefix()
+		}
+		return "\x1b[1m"
+	}
+	if theme != nil {
+		return theme.hudPrefix()
+	}
+	return ""
 }
 
 func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme) error {

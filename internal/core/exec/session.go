@@ -758,10 +758,10 @@ func (s *Session) shellPipeIn(f *text.File, a ionaddr.Address, token *text.Strin
 	if err := s.replaceWithShellOutput(f, a, res.Stdout); err != nil {
 		return err
 	}
-	if err := s.writeShellWarnings(res, true); err != nil {
+	if err := s.writeShellStreams(res, false); err != nil {
 		return err
 	}
-	if err := s.writeShellStreams(res, false); err != nil {
+	if err := s.writeShellWarnings(res, true); err != nil {
 		return err
 	}
 	return s.printShellPrompt()
@@ -802,10 +802,10 @@ func (s *Session) shellPipe(f *text.File, a ionaddr.Address, token *text.String)
 	if err := s.replaceWithShellOutput(f, a, res.Stdout); err != nil {
 		return err
 	}
-	if err := s.writeShellWarnings(res, true); err != nil {
+	if err := s.writeShellStreams(res, false); err != nil {
 		return err
 	}
-	if err := s.writeShellStreams(res, false); err != nil {
+	if err := s.writeShellWarnings(res, true); err != nil {
 		return err
 	}
 	return s.printShellPrompt()
@@ -821,10 +821,10 @@ func (s *Session) shellFileList(src string) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if err := s.writeShellWarnings(res, true); err != nil {
+	if err := s.writeShellStreams(res, false); err != nil {
 		return "", nil, err
 	}
-	if err := s.writeShellStreams(res, false); err != nil {
+	if err := s.writeShellWarnings(res, true); err != nil {
 		return "", nil, err
 	}
 	if err := s.printShellPrompt(); err != nil {
@@ -2106,6 +2106,7 @@ func (s *Session) resolveShellCommand(token *text.String) (string, error) {
 
 func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captureStdout bool) (shellResult, error) {
 	c := osexec.Command("/bin/sh", "-c", cmd)
+	c.Args[0] = "sh"
 	c.Env = append(os.Environ(), shellEnv(f)...)
 	if stdin != nil {
 		c.Stdin = bytes.NewReader(stdin)

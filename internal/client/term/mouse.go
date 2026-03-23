@@ -103,6 +103,8 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 		return keyAltLeft, nil, nil
 	case 'f':
 		return keyAltRight, nil, nil
+	case 'v':
+		return keyAltPageUp, nil, nil
 	case 'w':
 		return keyAltSnarf, nil, nil
 	case 0x08, 0x7f:

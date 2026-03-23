@@ -973,6 +973,72 @@ func TestIonTermBufferModeMouseScroll(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeAltVPagesUp(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	var text strings.Builder
+	for i := 1; i <= 60; i++ {
+		text.WriteString(fmt.Sprintf("line%03d\n", i))
+	}
+	if err := os.WriteFile(path, []byte(text.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("line001", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[B"); err != nil {
+		t.Fatalf("page down before Alt-V: %v", err)
+	}
+	if _, err := sess.WaitFor("line025", 2*time.Second); err != nil {
+		t.Fatalf("wait for paged-down buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bv"); err != nil {
+		t.Fatalf("send Alt-V: %v", err)
+	}
+	if _, err := sess.WaitFor("line001", 2*time.Second); err != nil {
+		t.Fatalf("wait for paged-up buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bq\n"); err != nil {
+		t.Fatalf("exit buffer mode and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermBufferModeContextMenuOpenAndDismiss(t *testing.T) {
 	t.Parallel()
 

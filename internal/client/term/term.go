@@ -29,6 +29,7 @@ const (
 	keyMouse
 	keyAltLeft
 	keyAltRight
+	keyAltPageUp
 	keyAltSnarf
 	keyAltBackspace
 )
@@ -1239,6 +1240,9 @@ func handleBufferKey(state *bufferState, key int) {
 	case keyAltRight:
 		state.cursor = nextWordStart(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
+	case keyAltPageUp:
+		state.cursor = movePageUp(state.text, state.cursor, rows)
+		state.origin = lineStart(state.text, state.cursor)
 	}
 	updateSelection(state)
 }

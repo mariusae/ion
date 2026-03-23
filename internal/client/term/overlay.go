@@ -476,6 +476,17 @@ func trimOverlaySelection(text []rune) string {
 	return strings.TrimSpace(string(text))
 }
 
+func isOverlayClickSelection(start, end overlaySelectionPos) bool {
+	if start.line < 0 || end.line < 0 || start.line != end.line {
+		return false
+	}
+	delta := start.col - end.col
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= 1
+}
+
 func (o *overlayState) setRunning(running bool) {
 	o.running = running
 	if !running {

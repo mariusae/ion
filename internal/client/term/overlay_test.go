@@ -187,6 +187,23 @@ func TestTrimOverlaySelection(t *testing.T) {
 	}
 }
 
+func TestIsOverlayClickSelection(t *testing.T) {
+	t.Parallel()
+
+	if !isOverlayClickSelection(
+		overlaySelectionPos{line: 1, col: 4},
+		overlaySelectionPos{line: 1, col: 5},
+	) {
+		t.Fatalf("isOverlayClickSelection() = false, want true for tiny same-line wobble")
+	}
+	if isOverlayClickSelection(
+		overlaySelectionPos{line: 1, col: 4},
+		overlaySelectionPos{line: 2, col: 4},
+	) {
+		t.Fatalf("isOverlayClickSelection() = true, want false across lines")
+	}
+}
+
 func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
 	prev := termRows
 	termRows = 10

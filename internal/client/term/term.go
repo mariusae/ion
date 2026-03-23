@@ -514,7 +514,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.selectBtn2 = false
 						token := ""
 						start, end, ok := overlay.selectionBounds()
-						if ok && start.line == end.line && start.col == end.col {
+						if ok && isOverlayClickSelection(start, end) {
 							token = overlay.tokenAt(start)
 						} else {
 							token = trimOverlaySelection(overlay.selectedText())

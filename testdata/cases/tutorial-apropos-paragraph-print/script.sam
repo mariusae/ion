@@ -1,0 +1,15 @@
+a
+command name="append-to-file", key="[unbound]"
+Takes the contents of the current buffer and appends it to the
+named file. If the file doesn't exist, it will be created.
+
+command name="apropos", key="ESC-?"
+Prompts for a keyword and then prints a list of those commands
+whose short description contains that keyword. For example,
+if you forget which commands deal with windows, just type
+"@b[ESC-?]@t[window]@b[ESC]".
+
+and so on
+.
+,x/(.+\n)+/ g/command name="apropos"/p
+q

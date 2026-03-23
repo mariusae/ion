@@ -217,13 +217,13 @@ func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
 	overlay.setRunning(true)
 
 	lines := overlay.renderLines(3)
-	if got, want := overlayTexts(lines), []string{"alpha", "| running"}; !equalStrings(got, want) {
+	if got, want := overlayTexts(lines), []string{"alpha", "⠋ running"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(spinner) = %q, want %q", got, want)
 	}
 
 	overlay.advanceSpinner()
 	lines = overlay.renderLines(3)
-	if got, want := lines[len(lines)-1].text, "/ running"; got != want {
+	if got, want := lines[len(lines)-1].text, "⠙ running"; got != want {
 		t.Fatalf("spinner frame = %q, want %q", got, want)
 	}
 }

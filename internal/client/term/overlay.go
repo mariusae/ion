@@ -502,7 +502,7 @@ func (o *overlayState) advanceSpinner() {
 }
 
 func (o *overlayState) spinner() []rune {
-	frames := []rune{'|', '/', '-', '\\'}
+	frames := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
 	if len(frames) == 0 {
 		return []rune("running")
 	}

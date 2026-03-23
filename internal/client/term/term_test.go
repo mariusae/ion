@@ -239,6 +239,24 @@ func TestPositionTerminalCursorShowsCursorWhenNotRunning(t *testing.T) {
 	}
 }
 
+func TestOverlayRunningLineRowAccountsForTopPadding(t *testing.T) {
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addCommand("!sleep 4")
+	overlay.setRunning(true)
+
+	lines := overlay.renderLines(overlayHistoryRows(overlay))
+	if got, want := overlayRunningLineRow(overlay, lines), overlayTopRow(overlay)+overlayTopPadRows(overlay); got != want {
+		t.Fatalf("overlayRunningLineRow() = %d, want %d", got, want)
+	}
+}
+
 func TestBuildThemeUsesOverlayAndOutputTintsInLightMode(t *testing.T) {
 	t.Parallel()
 

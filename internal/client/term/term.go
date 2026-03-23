@@ -212,12 +212,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return nil
 		}
 		lines := overlay.renderLines(overlayHistoryRows(overlay))
-		topRow := overlayTopRow(overlay)
-		for idx, line := range lines {
+		row := overlayRunningLineRow(overlay, lines)
+		for _, line := range lines {
 			if !line.running {
 				continue
 			}
-			if err := drawOverlayHistoryLine(stdout, topRow+idx, line, overlay, theme); err != nil {
+			if err := drawOverlayHistoryLine(stdout, row, line, overlay, theme); err != nil {
 				return err
 			}
 			return positionTerminalCursor(stdout, buffer, overlay)
@@ -1693,6 +1693,19 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 		break
 	}
 	return max(viewRows-1, 0), 0
+}
+
+func overlayRunningLineRow(overlay *overlayState, lines []overlayRenderLine) int {
+	if overlay == nil || !overlay.visible {
+		return -1
+	}
+	baseRow := overlayTopRow(overlay) + overlayTopPadRows(overlay)
+	for idx, line := range lines {
+		if line.running {
+			return baseRow + idx
+		}
+	}
+	return -1
 }
 
 func highlightPrefix(theme *uiTheme, cursor bool) string {

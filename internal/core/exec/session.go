@@ -324,9 +324,6 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (ok bool, err error) {
 
 func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Address, error) {
 	f := s.Current
-	if f == nil && commandNeedsCurrent(cmd.Cmdc) {
-		return nil, ionaddr.Address{}, fmt.Errorf("no current file")
-	}
 
 	eval := &ionaddr.Evaluator{
 		Files:   s.Files,
@@ -345,6 +342,9 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 	}
 	if ap == nil {
 		if f == nil {
+			if commandNeedsCurrent(cmd.Cmdc) {
+				return nil, ionaddr.Address{}, fmt.Errorf("no current file")
+			}
 			return nil, ionaddr.Address{}, nil
 		}
 		if commandNeedsCurrent(cmd.Cmdc) {
@@ -354,9 +354,13 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 		}
 		return f, ionaddr.Address{F: f, R: f.Dot}, nil
 	}
-	base := ionaddr.Address{F: f, R: f.Dot}
+	base := ionaddr.Address{}
 	if f == nil {
-		base = ionaddr.Address{}
+		if commandNeedsCurrent(cmd.Cmdc) && !addressStartsWithFileSelector(ap) {
+			return nil, ionaddr.Address{}, fmt.Errorf("no current file")
+		}
+	} else {
+		base = ionaddr.Address{F: f, R: f.Dot}
 	}
 	a, err := eval.Resolve(ap, base, 0)
 	if err != nil {
@@ -366,6 +370,20 @@ func (s *Session) resolveCommandAddress(cmd *ioncmd.Cmd) (*text.File, ionaddr.Ad
 		return nil, ionaddr.Address{}, err
 	}
 	return a.F, a, nil
+}
+
+func addressStartsWithFileSelector(ap *ionaddr.Addr) bool {
+	if ap == nil {
+		return false
+	}
+	switch ap.Type {
+	case '"':
+		return true
+	case ',', ';':
+		return addressStartsWithFileSelector(ap.Left)
+	default:
+		return false
+	}
 }
 
 func (s *Session) display(f *text.File, a ionaddr.Address) error {
@@ -1310,17 +1328,23 @@ func (s *Session) openFiles(nameToken *text.String) error {
 	}
 	if len(fields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
-			if lineNo > 0 || colNo > 0 {
-				return s.openNamelessFileFromPath(fields[0], lineNo, colNo)
-			}
-			if lineNo == 0 && colNo == 0 {
-				return s.openNamelessFile()
+			if shouldOpenNamelessForCurrent(current) {
+				if lineNo > 0 || colNo > 0 {
+					return s.openNamelessFileFromPath(fields[0], lineNo, colNo)
+				}
+				if lineNo == 0 && colNo == 0 {
+					return s.openNamelessFile()
+				}
 			}
 		}
 	}
 	var current *text.File
+	currentExisted := false
+	currentWasUnread := false
 	for _, name := range fields {
 		f := s.findFileByName(name)
+		existed := f != nil
+		wasUnread := existed && f.Unread
 		if f == nil {
 			d, err := text.NewDisk()
 			if err != nil {
@@ -1334,6 +1358,8 @@ func (s *Session) openFiles(nameToken *text.String) error {
 			s.AddFile(f)
 		}
 		current = f
+		currentExisted = existed
+		currentWasUnread = wasUnread
 	}
 	s.Current = current
 	if current == nil {
@@ -1341,6 +1367,9 @@ func (s *Session) openFiles(nameToken *text.String) error {
 	}
 	if current.Unread {
 		if err := loadUnreadFile(current); err != nil {
+			if statusErr := s.printFileStatus(current, true); statusErr != nil {
+				return statusErr
+			}
 			return err
 		}
 	}
@@ -1348,6 +1377,9 @@ func (s *Session) openFiles(nameToken *text.String) error {
 		if err := setFilePosition(current, lineNo, colNo); err != nil {
 			return err
 		}
+	}
+	if currentExisted && !currentWasUnread {
+		return s.printFileStatusName(current.Mod, true, "")
 	}
 	return s.printFileStatus(current, true)
 }
@@ -1410,6 +1442,13 @@ func setFilePosition(f *text.File, lineNo, colNo int) error {
 	return nil
 }
 
+func shouldOpenNamelessForCurrent(f *text.File) bool {
+	if f == nil {
+		return false
+	}
+	return f.StatKnown || f.Mod || f.B.Len() > 0
+}
+
 func (s *Session) closeFiles(nameToken *text.String) error {
 	fields, noArg, emptyList, err := s.loadFileList(nameToken)
 	if err != nil {
@@ -1427,6 +1466,9 @@ func (s *Session) closeFiles(nameToken *text.String) error {
 	for _, name := range fields {
 		f := s.findFileByName(name)
 		if f == nil {
+			if err := s.printNoSuchFileWarning(name); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := s.removeFile(f); err != nil {
@@ -1584,6 +1626,11 @@ func (s *Session) hasDuplicateNameExcept(name string, skip *text.File) bool {
 
 func (s *Session) printDuplicateNameWarning(name string) error {
 	_, err := fmt.Fprintf(s.Diag, "?warning: duplicate file name `%s'\n", name)
+	return err
+}
+
+func (s *Session) printNoSuchFileWarning(name string) error {
+	_, err := fmt.Fprintf(s.Diag, "?warning: no such file `%s'\n", name)
 	return err
 }
 

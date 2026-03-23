@@ -501,6 +501,7 @@ func (s *Session) applyFrame(frame *execFrame) error {
 			return err
 		}
 	}
+	s.sortFiles()
 	return nil
 }
 
@@ -1118,16 +1119,27 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 		return fmt.Errorf("no file")
 	}
 	name := trimToken(nameTokenUTF8(nameToken))
+	warnDup := false
 	if name != "" {
+		oldName := trimToken(f.Name.UTF8())
 		next := text.NewStringFromUTF8(name)
 		if err := s.mutate(f, func(seq uint32) error {
 			return f.LogSetName(&next, seq)
 		}); err != nil {
 			return err
 		}
+		if name != oldName {
+			warnDup = s.hasDuplicateNameExcept(name, f)
+		}
 	}
 	if name != "" {
-		return s.printFileStatusName(f.Mod, true, name)
+		if err := s.printFileStatusName(f.Mod, true, name); err != nil {
+			return err
+		}
+		if warnDup {
+			return s.printDuplicateNameWarning(name)
+		}
+		return nil
 	}
 	return s.printFileStatus(f, true)
 }
@@ -1431,13 +1443,27 @@ func (s *Session) listFiles() error {
 }
 
 func (s *Session) warnDuplicateName(name string) {
+	if s.hasDuplicateNameExcept(name, nil) {
+		_ = s.printDuplicateNameWarning(name)
+	}
+}
+
+func (s *Session) hasDuplicateNameExcept(name string, skip *text.File) bool {
 	for _, f := range s.Files {
+		if f == skip {
+			continue
+		}
 		if trimToken(f.Name.UTF8()) != name {
 			continue
 		}
-		_, _ = fmt.Fprintf(s.Diag, "?warning: duplicate file name `%s'\n", name)
-		return
+		return true
 	}
+	return false
+}
+
+func (s *Session) printDuplicateNameWarning(name string) error {
+	_, err := fmt.Fprintf(s.Diag, "?warning: duplicate file name `%s'\n", name)
+	return err
 }
 
 func (s *Session) printFileStatus(f *text.File, current bool) error {

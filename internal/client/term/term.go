@@ -700,9 +700,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		case '\n':
 			overlay.open("")
 			return false, redraw()
-		case ':':
-			overlay.open("")
-			return false, redraw()
 		case 0x18:
 			snarf = snarfSelection(buffer)
 			if len(snarf) == 0 {

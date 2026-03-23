@@ -917,7 +917,15 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 		return nil, err
 	}
 	next := newBufferState(view)
-	next.status = state.status
+	cursor := clampIndex(start+len([]rune(repl)), len(next.text))
+	next.cursor = cursor
+	next.dotStart = cursor
+	next.dotEnd = cursor
+	next.markMode = false
+	if state != nil {
+		next.origin = adjustOriginForCursor(next.text, state.origin, cursor, bufferRows)
+		next.status = state.status
+	}
 	return next, nil
 }
 

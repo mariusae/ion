@@ -55,10 +55,9 @@ func (f *fakeTermService) Replace(start, end int, text string) (wire.BufferView,
 	next := append([]rune{}, runes[:start]...)
 	next = append(next, []rune(text)...)
 	next = append(next, runes[end:]...)
-	cursor := start + len([]rune(text))
 	f.view.Text = string(next)
-	f.view.DotStart = cursor
-	f.view.DotEnd = cursor
+	f.view.DotStart = start
+	f.view.DotEnd = start + len([]rune(text))
 	return f.view, nil
 }
 
@@ -168,6 +167,12 @@ func TestApplyBufferKeyPrintableReplacesSelection(t *testing.T) {
 	if got, want := next.cursor, 1; got != want {
 		t.Fatalf("cursor = %d, want %d", got, want)
 	}
+	if got, want := next.dotStart, 1; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 1; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
 }
 
 func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
@@ -190,6 +195,35 @@ func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
 		t.Fatalf("buffer text = %q, want %q", got, want)
 	}
 	if got, want := next.cursor, 1; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyPrintableAdvancesAcrossRepeatedTyping(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, int('X'))
+	if err != nil {
+		t.Fatalf("first applyBufferKey() error = %v", err)
+	}
+	next, err = applyBufferKey(svc, next, int('Y'))
+	if err != nil {
+		t.Fatalf("second applyBufferKey() error = %v", err)
+	}
+
+	if got, want := string(next.text), "XYalpha\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 2; got != want {
 		t.Fatalf("cursor = %d, want %d", got, want)
 	}
 }

@@ -211,8 +211,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if overlay == nil || !overlay.visible || !overlay.running {
 			return nil
 		}
-		height := overlayHeight(overlay)
-		lines := overlay.renderLines(height - 1)
+		lines := overlay.renderLines(overlayHistoryRows(overlay))
 		topRow := overlayTopRow(overlay)
 		for idx, line := range lines {
 			if !line.running {
@@ -1225,10 +1224,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		}
 	}
 	if overlay != nil && overlay.visible {
-		height := overlayHeight(overlay)
-		lines := overlay.renderLines(height - 1)
+		historyRows := overlayHistoryRows(overlay)
+		lines := overlay.renderLines(historyRows)
 		startRow := viewRows + 1
-		for row := 0; row < height-1; row++ {
+		for row := 0; row < historyRows; row++ {
 			line := overlayRenderLine{}
 			if row < len(lines) {
 				line = lines[row]
@@ -1237,8 +1236,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 				return err
 			}
 		}
-		if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
-			return err
+		if overlayPromptRows(overlay) > 0 {
+			if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
+				return err
+			}
 		}
 		if err := drawMenu(stdout, menu, theme); err != nil {
 			return err
@@ -1575,16 +1576,20 @@ func shimmerPrefix(theme *uiTheme, index, length int) string {
 
 func shimmerIntensity(index, length int, elapsed time.Duration) float64 {
 	if length <= 0 {
-		return 0
+		return 0.28
 	}
 	sweep := float64(length + 20)
 	pos := math.Floor(math.Mod(elapsed.Seconds(), 2.0) / 2.0 * sweep)
 	iPos := float64(index + 10)
 	dist := math.Abs(iPos - pos)
 	if dist > 5 {
-		return 0
+		return 0.28
 	}
-	return 0.5 * (1 + math.Cos(math.Pi*dist/5))
+	t := 0.5 * (1 + math.Cos(math.Pi*dist/5))
+	if t < 0.28 {
+		return 0.28
+	}
+	return t
 }
 
 func contrastColor(bg rgbColor) rgbColor {
@@ -1638,6 +1643,9 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 
 func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {
 	if overlay != nil && overlay.visible {
+		if overlay.running {
+			return overlayTopRow(overlay), 0
+		}
 		col := 2 + overlay.cursor
 		if col > termCols-1 {
 			col = termCols - 1

@@ -105,6 +105,29 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	}
 }
 
+func TestOverlayHeightHidesPromptRowWhileRunning(t *testing.T) {
+	prev := termRows
+	termRows = 10
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addCommand("!sleep 5")
+	if got, want := overlayHeight(overlay), 2; got != want {
+		t.Fatalf("overlayHeight(idle) = %d, want %d", got, want)
+	}
+
+	overlay.setRunning(true)
+	if got, want := overlayHeight(overlay), 1; got != want {
+		t.Fatalf("overlayHeight(running) = %d, want %d", got, want)
+	}
+	if got, want := overlayHistoryRows(overlay), 1; got != want {
+		t.Fatalf("overlayHistoryRows(running) = %d, want %d", got, want)
+	}
+}
+
 func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
 	prev := termRows
 	termRows = 6

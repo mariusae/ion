@@ -373,5 +373,5 @@ func sgr(codes ...string) string {
 }
 
 func styleReset() string {
-	return "\x1b[49;22;24;27m"
+	return "\x1b[39;49;22;24;27m"
 }

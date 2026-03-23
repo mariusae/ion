@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/proto/wire"
 )
@@ -300,6 +301,22 @@ func TestDrawShimmerHUDLineRendersTextWithoutSpinnerGlyphs(t *testing.T) {
 	}
 	if strings.ContainsAny(got, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
 		t.Fatalf("drawShimmerHUDLine() = %q, want shimmer text instead of braille spinner", got)
+	}
+}
+
+func TestShimmerIntensityKeepsCommandVisibleOffBand(t *testing.T) {
+	t.Parallel()
+
+	if got := shimmerIntensity(0, 8, 1500*time.Millisecond); got < 0.28 {
+		t.Fatalf("shimmerIntensity() = %f, want >= 0.28", got)
+	}
+}
+
+func TestStyleResetClearsForegroundToo(t *testing.T) {
+	t.Parallel()
+
+	if got, want := styleReset(), "\x1b[39;49;22;24;27m"; got != want {
+		t.Fatalf("styleReset() = %q, want %q", got, want)
 	}
 }
 

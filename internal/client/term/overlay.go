@@ -276,10 +276,7 @@ func (o *overlayState) scrollOlder(lines int) {
 	if lines <= 0 {
 		return
 	}
-	limit := overlayHeight(o) - 1
-	if o.running {
-		limit--
-	}
+	limit := overlayHistoryRows(o)
 	o.scroll += lines
 	if max := o.maxScroll(limit); o.scroll > max {
 		o.scroll = max
@@ -303,14 +300,27 @@ func overlayTopRow(o *overlayState) int {
 	return termRows - overlayHeight(o)
 }
 
+func overlayPromptRows(o *overlayState) int {
+	if o == nil || !o.visible || o.running {
+		return 0
+	}
+	return 1
+}
+
+func overlayHistoryRows(o *overlayState) int {
+	height := overlayHeight(o)
+	promptRows := overlayPromptRows(o)
+	if height < promptRows {
+		return 0
+	}
+	return height - promptRows
+}
+
 func overlayHeight(o *overlayState) int {
 	if o == nil || !o.visible {
 		return 0
 	}
-	height := len(o.history) + 1
-	if o.running {
-		height++
-	}
+	height := len(o.history) + overlayPromptRows(o)
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
@@ -332,7 +342,7 @@ func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {
 	if o == nil || !o.visible {
 		return pos
 	}
-	lines := o.renderLines(overlayHeight(o) - 1)
+	lines := o.renderLines(overlayHistoryRows(o))
 	top := overlayTopRow(o)
 	lineRow := row - top
 	if lineRow < 0 || lineRow >= len(lines) {

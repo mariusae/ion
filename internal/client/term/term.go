@@ -631,6 +631,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.recallPrev()
 					case keyDown:
 						overlay.recallNext()
+					case keyPgUp:
+						overlay.scrollOlder(5)
+					case keyPgDn:
+						overlay.scrollNewer(5)
 					case keyDel:
 						overlay.deleteForward()
 					}

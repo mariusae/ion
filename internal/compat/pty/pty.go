@@ -108,6 +108,13 @@ func (s *Session) Snapshot() string {
 	return s.buf.String()
 }
 
+// ResetSnapshot discards captured output accumulated so far.
+func (s *Session) ResetSnapshot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf.Reset()
+}
+
 // WaitFor waits until the captured output contains substr.
 func (s *Session) WaitFor(substr string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)

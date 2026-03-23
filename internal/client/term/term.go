@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"ion/internal/core/cmdlang"
@@ -91,6 +93,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 	refreshTerminalSize()
+	winchCh := make(chan os.Signal, 1)
+	signal.Notify(winchCh, syscall.SIGWINCH)
+	defer signal.Stop(winchCh)
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -536,6 +541,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	for {
+		select {
+		case <-winchCh:
+			refreshTerminalSize()
+			if inBufferMode {
+				if err := redraw(); err != nil {
+					return err
+				}
+			}
+			continue
+		default:
+		}
 		r, _, err := reader.ReadRune()
 		if err != nil {
 			if errors.Is(err, io.EOF) {

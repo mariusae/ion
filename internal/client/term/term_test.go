@@ -157,6 +157,29 @@ func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	}
 }
 
+func TestOverlayRenderLinesRespectsUpdatedTerminalHeight(t *testing.T) {
+	prev := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 10; i++ {
+		overlay.addOutput("line")
+	}
+
+	if got, want := overlayHeight(overlay), 4; got != want {
+		t.Fatalf("overlayHeight(initial) = %d, want %d", got, want)
+	}
+
+	termRows = 20
+	if got, want := overlayHeight(overlay), 10; got != want {
+		t.Fatalf("overlayHeight(after resize) = %d, want %d", got, want)
+	}
+}
+
 func TestHandleBufferKeyCtrlAAndCtrlE(t *testing.T) {
 	t.Parallel()
 

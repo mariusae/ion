@@ -132,11 +132,7 @@ func (s *Session) Execute(cmd *ioncmd.Cmd) (ok bool, err error) {
 
 	case 'c':
 		if err := s.mutate(f, func(seq uint32) error {
-			if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
-				return err
-			}
-			f.NDot = text.Range{P1: a.R.P2, P2: a.R.P2}
-			return s.appendLogged(f, cmd.Text, a.R.P2, seq)
+			return s.replaceLogged(f, cmd.Text, a.R.P1, a.R.P2, seq)
 		}); err != nil {
 			return false, err
 		}
@@ -442,6 +438,19 @@ func (s *Session) appendLogged(f *text.File, txt *text.String, p text.Posn, seq 
 		}
 	}
 	f.NDot = text.Range{P1: p, P2: p + text.Posn(len(runes))}
+	return nil
+}
+
+func (s *Session) replaceLogged(f *text.File, txt *text.String, start, end text.Posn, seq uint32) error {
+	if end > start {
+		if err := f.LogDelete(start, end, seq); err != nil {
+			return err
+		}
+	}
+	if err := s.appendLogged(f, txt, end, seq); err != nil {
+		return err
+	}
+	f.NDot = text.Range{P1: start, P2: start + textStringLen(txt)}
 	return nil
 }
 
@@ -1182,16 +1191,13 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 				return err
 			}
 		}
-		if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
-			return err
-		}
-		if err := s.appendLogged(f, txt, a.R.P2, seq); err != nil {
+		if err := s.replaceLogged(f, txt, a.R.P1, a.R.P2, seq); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(data)); err != nil {
 			return err
 		}
-		f.NDot = text.Range{P1: a.R.P2, P2: a.R.P2 + runeCount}
+		f.NDot = text.Range{P1: a.R.P1, P2: a.R.P1 + runeCount}
 		return nil
 	}); err != nil {
 		return err
@@ -1215,32 +1221,46 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	if name == "" {
 		return fmt.Errorf("no file name")
 	}
+	explicitName := trimToken(nameTokenUTF8(nameToken))
 	data, err := os.ReadFile(name)
 	if err != nil {
 		return openFileError(name, err)
 	}
-	if err := resetFileContents(f); err != nil {
+	txt, _, err := textStringFromBytes(data)
+	if err != nil {
 		return err
 	}
-	sname := text.NewStringFromUTF8(name)
-	if err := f.Name.DupString(&sname); err != nil {
-		return err
-	}
-	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+	if err := s.mutate(f, func(seq uint32) error {
+		end := text.Posn(f.B.Len())
+		if explicitName != "" {
+			sname := text.NewStringFromUTF8(name)
+			if err := f.LogSetName(&sname, seq); err != nil {
+				return err
+			}
+		}
+		if err := s.replaceLogged(f, txt, 0, end, seq); err != nil {
+			return err
+		}
+		f.NDot = text.Range{}
+		f.Mark = text.Range{}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if meta, ok, err := statFile(name); err != nil {
 		return err
 	} else if ok {
 		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+	} else {
+		f.ClearFileInfo()
 	}
-	f.Dot = text.Range{}
-	f.NDot = text.Range{}
-	f.Mark = text.Range{}
+	if !containsNullByte(data) {
+		f.MarkClean()
+	}
 	s.Current = f
 	s.QuitOK = !containsNullByte(data)
 	s.syncCloseOK(f)
-	return s.printFileStatus(f, true)
+	return s.printFileStatusName(f.Mod, true, name)
 }
 
 func (s *Session) changeDirectory(nameToken *text.String) error {
@@ -1662,18 +1682,12 @@ func (s *Session) ReplaceCurrent(start, end text.Posn, replacement string) (err 
 
 	f := s.Current
 	return s.mutate(f, func(seq uint32) error {
-		if end > start {
-			if err := f.LogDelete(start, end, seq); err != nil {
-				return err
-			}
-		}
 		if replacement == "" {
 			f.NDot = text.Range{P1: start, P2: start}
 			return nil
 		}
 		txt := text.NewStringFromUTF8(replacement)
-		f.NDot = text.Range{P1: end, P2: end}
-		return s.appendLogged(f, &txt, end, seq)
+		return s.replaceLogged(f, &txt, start, end, seq)
 	})
 }
 
@@ -1818,6 +1832,17 @@ func nameTokenUTF8(s *text.String) string {
 		return ""
 	}
 	return s.UTF8()
+}
+
+func textStringLen(s *text.String) text.Posn {
+	if s == nil {
+		return 0
+	}
+	runes := s.Runes()
+	if len(runes) > 0 && runes[len(runes)-1] == 0 {
+		return text.Posn(len(runes) - 1)
+	}
+	return text.Posn(len(runes))
 }
 
 func textStringFromBytes(data []byte) (*text.String, text.Posn, error) {
@@ -2093,19 +2118,12 @@ func (s *Session) printShellPrompt() error {
 }
 
 func (s *Session) replaceWithShellOutput(f *text.File, a ionaddr.Address, data []byte) error {
-	txt, runeCount, err := textStringFromBytesElidingNulls(data)
+	txt, _, err := textStringFromBytesElidingNulls(data)
 	if err != nil {
 		return err
 	}
 	return s.mutate(f, func(seq uint32) error {
-		if err := f.LogDelete(a.R.P1, a.R.P2, seq); err != nil {
-			return err
-		}
-		if err := s.appendLogged(f, txt, a.R.P2, seq); err != nil {
-			return err
-		}
-		f.NDot = text.Range{P1: a.R.P2, P2: a.R.P2 + runeCount}
-		return nil
+		return s.replaceLogged(f, txt, a.R.P1, a.R.P2, seq)
 	})
 }
 

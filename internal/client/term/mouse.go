@@ -178,7 +178,7 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 	switch event.button {
 	case 64:
 		for i := 0; i < 3; i++ {
-			next := prevLineStart(state.text, state.origin)
+			next := prevVisualRowStart(state.text, state.origin)
 			if next == state.origin {
 				break
 			}
@@ -187,7 +187,7 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 		return true
 	case 65:
 		for i := 0; i < 3; i++ {
-			next := nextLineStart(state.text, state.origin)
+			next := nextVisualRowStart(state.text, state.origin)
 			if next == state.origin {
 				break
 			}
@@ -250,15 +250,15 @@ func screenToPos(state *bufferState, overlay *overlayState, row, col int) (int, 
 	if col < 0 {
 		col = 0
 	}
-	p := state.origin
+	p := visualRowStartForPos(state.text, state.origin)
 	for i := 0; i < row; i++ {
-		next := nextLineStart(state.text, p)
+		next := nextVisualRowStart(state.text, p)
 		if next == p {
 			break
 		}
 		p = next
 	}
-	end := lineEnd(state.text, p)
+	end := visualRowEnd(state.text, p)
 	if col > end-p {
 		col = end - p
 	}

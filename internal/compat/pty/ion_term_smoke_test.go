@@ -886,11 +886,13 @@ func TestIonTermBufferModeSnarfAndPaste(t *testing.T) {
 	if err := sess.WriteString("\x11"); err != nil {
 		t.Fatalf("send Ctrl-Q: %v", err)
 	}
-	// Modified buffers require double q in command mode; save instead of quitting directly.
 	if _, err := sess.WaitFor("?changed files", 2*time.Second); err != nil {
 		t.Fatalf("wait for changed-files warning after Ctrl-Q: %v\n%s", err, sess.Snapshot())
 	}
-	if err := sess.WriteString("q\n"); err != nil {
+	if _, err := sess.WaitFor("› ", 2*time.Second); err != nil {
+		t.Fatalf("wait for HUD prompt after Ctrl-Q: %v\n%s", err, sess.Snapshot())
+	}
+	if err := sess.WriteString("q\r"); err != nil {
 		t.Fatalf("send second quit: %v", err)
 	}
 	if err := sess.WaitExit(2 * time.Second); err != nil {

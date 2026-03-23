@@ -64,3 +64,25 @@ func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 		t.Fatalf("dotEnd = %d, want %d", got, want)
 	}
 }
+
+func TestScreenToPosUsesWrappedRows(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 3
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "abcdef\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	pos, ok := screenToPos(state, nil, 1, 1)
+	if !ok {
+		t.Fatalf("screenToPos() ok = false, want true")
+	}
+	if got, want := pos, 4; got != want {
+		t.Fatalf("screenToPos() = %d, want %d", got, want)
+	}
+}

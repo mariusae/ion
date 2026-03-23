@@ -187,6 +187,29 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	}
 }
 
+func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/work/alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\x07") {
+		t.Fatalf("drawBufferMode() = %q, want basename-only window title", got)
+	}
+}
+
 func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	t.Parallel()
 
@@ -236,6 +259,26 @@ func TestPositionTerminalCursorShowsCursorWhenNotRunning(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[1;2H") {
 		t.Fatalf("positionTerminalCursor() = %q, want visible cursor positioning sequence", got)
+	}
+}
+
+func TestTerminalCursorPositionTracksWrappedRows(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 3
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "abcdef\n",
+		DotStart: 4,
+		DotEnd:   4,
+	})
+	state.origin = 0
+
+	row, col := terminalCursorPosition(state, nil)
+	if row != 1 || col != 1 {
+		t.Fatalf("terminalCursorPosition() = (%d, %d), want (1, 1)", row, col)
 	}
 }
 
@@ -471,6 +514,67 @@ func TestHandleBufferKeyCtrlAAndCtrlE(t *testing.T) {
 	handleBufferKey(state, 5)
 	if got, want := state.cursor, 10; got != want {
 		t.Fatalf("Ctrl-E cursor = %d, want %d", got, want)
+	}
+}
+
+func TestDrawBufferModeWrapsLongLines(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 3
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "abcdef\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[1;1H\x1b[2Kabc") {
+		t.Fatalf("drawBufferMode() = %q, want first wrapped row", got)
+	}
+	if !strings.Contains(got, "\x1b[2;1H\x1b[2Kdef") {
+		t.Fatalf("drawBufferMode() = %q, want second wrapped row", got)
+	}
+}
+
+func TestMoveLineDownUsesWrappedRows(t *testing.T) {
+	prevCols := termCols
+	termCols = 3
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	text := []rune("abcdef\ngh\n")
+	if got, want := moveLineDown(text, 1), 4; got != want {
+		t.Fatalf("moveLineDown(wrapped) = %d, want %d", got, want)
+	}
+	if got, want := moveLineDown(text, 4), 8; got != want {
+		t.Fatalf("moveLineDown(next line) = %d, want %d", got, want)
+	}
+}
+
+func TestHasDirtyFiles(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		menuFiles: []wire.MenuFile{
+			{Name: "clean.txt"},
+			{Name: "dirty.txt", Dirty: true},
+		},
+	}
+
+	dirty, err := hasDirtyFiles(svc)
+	if err != nil {
+		t.Fatalf("hasDirtyFiles() error = %v", err)
+	}
+	if !dirty {
+		t.Fatalf("hasDirtyFiles() = false, want true")
 	}
 }
 

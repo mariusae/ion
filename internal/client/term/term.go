@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -729,6 +730,24 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			return false, redraw()
 		case 0x11:
+			dirty, err := hasDirtyFiles(svc)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, redraw()
+			}
+			if dirty {
+				done, _, err := executeDirect("q\n", false)
+				if err != nil {
+					overlay.open("")
+					overlay.addOutput(diagnosticText(err))
+					return false, redraw()
+				}
+				if done {
+					return true, nil
+				}
+				overlay.open("")
+				return false, redraw()
+			}
 			done, _, err := executeDirect("q\n", false)
 			if err != nil {
 				buffer.status = diagnosticText(err)
@@ -1093,7 +1112,7 @@ func newBufferState(view wire.BufferView) *bufferState {
 	text := []rune(view.Text)
 	cursor := clampIndex(view.DotStart, len(text))
 	dotEnd := clampIndex(view.DotEnd, len(text))
-	origin := lineStart(text, cursor)
+	origin := visualRowStartForPos(text, cursor)
 	return &bufferState{
 		name:     view.Name,
 		text:     text,
@@ -1194,26 +1213,27 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if state == nil {
 		return nil
 	}
+	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(state.name)); err != nil {
+		return err
+	}
 	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25h\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
 		return err
 	}
 	viewRows := bufferViewRows(overlay)
-	p := state.origin
+	p := visualRowStartForPos(state.text, state.origin)
 	for row := 0; row < viewRows; row++ {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 			return err
 		}
 		if p <= len(state.text) {
-			lineEndPos := lineEnd(state.text, p)
-			if err := drawBufferLine(stdout, state, p, lineEndPos, theme); err != nil {
+			rowEnd := visualRowEnd(state.text, p)
+			if err := drawBufferLine(stdout, state, p, rowEnd, theme); err != nil {
 				return err
 			}
-			if p < len(state.text) {
-				next := nextLineStart(state.text, p)
-				if next != p {
-					p = next
-					continue
-				}
+			next := nextVisualRowStart(state.text, p)
+			if next != p {
+				p = next
+				continue
 			}
 			p = len(state.text) + 1
 		}
@@ -1671,24 +1691,29 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 		return 0, 0
 	}
 	row := 0
-	p := state.origin
+	p := visualRowStartForPos(state.text, state.origin)
 	viewRows := bufferViewRows(overlay)
 	for row < viewRows {
-		lineEndPos := lineEnd(state.text, p)
-		if state.cursor >= p && state.cursor <= lineEndPos {
+		rowEnd := visualRowEnd(state.text, p)
+		next := nextVisualRowStart(state.text, p)
+		cursorInRow := state.cursor >= p && state.cursor <= rowEnd
+		if next != p && next != rowEnd {
+			cursorInRow = state.cursor >= p && state.cursor < next
+		}
+		if cursorInRow {
 			col := state.cursor - p
+			if col >= bufferWrapCols() {
+				col = bufferWrapCols() - 1
+			}
 			if col > termCols-1 {
 				col = termCols - 1
 			}
 			return row, col
 		}
-		if p < len(state.text) {
-			next := nextLineStart(state.text, p)
-			if next != p {
-				p = next
-				row++
-				continue
-			}
+		if next != p {
+			p = next
+			row++
+			continue
 		}
 		break
 	}
@@ -1740,10 +1765,10 @@ func handleBufferKey(state *bufferState, key int) {
 		}
 	case keyUp, keyPgUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = lineStart(state.text, state.cursor)
+		state.origin = visualRowStartForPos(state.text, state.cursor)
 	case keyDown, keyPgDn:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = lineStart(state.text, state.cursor)
+		state.origin = visualRowStartForPos(state.text, state.cursor)
 	case 16:
 		state.cursor = moveLineUp(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -1768,7 +1793,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 22:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = lineStart(state.text, state.cursor)
+		state.origin = visualRowStartForPos(state.text, state.cursor)
 	case keyAltLeft:
 		state.cursor = prevWordStart(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -1777,14 +1802,14 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyAltPageUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = lineStart(state.text, state.cursor)
+		state.origin = visualRowStartForPos(state.text, state.cursor)
 	}
 	updateSelection(state)
 }
 
 func movePageUp(text []rune, pos, rows int) int {
 	for i := 0; i < rows; i++ {
-		next := prevLineStart(text, pos)
+		next := prevVisualRowStart(text, visualRowStartForPos(text, pos))
 		if next == pos {
 			break
 		}
@@ -1795,7 +1820,7 @@ func movePageUp(text []rune, pos, rows int) int {
 
 func movePageDown(text []rune, pos, rows int) int {
 	for i := 0; i < rows; i++ {
-		next := nextLineStart(text, pos)
+		next := nextVisualRowStart(text, visualRowStartForPos(text, pos))
 		if next == pos {
 			break
 		}
@@ -1805,41 +1830,159 @@ func movePageDown(text []rune, pos, rows int) int {
 }
 
 func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
-	if cursor < origin {
-		return lineStart(text, cursor)
+	origin = visualRowStartForPos(text, origin)
+	cursorRow := visualRowStartForPos(text, cursor)
+	if cursorRow < origin {
+		return cursorRow
 	}
 	p := origin
 	for i := 0; i < rows; i++ {
-		if cursor >= p && cursor <= lineEnd(text, p) {
+		if cursorRow == p {
 			return origin
 		}
-		next := nextLineStart(text, p)
+		next := nextVisualRowStart(text, p)
 		if next == p {
 			break
 		}
 		p = next
 	}
-	return lineStart(text, cursor)
+	return cursorRow
 }
 
 func moveLineUp(text []rune, pos int) int {
-	start := lineStart(text, pos)
+	start := visualRowStartForPos(text, pos)
 	if start == 0 {
 		return pos
 	}
 	col := pos - start
-	prev := prevLineStart(text, pos)
-	return linePosAtColumn(text, prev, col)
+	prev := prevVisualRowStart(text, start)
+	return visualRowPosAtColumn(text, prev, col)
 }
 
 func moveLineDown(text []rune, pos int) int {
-	start := lineStart(text, pos)
+	start := visualRowStartForPos(text, pos)
 	col := pos - start
-	next := nextLineStart(text, pos)
+	next := nextVisualRowStart(text, start)
 	if next == start {
 		return pos
 	}
-	return linePosAtColumn(text, next, col)
+	return visualRowPosAtColumn(text, next, col)
+}
+
+func bufferWrapCols() int {
+	if termCols < 1 {
+		return 1
+	}
+	return termCols
+}
+
+func visualRowEnd(text []rune, start int) int {
+	start = clampIndex(start, len(text))
+	end := start
+	for end < len(text) && text[end] != '\n' && end-start < bufferWrapCols() {
+		end++
+	}
+	return end
+}
+
+func nextVisualRowStart(text []rune, start int) int {
+	start = clampIndex(start, len(text))
+	end := visualRowEnd(text, start)
+	if end < len(text) && text[end] == '\n' {
+		return end + 1
+	}
+	if end > start {
+		return end
+	}
+	return start
+}
+
+func prevVisualRowStart(text []rune, start int) int {
+	start = clampIndex(start, len(text))
+	currentLineStart := lineStart(text, start)
+	if start > currentLineStart {
+		prev := start - bufferWrapCols()
+		if prev < currentLineStart {
+			prev = currentLineStart
+		}
+		return prev
+	}
+	if currentLineStart == 0 {
+		return 0
+	}
+	prevLine := prevLineStart(text, currentLineStart)
+	return lastVisualRowStart(text, prevLine)
+}
+
+func lastVisualRowStart(text []rune, start int) int {
+	end := lineEnd(text, start)
+	if end <= start {
+		return start
+	}
+	return start + ((end-start-1)/bufferWrapCols())*bufferWrapCols()
+}
+
+func visualRowStartForPos(text []rune, pos int) int {
+	pos = clampIndex(pos, len(text))
+	start := lineStart(text, pos)
+	end := lineEnd(text, start)
+	if pos > end {
+		pos = end
+	}
+	if pos == start {
+		return start
+	}
+	offset := pos - start
+	if pos == end {
+		offset--
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return start + (offset/bufferWrapCols())*bufferWrapCols()
+}
+
+func visualRowPosAtColumn(text []rune, start, col int) int {
+	if col < 0 {
+		col = 0
+	}
+	end := visualRowEnd(text, start)
+	pos := start + col
+	if pos > end {
+		return end
+	}
+	return pos
+}
+
+func hasDirtyFiles(svc wire.TermService) (bool, error) {
+	files, err := svc.MenuFiles()
+	if err != nil {
+		return false, err
+	}
+	for _, file := range files {
+		if file.Dirty {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func bufferWindowTitleSequence(name string) string {
+	title := filepath.Base(strings.TrimSpace(name))
+	if title == "." || title == string(filepath.Separator) {
+		title = ""
+	}
+	title = strings.Map(func(r rune) rune {
+		switch r {
+		case 0x07, 0x1b:
+			return -1
+		}
+		return r
+	}, title)
+	if title == "" {
+		title = "ion"
+	}
+	return "\x1b]2;" + title + "\x07"
 }
 
 func linePosAtColumn(text []rune, start, col int) int {

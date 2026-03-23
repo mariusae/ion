@@ -304,6 +304,20 @@ func (t *uiTheme) bgCode(bg rgbColor) string {
 	}
 }
 
+func (t *uiTheme) fgCode(fg rgbColor) string {
+	if t == nil {
+		return ""
+	}
+	switch t.mode {
+	case colorModeTrueColor:
+		return fmt.Sprintf("38;2;%d;%d;%d", fg.r, fg.g, fg.b)
+	case colorModeANSI256:
+		return fmt.Sprintf("38;5;%d", nearestANSI256(fg))
+	default:
+		return ""
+	}
+}
+
 func nearestANSI256(c rgbColor) int {
 	bestIndex := 0
 	bestDist := math.MaxFloat64

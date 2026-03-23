@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const minOverlayRows = 3
+const minOverlayRows = 1
 
 type overlayEntry struct {
 	command bool
@@ -15,19 +15,18 @@ type overlayEntry struct {
 }
 
 type overlayState struct {
-	visible      bool
-	input        []rune
-	cursor       int
-	history      []overlayEntry
-	scroll       int
-	running      bool
-	spinnerFrame int
-	selecting    bool
-	selectBtn2   bool
-	selectStart  overlaySelectionPos
-	selectEnd    overlaySelectionPos
-	recallIdx    int
-	savedInput   []rune
+	visible     bool
+	input       []rune
+	cursor      int
+	history     []overlayEntry
+	scroll      int
+	running     bool
+	selecting   bool
+	selectBtn2  bool
+	selectStart overlaySelectionPos
+	selectEnd   overlaySelectionPos
+	recallIdx   int
+	savedInput  []rune
 }
 
 type overlaySelectionPos struct {
@@ -40,6 +39,7 @@ type overlayRenderLine struct {
 	history int
 	command bool
 	offset  int
+	running bool
 }
 
 func newOverlayState() *overlayState {
@@ -63,7 +63,6 @@ func (o *overlayState) close() {
 	o.visible = false
 	o.scroll = 0
 	o.running = false
-	o.spinnerFrame = 0
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -76,7 +75,6 @@ func (o *overlayState) clearHistory() {
 	o.history = nil
 	o.scroll = 0
 	o.running = false
-	o.spinnerFrame = 0
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -263,7 +261,7 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		lines = append(lines, line)
 	}
 	if o.running && len(lines) < limit {
-		lines = append(lines, overlayRenderLine{text: string(o.spinner()), history: -1})
+		lines = append(lines, overlayRenderLine{text: "running", history: -1, running: true})
 	}
 	return lines
 }
@@ -487,24 +485,6 @@ func isOverlayClickSelection(start, end overlaySelectionPos) bool {
 
 func (o *overlayState) setRunning(running bool) {
 	o.running = running
-	if !running {
-		o.spinnerFrame = 0
-	}
-}
-
-func (o *overlayState) advanceSpinner() {
-	if !o.running {
-		return
-	}
-	o.spinnerFrame++
-}
-
-func (o *overlayState) spinner() []rune {
-	frames := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
-	if len(frames) == 0 {
-		return []rune("running")
-	}
-	return []rune(string(frames[o.spinnerFrame%len(frames)]) + " running")
 }
 
 func (o *overlayState) findCommand(n int) int {

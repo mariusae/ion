@@ -88,7 +88,7 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	}
 
 	overlay.visible = true
-	if got, want := overlayHeight(overlay), minOverlayRows; got != want {
+	if got, want := overlayHeight(overlay), 1; got != want {
 		t.Fatalf("overlayHeight(empty) = %d, want %d", got, want)
 	}
 
@@ -209,7 +209,7 @@ func TestIsOverlayClickSelection(t *testing.T) {
 	}
 }
 
-func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
+func TestOverlayRenderLinesIncludesRunningStatus(t *testing.T) {
 	prev := termRows
 	termRows = 10
 	t.Cleanup(func() {
@@ -222,14 +222,11 @@ func TestOverlayRenderLinesIncludesSpinner(t *testing.T) {
 	overlay.setRunning(true)
 
 	lines := overlay.renderLines(3)
-	if got, want := overlayTexts(lines), []string{"█ alpha", "⠋ running"}; !equalStrings(got, want) {
-		t.Fatalf("renderLines(spinner) = %q, want %q", got, want)
+	if got, want := overlayTexts(lines), []string{"█ alpha", "running"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(running) = %q, want %q", got, want)
 	}
-
-	overlay.advanceSpinner()
-	lines = overlay.renderLines(3)
-	if got, want := lines[len(lines)-1].text, "⠙ running"; got != want {
-		t.Fatalf("spinner frame = %q, want %q", got, want)
+	if !lines[len(lines)-1].running {
+		t.Fatalf("running line flag = false, want true")
 	}
 }
 

@@ -282,6 +282,27 @@ func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
 	}
 }
 
+func TestDrawShimmerHUDLineRendersRunningTextWithoutSpinnerGlyphs(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	var out bytes.Buffer
+	if err := drawShimmerHUDLine(&out, 0, "running", theme); err != nil {
+		t.Fatalf("drawShimmerHUDLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "running") {
+		t.Fatalf("drawShimmerHUDLine() = %q, want running text", got)
+	}
+	if strings.ContainsAny(got, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+		t.Fatalf("drawShimmerHUDLine() = %q, want shimmer text instead of braille spinner", got)
+	}
+}
+
 func TestOverlayRenderLinesRespectsUpdatedTerminalHeight(t *testing.T) {
 	prev := termRows
 	termRows = 8

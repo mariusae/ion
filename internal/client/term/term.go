@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -40,6 +41,8 @@ const (
 var (
 	termRows = 24
 	termCols = 80
+
+	shimmerStart = time.Now()
 )
 
 type bufferState struct {
@@ -282,7 +285,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			resultCh <- overlayResult{done: done, err: err}
 		}()
 
-		ticker := time.NewTicker(100 * time.Millisecond)
+		ticker := time.NewTicker(32 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
@@ -294,7 +297,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 			case <-ticker.C:
-				overlay.advanceSpinner()
 				if err := redraw(); err != nil {
 					overlay.setRunning(false)
 					return false, err
@@ -1241,6 +1243,9 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
 	if line.history < 0 {
+		if line.running {
+			return drawShimmerHUDLine(stdout, row, line.text, theme)
+		}
 		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
 	}
 	start, end, ok := overlay.selectionBounds()
@@ -1470,6 +1475,132 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 	}
 	_, err := io.WriteString(stdout, prefix+plain+styleReset())
 	return err
+}
+
+func drawShimmerHUDLine(stdout io.Writer, row int, text string, theme *uiTheme) error {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+		return err
+	}
+	runes := []rune(text)
+	if len(runes) > termCols {
+		runes = runes[:termCols]
+	}
+	basePrefix := ""
+	if theme != nil {
+		basePrefix = theme.hudPrefix()
+	}
+	currentPrefix := basePrefix
+	if currentPrefix != "" {
+		if _, err := io.WriteString(stdout, currentPrefix); err != nil {
+			return err
+		}
+	}
+	for i, r := range runes {
+		nextPrefix := shimmerPrefix(theme, i, len(runes))
+		if nextPrefix != currentPrefix {
+			transition := nextPrefix
+			if transition == "" {
+				transition = styleReset()
+				if basePrefix != "" {
+					transition += basePrefix
+				}
+			}
+			if _, err := io.WriteString(stdout, transition); err != nil {
+				return err
+			}
+			currentPrefix = nextPrefix
+		}
+		if _, err := io.WriteString(stdout, string(r)); err != nil {
+			return err
+		}
+	}
+	if currentPrefix != basePrefix {
+		transition := basePrefix
+		if transition == "" {
+			transition = styleReset()
+		}
+		if _, err := io.WriteString(stdout, transition); err != nil {
+			return err
+		}
+	}
+	if pad := termCols - len(runes); pad > 0 {
+		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
+			return err
+		}
+	}
+	if basePrefix != "" || len(runes) > 0 {
+		if _, err := io.WriteString(stdout, styleReset()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func shimmerPrefix(theme *uiTheme, index, length int) string {
+	intensity := shimmerIntensity(index, length, time.Since(shimmerStart))
+	if theme != nil && theme.mode == colorModeTrueColor {
+		bg := theme.hudBG
+		fg := blendColors(bg, contrastColor(bg), intensity*0.9)
+		return sgr("1", theme.bgCode(bg), theme.fgCode(fg))
+	}
+	attr := ""
+	switch {
+	case intensity < 0.2:
+		attr = "2"
+	case intensity < 0.6:
+		attr = "22"
+	default:
+		attr = "1"
+	}
+	if theme != nil {
+		return sgr(attr, theme.bgCode(theme.hudBG))
+	}
+	return sgr(attr)
+}
+
+func shimmerIntensity(index, length int, elapsed time.Duration) float64 {
+	if length <= 0 {
+		return 0
+	}
+	sweep := float64(length + 20)
+	pos := math.Floor(math.Mod(elapsed.Seconds(), 2.0) / 2.0 * sweep)
+	iPos := float64(index + 10)
+	dist := math.Abs(iPos - pos)
+	if dist > 5 {
+		return 0
+	}
+	return 0.5 * (1 + math.Cos(math.Pi*dist/5))
+}
+
+func contrastColor(bg rgbColor) rgbColor {
+	if luminance(bg) > 128 {
+		return rgbColor{}
+	}
+	return rgbColor{r: 255, g: 255, b: 255}
+}
+
+func blendColors(base, target rgbColor, alpha float64) rgbColor {
+	if alpha < 0 {
+		alpha = 0
+	}
+	if alpha > 1 {
+		alpha = 1
+	}
+	blend := func(a, b uint8) uint8 {
+		value := math.Floor(float64(a)*(1-alpha) + float64(b)*alpha)
+		if value < 0 {
+			value = 0
+		}
+		if value > 255 {
+			value = 255
+		}
+		return uint8(value)
+	}
+	return rgbColor{
+		r: blend(base.r, target.r),
+		g: blend(base.g, target.g),
+		b: blend(base.b, target.b),
+	}
 }
 
 func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overlayState) error {

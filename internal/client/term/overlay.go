@@ -19,6 +19,7 @@ type overlayState struct {
 	input      []rune
 	cursor     int
 	history    []overlayEntry
+	scroll     int
 	recallIdx  int
 	savedInput []rune
 }
@@ -31,18 +32,21 @@ func (o *overlayState) open(prefill string) {
 	o.visible = true
 	o.input = []rune(prefill)
 	o.cursor = len(o.input)
+	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
 
 func (o *overlayState) close() {
 	o.visible = false
+	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
 
 func (o *overlayState) clearHistory() {
 	o.history = nil
+	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
@@ -119,10 +123,12 @@ func (o *overlayState) moveEnd() {
 
 func (o *overlayState) addCommand(text string) {
 	o.history = append(o.history, overlayEntry{command: true, text: text})
+	o.scroll = 0
 }
 
 func (o *overlayState) addOutput(text string) {
 	o.history = append(o.history, overlayEntry{text: text})
+	o.scroll = 0
 }
 
 func (o *overlayState) lastCommand() (string, bool) {
@@ -169,6 +175,7 @@ func (o *overlayState) recallNext() bool {
 func (o *overlayState) resetInput() {
 	o.input = o.input[:0]
 	o.cursor = 0
+	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 }
@@ -191,12 +198,16 @@ func (o *overlayState) renderLines(limit int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	start := len(o.history) - limit
+	end := len(o.history) - o.scroll
+	if end < 0 {
+		end = 0
+	}
+	start := end - limit
 	if start < 0 {
 		start = 0
 	}
-	lines := make([]string, 0, len(o.history)-start)
-	for _, entry := range o.history[start:] {
+	lines := make([]string, 0, end-start)
+	for _, entry := range o.history[start:end] {
 		if entry.command {
 			lines = append(lines, "> "+entry.text)
 			continue
@@ -204,6 +215,44 @@ func (o *overlayState) renderLines(limit int) []string {
 		lines = append(lines, entry.text)
 	}
 	return lines
+}
+
+func (o *overlayState) maxScroll(limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if len(o.history) <= limit {
+		return 0
+	}
+	return len(o.history) - limit
+}
+
+func (o *overlayState) scrollOlder(lines int) {
+	if lines <= 0 {
+		return
+	}
+	limit := overlayHeight(o) - 1
+	o.scroll += lines
+	if max := o.maxScroll(limit); o.scroll > max {
+		o.scroll = max
+	}
+}
+
+func (o *overlayState) scrollNewer(lines int) {
+	if lines <= 0 {
+		return
+	}
+	o.scroll -= lines
+	if o.scroll < 0 {
+		o.scroll = 0
+	}
+}
+
+func overlayTopRow(o *overlayState) int {
+	if o == nil || !o.visible {
+		return termRows
+	}
+	return termRows - overlayHeight(o)
 }
 
 func overlayHeight(o *overlayState) int {

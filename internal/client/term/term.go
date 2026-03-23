@@ -399,6 +399,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return false, nil
 	}
 
+	handleOverlayMouse := func(event mouseEvent) bool {
+		if !overlay.visible {
+			return false
+		}
+		if event.y < overlayTopRow(overlay) {
+			if event.pressed {
+				overlay.close()
+				return true
+			}
+			return false
+		}
+		switch event.button {
+		case 64:
+			overlay.scrollOlder(3)
+		case 65:
+			overlay.scrollNewer(3)
+		}
+		return true
+	}
+
 	for {
 		r, _, err := reader.ReadRune()
 		if err != nil {
@@ -440,6 +460,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 									return err
 								}
 								return nil
+							}
+							if handleOverlayMouse(*mouse) {
+								if err := redraw(); err != nil {
+									return err
+								}
+								continue
 							}
 							if !menu.visible {
 								handled := handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart)

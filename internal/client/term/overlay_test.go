@@ -99,3 +99,43 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 		t.Fatalf("overlayHeight(full) = %d, want %d", got, want)
 	}
 }
+
+func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
+	prev := termRows
+	termRows = 6
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 6; i++ {
+		overlay.addOutput(string(rune('a' + i)))
+	}
+
+	if got, want := overlay.renderLines(3), []string{"d", "e", "f"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(tail) = %q, want %q", got, want)
+	}
+
+	overlay.scrollOlder(2)
+	if got, want := overlay.renderLines(3), []string{"b", "c", "d"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(scrolled) = %q, want %q", got, want)
+	}
+
+	overlay.scrollNewer(1)
+	if got, want := overlay.renderLines(3), []string{"c", "d", "e"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(partial return) = %q, want %q", got, want)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

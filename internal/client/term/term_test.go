@@ -2,6 +2,7 @@ package term
 
 import (
 	"bufio"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -134,6 +135,25 @@ func TestWordSpanAtSelectsWholeWord(t *testing.T) {
 	}
 	if start, end := wordSpanAt(text, 6); start != 6 || end != 10 {
 		t.Fatalf("wordSpanAt(next word) = (%d, %d), want (6, 10)", start, end)
+	}
+}
+
+func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   2,
+	})
+	state.flashSelection = true
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, nil); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	if strings.Contains(out.String(), "\x1b[7m") {
+		t.Fatalf("drawBufferLine() = %q, want selection highlight suppressed", out.String())
 	}
 }
 

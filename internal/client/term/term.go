@@ -41,15 +41,16 @@ var (
 )
 
 type bufferState struct {
-	name     string
-	text     []rune
-	cursor   int
-	origin   int
-	dotStart int
-	dotEnd   int
-	markMode bool
-	markPos  int
-	status   string
+	name           string
+	text           []rune
+	cursor         int
+	origin         int
+	dotStart       int
+	dotEnd         int
+	flashSelection bool
+	markMode       bool
+	markPos        int
+	status         string
 }
 
 type diagnosticReporter interface {
@@ -196,6 +197,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	redraw := func() error {
 		refreshTerminalSize()
 		return drawBufferMode(stdout, buffer, overlay, menu, theme)
+	}
+
+	flashBufferSelection := func() error {
+		if buffer == nil || buffer.dotStart == buffer.dotEnd {
+			return nil
+		}
+		buffer.flashSelection = true
+		if err := redraw(); err != nil {
+			buffer.flashSelection = false
+			return err
+		}
+		time.Sleep(80 * time.Millisecond)
+		buffer.flashSelection = false
+		return redraw()
 	}
 
 	executeDirect := func(line string, captureOutput bool) (bool, []string, error) {
@@ -748,6 +763,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 										if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 											return err
 										}
+										if err := flashBufferSelection(); err != nil {
+											return err
+										}
 										if err := redraw(); err != nil {
 											return err
 										}
@@ -759,6 +777,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
 							if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
 								if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+									return err
+								}
+								if err := flashBufferSelection(); err != nil {
 									return err
 								}
 							}
@@ -1301,7 +1322,7 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {
 	col := 0
 	for p := start; p < end && col < termCols; p++ {
-		selected := p >= state.dotStart && p < state.dotEnd
+		selected := !state.flashSelection && p >= state.dotStart && p < state.dotEnd
 		if selected {
 			if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
 				return err

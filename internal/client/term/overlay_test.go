@@ -165,6 +165,23 @@ func TestOverlaySelectedTextSpansLines(t *testing.T) {
 	}
 }
 
+func TestOverlayTokenAtTrimsSuffixGarbage(t *testing.T) {
+	overlay := newOverlayState()
+	overlay.history = []overlayEntry{
+		{text: "src/main.go:29:21:use more"},
+	}
+
+	if got, want := overlay.tokenAt(overlaySelectionPos{line: 0, col: 14}), "src/main.go:29:21"; got != want {
+		t.Fatalf("tokenAt() = %q, want %q", got, want)
+	}
+}
+
+func TestTrimOverlaySelection(t *testing.T) {
+	if got, want := trimOverlaySelection([]rune("  alpha beta \n")), "alpha beta"; got != want {
+		t.Fatalf("trimOverlaySelection() = %q, want %q", got, want)
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

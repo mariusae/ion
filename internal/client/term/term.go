@@ -435,11 +435,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				return true
 			}
-			if event.button&3 == 0 {
+			if btn := event.button & 3; btn == 0 || btn == 2 {
 				if event.pressed {
 					pos := overlay.screenToPos(event.y, event.x)
 					if pos.line >= 0 {
 						overlay.selecting = true
+						overlay.selectBtn2 = btn == 2
 						overlay.selectStart = pos
 						overlay.selectEnd = pos
 						return true
@@ -447,6 +448,23 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				} else if overlay.selecting {
 					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
 					overlay.selecting = false
+					if overlay.selectBtn2 {
+						overlay.selectBtn2 = false
+						token := ""
+						start, end, ok := overlay.selectionBounds()
+						if ok && start.line == end.line && start.col == end.col {
+							token = overlay.tokenAt(start)
+						} else {
+							token = trimOverlaySelection(overlay.selectedText())
+						}
+						if token != "" {
+							done, _, err := executeDirect("B "+token+"\n", false)
+							if err == nil && !done {
+								_ = refreshBuffer()
+							}
+						}
+						return true
+					}
 					_ = copyToClipboard(stdout, overlay.selectedText())
 					return true
 				}

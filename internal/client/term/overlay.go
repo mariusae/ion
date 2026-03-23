@@ -21,6 +21,7 @@ type overlayState struct {
 	history     []overlayEntry
 	scroll      int
 	selecting   bool
+	selectBtn2  bool
 	selectStart overlaySelectionPos
 	selectEnd   overlaySelectionPos
 	recallIdx   int
@@ -59,6 +60,7 @@ func (o *overlayState) close() {
 	o.visible = false
 	o.scroll = 0
 	o.selecting = false
+	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
 	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
@@ -69,6 +71,7 @@ func (o *overlayState) clearHistory() {
 	o.history = nil
 	o.scroll = 0
 	o.selecting = false
+	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
 	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
@@ -394,6 +397,61 @@ func (o *overlayState) selectedText() []rune {
 		}
 	}
 	return out
+}
+
+func (o *overlayState) historyText(idx int) string {
+	if o == nil || idx < 0 || idx >= len(o.history) {
+		return ""
+	}
+	return o.history[idx].text
+}
+
+func (o *overlayState) tokenAt(pos overlaySelectionPos) string {
+	text := []rune(o.historyText(pos.line))
+	if len(text) == 0 {
+		return ""
+	}
+	if pos.col < 0 {
+		pos.col = 0
+	}
+	if pos.col > len(text) {
+		pos.col = len(text)
+	}
+	left := pos.col
+	for left > 0 && tokenRune(text[left-1]) {
+		left--
+	}
+	right := pos.col
+	for right < len(text) && tokenRune(text[right]) {
+		right++
+	}
+	for right > left && text[right-1] == ':' {
+		right--
+	}
+	lastNumEnd := -1
+	for i := left; i < right; i++ {
+		if text[i] != ':' || i+1 >= right || text[i+1] < '0' || text[i+1] > '9' {
+			continue
+		}
+		i++
+		for i < right && text[i] >= '0' && text[i] <= '9' {
+			i++
+		}
+		lastNumEnd = i
+		i--
+	}
+	if lastNumEnd > 0 && lastNumEnd < right {
+		right = lastNumEnd
+	}
+	return string(text[left:right])
+}
+
+func tokenRune(r rune) bool {
+	return r >= 0x21 && r != '"' && r != '`'
+}
+
+func trimOverlaySelection(text []rune) string {
+	return strings.TrimSpace(string(text))
 }
 
 func (o *overlayState) findCommand(n int) int {

@@ -1217,6 +1217,75 @@ func TestIonTermOverlayMouseSelectionCopiesToClipboard(t *testing.T) {
 	}
 }
 
+func TestIonTermOverlayRightClickOpensToken(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	target := filepath.Join(workDir, "target.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("target line\n"), 0o644); err != nil {
+		t.Fatalf("write target fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 120)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\n,a c/" + target + ":1:1/\r"); err != nil {
+		t.Fatalf("append target token through overlay command: %v", err)
+	}
+	if _, err := sess.WaitFor(target+":1:1", 2*time.Second); err != nil {
+		t.Fatalf("wait for overlay token output: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[<2;1;22M\x1b[<2;1;22m"); err != nil {
+		t.Fatalf("right click overlay token: %v", err)
+	}
+	if _, err := sess.WaitFor("target.txt", 2*time.Second); err != nil {
+		t.Fatalf("wait for focused target file: %v\n%s", err, sess.Snapshot())
+	}
+	if _, err := sess.WaitFor("target line", 2*time.Second); err != nil {
+		t.Fatalf("wait for target buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bq\n"); err != nil {
+		t.Fatalf("exit buffer mode and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermBufferModeContextMenuOpenAndDismiss(t *testing.T) {
 	t.Parallel()
 

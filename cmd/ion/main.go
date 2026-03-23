@@ -12,6 +12,7 @@ import (
 	"ion/internal/client/download"
 	clientsession "ion/internal/client/session"
 	"ion/internal/client/term"
+	coreexec "ion/internal/core/exec"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
@@ -61,20 +62,20 @@ func parseArgs(args []string) (config, error) {
 }
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	return withLocalServer(stdout, stderr, func(client *clientsession.Client) error {
+	return withLocalServer(workspace.New(), stdout, stderr, func(client *clientsession.Client) error {
 		return download.Run(cfg.files, stdin, stderr, client)
 	})
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	capture := term.NewOutputCapture(stdout, stderr)
-	return withLocalServer(capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
+	ws := workspace.NewWithShellInput(coreexec.ShellInputSocketEOF)
+	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
 		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
 	})
 }
 
-func withLocalServer(stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
-	ws := workspace.New()
+func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
 	server := transport.New(ws)
 
 	socketPath, cleanup, err := makeSocketPath()

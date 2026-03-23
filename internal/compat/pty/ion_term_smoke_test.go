@@ -1888,6 +1888,66 @@ func TestIonTermOverlayShowsRipgrepOutput(t *testing.T) {
 	}
 }
 
+func TestIonTermOverlayRipgrepWithoutPathSearchesWorkingTree(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("rg not installed")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "in.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write buffer fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "needle.txt"), []byte("needle one\nneedle two\n"), 0o644); err != nil {
+		t.Fatalf("write rg fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("alpha", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	sess.ResetSnapshot()
+	if err := sess.WriteString("\n!rg -n .\r"); err != nil {
+		t.Fatalf("run ripgrep command without path in overlay: %v", err)
+	}
+	if _, err := sess.WaitFor("needle.txt:1:needle one", 5*time.Second); err != nil {
+		t.Fatalf("wait for ripgrep working-tree output: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b\x1bq\n"); err != nil {
+		t.Fatalf("close overlay, exit buffer mode, and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermOverlayShowsANSIColoredOutputAsText(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("terminal mode smoke test currently only supports darwin")

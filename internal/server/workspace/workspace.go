@@ -20,8 +20,14 @@ type Workspace struct {
 
 // New constructs a workspace backed by a core execution session.
 func New() *Workspace {
+	return NewWithShellInput(exec.ShellInputEmpty)
+}
+
+// NewWithShellInput constructs a workspace with one shell-stdin policy.
+func NewWithShellInput(mode exec.ShellInputMode) *Workspace {
 	sess := exec.NewSession(io.Discard)
 	sess.Diag = io.Discard
+	sess.ShellInput = mode
 	return &Workspace{session: sess}
 }
 

@@ -29,11 +29,19 @@ type Session struct {
 	Diag          io.Writer
 	QuitOK        bool
 	LastShellCmd  string
+	ShellInput    ShellInputMode
 	closeOK       map[*text.File]bool
 	execDepth     int
 	fileLoopDepth int
 	frame         *execFrame
 }
+
+type ShellInputMode int
+
+const (
+	ShellInputEmpty ShellInputMode = iota
+	ShellInputSocketEOF
+)
 
 type diagnosticError struct {
 	msg string
@@ -56,7 +64,12 @@ type MenuFileInfo struct {
 
 // NewSession constructs an execution session.
 func NewSession(out io.Writer) *Session {
-	return &Session{Out: out, Diag: io.Discard, closeOK: make(map[*text.File]bool)}
+	return &Session{
+		Out:        out,
+		Diag:       io.Discard,
+		ShellInput: ShellInputEmpty,
+		closeOK:    make(map[*text.File]bool),
+	}
 }
 
 type execFrame struct {
@@ -2113,10 +2126,17 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 	c := osexec.Command("/bin/sh", "-c", cmd)
 	c.Args[0] = "sh"
 	c.Env = append(os.Environ(), shellEnv(f)...)
+	var shellStdin *os.File
+	var err error
 	if stdin != nil {
 		c.Stdin = bytes.NewReader(stdin)
 	} else {
-		c.Stdin = bytes.NewReader(nil)
+		shellStdin, err = s.shellStdin()
+		if err != nil {
+			return shellResult{}, err
+		}
+		defer shellStdin.Close()
+		c.Stdin = shellStdin
 	}
 	if captureStdout {
 		var stderr bytes.Buffer
@@ -2138,7 +2158,7 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 	var stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
-	err := c.Run()
+	err = c.Run()
 	res := shellResult{
 		Stdout: stdout.Bytes(),
 		Stderr: stderr.Bytes(),
@@ -2152,6 +2172,24 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 		return res, nil
 	}
 	return shellResult{}, err
+}
+
+func (s *Session) shellStdin() (*os.File, error) {
+	switch s.ShellInput {
+	case ShellInputSocketEOF:
+		fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+		if err != nil {
+			return nil, err
+		}
+		_ = syscall.Close(fds[1])
+		return os.NewFile(uintptr(fds[0]), "ion-shell-stdin"), nil
+	default:
+		r, err := os.Open(os.DevNull)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
 }
 
 func shellEnv(f *text.File) []string {

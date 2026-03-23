@@ -608,6 +608,32 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							}
 							continue
 						}
+						if mouse.button == 8 && mouse.pressed {
+							pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
+							if ok {
+								if buffer.dotStart == buffer.dotEnd {
+									start, end := wordSpanAt(buffer.text, pos)
+									buffer.dotStart = start
+									buffer.dotEnd = end
+									buffer.cursor = start
+								}
+								next, ok, err := lookInBuffer(svc, buffer, true)
+								if err != nil {
+									return err
+								}
+								if ok {
+									buffer = next
+									buffer.status = ""
+									if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+										return err
+									}
+								}
+								if err := redraw(); err != nil {
+									return err
+								}
+							}
+							continue
+						}
 						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
 							if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
 								if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
@@ -1459,6 +1485,28 @@ func nextWordStart(text []rune, pos int) int {
 		pos++
 	}
 	return pos
+}
+
+func wordSpanAt(text []rune, pos int) (start, end int) {
+	pos = clampIndex(pos, len(text))
+	if pos >= len(text) {
+		return pos, pos
+	}
+	if !isWordRune(text[pos]) {
+		if pos == 0 || !isWordRune(text[pos-1]) {
+			return pos, pos
+		}
+		pos--
+	}
+	start = pos
+	for start > 0 && isWordRune(text[start-1]) {
+		start--
+	}
+	end = pos
+	for end < len(text) && isWordRune(text[end]) {
+		end++
+	}
+	return start, end
 }
 
 func updateSelection(state *bufferState) {

@@ -736,16 +736,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, redraw()
 			}
 			if dirty {
-				done, _, err := executeDirect("q\n", false)
+				done, lines, err := executeDirect("q\n", true)
+				overlay.open("")
+				for _, line := range lines {
+					overlay.addOutput(line)
+				}
 				if err != nil {
-					overlay.open("")
 					overlay.addOutput(diagnosticText(err))
 					return false, redraw()
 				}
 				if done {
 					return true, nil
 				}
-				overlay.open("")
 				return false, redraw()
 			}
 			done, _, err := executeDirect("q\n", false)

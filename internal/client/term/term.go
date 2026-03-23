@@ -540,6 +540,236 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return true
 	}
 
+	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
+		if key == keyEsc {
+			if menu.visible {
+				menu.dismiss()
+				return false, redraw()
+			}
+			buffer.markMode = false
+			buffer.dotStart = buffer.cursor
+			buffer.dotEnd = buffer.cursor
+			buffer.status = ""
+			mouseSelecting = false
+			return false, redraw()
+		}
+		if key == keyMouse {
+			if mouse == nil {
+				return false, nil
+			}
+			done, err := handleMenuMouse(*mouse)
+			if err != nil {
+				return false, err
+			}
+			if done {
+				if err := exitBufferMode(stdout); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
+			if menu.visible {
+				return false, nil
+			}
+			if mouse.button == 2 && mouse.pressed {
+				return false, showMenu(mouse.x, mouse.y)
+			}
+			if mouse.button == 8 && mouse.pressed {
+				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
+				if ok {
+					if buffer.dotStart == buffer.dotEnd {
+						start, end := wordSpanAt(buffer.text, pos)
+						buffer.dotStart = start
+						buffer.dotEnd = end
+						buffer.cursor = start
+					}
+					next, ok, err := lookInBuffer(svc, buffer, true)
+					if err != nil {
+						return false, err
+					}
+					if ok {
+						buffer = next
+						buffer.status = ""
+						if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+							return false, err
+						}
+					}
+					return false, redraw()
+				}
+				return false, nil
+			}
+			if mouse.button == 0 && mouse.pressed {
+				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
+				if ok {
+					now := time.Now()
+					doubleClick := lastMouseClickPos == pos &&
+						!lastMouseClick.IsZero() &&
+						now.Sub(lastMouseClick) < 400*time.Millisecond
+					lastMouseClick = now
+					lastMouseClickPos = pos
+
+					if doubleClick {
+						buffer.markMode = false
+						start, end := wordSpanAt(buffer.text, pos)
+						if start < end {
+							mouseSelecting = false
+							buffer.cursor = start
+							buffer.dotStart = start
+							buffer.dotEnd = end
+							if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+								return false, err
+							}
+							if err := flashBufferSelection(); err != nil {
+								return false, err
+							}
+							return false, redraw()
+						}
+					}
+				}
+			}
+			if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+				if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
+					if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
+						return false, err
+					}
+					if err := flashBufferSelection(); err != nil {
+						return false, err
+					}
+				}
+				return false, redraw()
+			}
+			return false, nil
+		}
+		switch key {
+		case keyAltSnarf:
+			snarf = snarfSelection(buffer)
+			if len(snarf) != 0 {
+				if err := copyToClipboard(stdout, snarf); err != nil {
+					return false, err
+				}
+				buffer.status = "snarfed"
+			}
+			return false, redraw()
+		case keyPaste:
+			paste, err := readBracketedPaste(reader)
+			if err != nil {
+				return false, err
+			}
+			if len(paste) == 0 {
+				return false, nil
+			}
+			buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(paste))
+			if err != nil {
+				return false, err
+			}
+			buffer.status = ""
+			return false, redraw()
+		}
+		buffer, err = applyBufferKey(svc, buffer, key)
+		if err != nil {
+			return false, err
+		}
+		return false, redraw()
+	}
+
+	handleBufferRune := func(r rune) (bool, error) {
+		if menu.visible {
+			menu.dismiss()
+		}
+		switch r {
+		case '\n':
+			overlay.open("")
+			return false, redraw()
+		case ':':
+			overlay.open("")
+			return false, redraw()
+		case 0x18:
+			snarf = snarfSelection(buffer)
+			if len(snarf) == 0 {
+				return false, nil
+			}
+			if err := copyToClipboard(stdout, snarf); err != nil {
+				return false, err
+			}
+			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
+			if err != nil {
+				return false, err
+			}
+			buffer = next
+			buffer.status = "cut"
+			return false, redraw()
+		case 0x19:
+			if len(snarf) == 0 {
+				return false, nil
+			}
+			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
+			if err != nil {
+				return false, err
+			}
+			buffer = next
+			buffer.status = ""
+			return false, redraw()
+		case 0x11:
+			done, _, err := executeDirect("q\n", false)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, redraw()
+			}
+			if done {
+				return true, nil
+			}
+			buffer.status = ""
+			return false, redraw()
+		case 0x17:
+			if strings.TrimSpace(buffer.name) == "" {
+				overlay.open("w ")
+				return false, redraw()
+			}
+			msg, err := svc.Save()
+			if err != nil {
+				buffer.status = diagnosticText(err)
+			} else {
+				buffer.status = msg
+			}
+			return false, redraw()
+		case 0x1f:
+			overlay.open("/")
+			return false, redraw()
+		case 0x0c:
+			next, ok, err := lookInBuffer(svc, buffer, true)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, redraw()
+		case 0x12:
+			next, ok, err := lookInBuffer(svc, buffer, false)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, redraw()
+		}
+		if r == '\r' {
+			r = '\n'
+		}
+		next, err := applyBufferKey(svc, buffer, int(r))
+		if err != nil {
+			return false, err
+		}
+		buffer = next
+		return false, redraw()
+	}
+
 	for {
 		select {
 		case <-winchCh:
@@ -637,6 +867,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.scrollNewer(5)
 					case keyDel:
 						overlay.deleteForward()
+					default:
+						overlay.close()
+						done, err := handleBufferSpecial(key, mouse)
+						if err != nil {
+							return err
+						}
+						if done {
+							return nil
+						}
+						continue
 					}
 					if err := redraw(); err != nil {
 						return err
@@ -685,6 +925,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				default:
 					if r >= 32 || r == '\t' {
 						overlay.insert([]rune{r})
+					} else {
+						overlay.close()
+						done, err := handleBufferRune(r)
+						if err != nil {
+							return err
+						}
+						if done {
+							return nil
+						}
+						continue
 					}
 				}
 				if err := redraw(); err != nil {
@@ -697,287 +947,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if err != nil {
 					return err
 				}
-				if key == keyEsc {
-					if menu.visible {
-						menu.dismiss()
-						if err := redraw(); err != nil {
-							return err
-						}
-						continue
-					}
-					buffer.markMode = false
-					buffer.dotStart = buffer.cursor
-					buffer.dotEnd = buffer.cursor
-					buffer.status = ""
-					mouseSelecting = false
-					if err := redraw(); err != nil {
-						return err
-					}
-					continue
-				}
-				if key == keyMouse {
-					if mouse != nil {
-						done, err := handleMenuMouse(*mouse)
-						if err != nil {
-							return err
-						}
-						if done {
-							if err := exitBufferMode(stdout); err != nil {
-								return err
-							}
-							return nil
-						}
-						if menu.visible {
-							continue
-						}
-						if mouse.button == 2 && mouse.pressed {
-							if err := showMenu(mouse.x, mouse.y); err != nil {
-								return err
-							}
-							continue
-						}
-						if mouse.button == 8 && mouse.pressed {
-							pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
-							if ok {
-								if buffer.dotStart == buffer.dotEnd {
-									start, end := wordSpanAt(buffer.text, pos)
-									buffer.dotStart = start
-									buffer.dotEnd = end
-									buffer.cursor = start
-								}
-								next, ok, err := lookInBuffer(svc, buffer, true)
-								if err != nil {
-									return err
-								}
-								if ok {
-									buffer = next
-									buffer.status = ""
-									if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
-										return err
-									}
-								}
-								if err := redraw(); err != nil {
-									return err
-								}
-							}
-							continue
-						}
-						if mouse.button == 0 && mouse.pressed {
-							pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
-							if ok {
-								now := time.Now()
-								doubleClick := lastMouseClickPos == pos &&
-									!lastMouseClick.IsZero() &&
-									now.Sub(lastMouseClick) < 400*time.Millisecond
-								lastMouseClick = now
-								lastMouseClickPos = pos
-
-								if doubleClick {
-									buffer.markMode = false
-									start, end := wordSpanAt(buffer.text, pos)
-									if start < end {
-										mouseSelecting = false
-										buffer.cursor = start
-										buffer.dotStart = start
-										buffer.dotEnd = end
-										if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
-											return err
-										}
-										if err := flashBufferSelection(); err != nil {
-											return err
-										}
-										if err := redraw(); err != nil {
-											return err
-										}
-										continue
-									}
-								}
-							}
-						}
-						if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
-							if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
-								if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
-									return err
-								}
-								if err := flashBufferSelection(); err != nil {
-									return err
-								}
-							}
-							if err := redraw(); err != nil {
-								return err
-							}
-							continue
-						}
-					}
-					continue
-				}
-				switch key {
-				case keyAltSnarf:
-					snarf = snarfSelection(buffer)
-					if len(snarf) != 0 {
-						if err := copyToClipboard(stdout, snarf); err != nil {
-							return err
-						}
-						buffer.status = "snarfed"
-					}
-					if err := redraw(); err != nil {
-						return err
-					}
-					continue
-				case keyPaste:
-					paste, err := readBracketedPaste(reader)
-					if err != nil {
-						return err
-					}
-					if len(paste) == 0 {
-						continue
-					}
-					buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(paste))
-					if err != nil {
-						return err
-					}
-					buffer.status = ""
-					if err := redraw(); err != nil {
-						return err
-					}
-					continue
-				}
-				buffer, err = applyBufferKey(svc, buffer, key)
+				done, err := handleBufferSpecial(key, mouse)
 				if err != nil {
 					return err
-				}
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			}
-			if menu.visible {
-				menu.dismiss()
-			}
-			switch r {
-			case '\n':
-				overlay.open("")
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case ':':
-				overlay.open("")
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x18:
-				snarf = snarfSelection(buffer)
-				if len(snarf) == 0 {
-					continue
-				}
-				if err := copyToClipboard(stdout, snarf); err != nil {
-					return err
-				}
-				buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
-				if err != nil {
-					return err
-				}
-				buffer.status = "cut"
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x19:
-				if len(snarf) == 0 {
-					continue
-				}
-				buffer, err = replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
-				if err != nil {
-					return err
-				}
-				buffer.status = ""
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x11:
-				done, _, err := executeDirect("q\n", false)
-				if err != nil {
-					buffer.status = diagnosticText(err)
-					if err := redraw(); err != nil {
-						return err
-					}
-					continue
 				}
 				if done {
 					return nil
 				}
-				buffer.status = ""
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x17:
-				if strings.TrimSpace(buffer.name) == "" {
-					overlay.open("w ")
-					if err := redraw(); err != nil {
-						return err
-					}
-					continue
-				}
-				msg, err := svc.Save()
-				if err != nil {
-					buffer.status = diagnosticText(err)
-				} else {
-					buffer.status = msg
-				}
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x1f:
-				overlay.open("/")
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x0c:
-				next, ok, err := lookInBuffer(svc, buffer, true)
-				if err != nil {
-					return err
-				}
-				if ok {
-					buffer = next
-					buffer.status = ""
-				} else {
-					buffer.status = "?no match"
-				}
-				if err := redraw(); err != nil {
-					return err
-				}
-				continue
-			case 0x12:
-				next, ok, err := lookInBuffer(svc, buffer, false)
-				if err != nil {
-					return err
-				}
-				if ok {
-					buffer = next
-					buffer.status = ""
-				} else {
-					buffer.status = "?no match"
-				}
-				if err := redraw(); err != nil {
-					return err
-				}
 				continue
 			}
-			if r == '\r' {
-				r = '\n'
-			}
-			buffer, err = applyBufferKey(svc, buffer, int(r))
+			done, err := handleBufferRune(r)
 			if err != nil {
 				return err
 			}
-			if err := redraw(); err != nil {
-				return err
+			if done {
+				return nil
 			}
 			continue
 		}

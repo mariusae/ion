@@ -1040,7 +1040,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlaySta
 }
 
 func exitBufferMode(stdout io.Writer) error {
-	_, err := io.WriteString(stdout, "\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
+	_, err := io.WriteString(stdout, "\x1b[?25h\x1b[0 q\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
 	return err
 }
 
@@ -1174,7 +1174,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if state == nil {
 		return nil
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
+	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25h\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
 		return err
 	}
 	viewRows := bufferViewRows(overlay)
@@ -1219,7 +1219,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
 			return err
 		}
-		return drawMenu(stdout, menu, theme)
+		if err := drawMenu(stdout, menu, theme); err != nil {
+			return err
+		}
+		return positionTerminalCursor(stdout, state, overlay)
 	}
 	if state.status != "" {
 		status := []rune(state.status)
@@ -1230,7 +1233,10 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 			return err
 		}
 	}
-	return drawMenu(stdout, menu, theme)
+	if err := drawMenu(stdout, menu, theme); err != nil {
+		return err
+	}
+	return positionTerminalCursor(stdout, state, overlay)
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
@@ -1329,25 +1335,15 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme 
 				return err
 			}
 		}
-		if p == state.cursor && state.dotStart == state.dotEnd {
-			if _, err := io.WriteString(stdout, highlightPrefix(theme, true)); err != nil {
-				return err
-			}
-		}
 		if _, err := io.WriteString(stdout, string(state.text[p])); err != nil {
 			return err
 		}
-		if selected || (p == state.cursor && state.dotStart == state.dotEnd) {
+		if selected {
 			if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
 				return err
 			}
 		}
 		col++
-	}
-	if state.cursor == end && state.dotStart == state.dotEnd && col < termCols {
-		if _, err := io.WriteString(stdout, highlightPrefix(theme, true)+" "+highlightReset(theme)); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -1385,21 +1381,9 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 		}
 	}
 	col := 2
-	for _, r := range []rune(overlay.promptLine()) {
+	for _, r := range overlay.input {
 		if col >= termCols {
 			break
-		}
-		if r == 0 {
-			if _, err := io.WriteString(stdout, highlightPrefix(theme, true)+" "+highlightReset(theme)); err != nil {
-				return err
-			}
-			if theme != nil {
-				if _, err := io.WriteString(stdout, theme.hudPrefix()); err != nil {
-					return err
-				}
-			}
-			col++
-			continue
 		}
 		if _, err := io.WriteString(stdout, string(r)); err != nil {
 			return err
@@ -1431,6 +1415,60 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 	}
 	_, err := io.WriteString(stdout, prefix+plain+styleReset())
 	return err
+}
+
+func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overlayState) error {
+	row, col := terminalCursorPosition(state, overlay)
+	if row < 0 {
+		row = 0
+	}
+	if col < 0 {
+		col = 0
+	}
+	if row >= termRows {
+		row = termRows - 1
+	}
+	if col >= termCols {
+		col = termCols - 1
+	}
+	_, err := fmt.Fprintf(stdout, "\x1b[%d;%dH", row+1, col+1)
+	return err
+}
+
+func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {
+	if overlay != nil && overlay.visible {
+		col := 2 + overlay.cursor
+		if col > termCols-1 {
+			col = termCols - 1
+		}
+		return termRows - 1, col
+	}
+	if state == nil {
+		return 0, 0
+	}
+	row := 0
+	p := state.origin
+	viewRows := bufferViewRows(overlay)
+	for row < viewRows {
+		lineEndPos := lineEnd(state.text, p)
+		if state.cursor >= p && state.cursor <= lineEndPos {
+			col := state.cursor - p
+			if col > termCols-1 {
+				col = termCols - 1
+			}
+			return row, col
+		}
+		if p < len(state.text) {
+			next := nextLineStart(state.text, p)
+			if next != p {
+				p = next
+				row++
+				continue
+			}
+		}
+		break
+	}
+	return max(viewRows-1, 0), 0
 }
 
 func highlightPrefix(theme *uiTheme, cursor bool) string {
@@ -1616,6 +1654,13 @@ func clampIndex(n, max int) int {
 		return max
 	}
 	return n
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func snarfSelection(state *bufferState) []rune {

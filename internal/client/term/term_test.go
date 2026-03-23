@@ -157,6 +157,47 @@ func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	}
 }
 
+func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[?25h\x1b[6 q") {
+		t.Fatalf("drawBufferMode() = %q, want steady bar cursor sequence", got)
+	}
+	if !strings.Contains(got, "\x1b[1;2H") {
+		t.Fatalf("drawBufferMode() = %q, want terminal cursor positioned at row 1 col 2", got)
+	}
+	if strings.Contains(got, "\x1b[7m") {
+		t.Fatalf("drawBufferMode() = %q, want no painted inverse-video cursor", got)
+	}
+}
+
+func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := exitBufferMode(&out); err != nil {
+		t.Fatalf("exitBufferMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[0 q") {
+		t.Fatalf("exitBufferMode() = %q, want visible default-cursor reset", got)
+	}
+}
+
 func TestOverlayRenderLinesRespectsUpdatedTerminalHeight(t *testing.T) {
 	prev := termRows
 	termRows = 8

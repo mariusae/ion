@@ -496,6 +496,42 @@ func TestWriteWarnsWhenDiskFileChanged(t *testing.T) {
 	}
 }
 
+func TestReplaceCurrentDeletesRange(t *testing.T) {
+	t.Parallel()
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	if _, _, err := f.LoadInitial(bytes.NewReader([]byte("alpha\n"))); err != nil {
+		t.Fatalf("load initial: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	sess.AddFile(f)
+
+	if err := sess.ReplaceCurrent(1, 2, ""); err != nil {
+		t.Fatalf("ReplaceCurrent(delete) error = %v", err)
+	}
+
+	got, err := sess.CurrentText()
+	if err != nil {
+		t.Fatalf("CurrentText() error = %v", err)
+	}
+	if want := "apha\n"; got != want {
+		t.Fatalf("CurrentText() = %q, want %q", got, want)
+	}
+	if got, want := sess.CurrentDot(), (text.Range{P1: 1, P2: 1}); got != want {
+		t.Fatalf("CurrentDot() = %#v, want %#v", got, want)
+	}
+}
+
 func sameFilePath(t *testing.T, got, want string) bool {
 	t.Helper()
 

@@ -1744,6 +1744,11 @@ func (s *Session) ReplaceCurrent(start, end text.Posn, replacement string) (err 
 	f := s.Current
 	return s.mutate(f, func(seq uint32) error {
 		if replacement == "" {
+			if start != end {
+				if err := f.LogDelete(start, end, seq); err != nil {
+					return err
+				}
+			}
 			f.NDot = text.Range{P1: start, P2: start}
 			return nil
 		}

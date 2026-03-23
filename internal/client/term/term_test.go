@@ -198,11 +198,11 @@ func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	}
 }
 
-func TestBuildThemeUsesStrongerOutputTintInLightMode(t *testing.T) {
+func TestBuildThemeUsesOutputTintInLightMode(t *testing.T) {
 	t.Parallel()
 
 	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
-	if got, want := theme.outputBG, (rgbColor{r: 188, g: 188, b: 188}); got != want {
+	if got, want := theme.outputBG, (rgbColor{r: 244, g: 244, b: 244}); got != want {
 		t.Fatalf("outputBG = %#v, want %#v", got, want)
 	}
 }

@@ -95,6 +95,12 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 		tmux: func(args ...string) (string, error) {
 			return tmux.run(args...)
 		},
+		notify: func(paths bModePaths) error {
+			if got, want := paths.pidPath, tmuxWindowPaths(tempDir, "$1.@2").pidPath; got != want {
+				t.Fatalf("notify pid path = %q, want %q", got, want)
+			}
+			return nil
+		},
 		runTerm: runTerm,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")
@@ -141,6 +147,7 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 		tmux: func(args ...string) (string, error) {
 			return tmux.run(args...)
 		},
+		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTerm,
 	}
 

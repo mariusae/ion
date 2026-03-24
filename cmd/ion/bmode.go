@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	clientsession "ion/internal/client/session"
 	"ion/internal/client/term"
@@ -29,6 +30,7 @@ func (c tmuxContext) Key() string {
 type bModePaths struct {
 	socketPath string
 	panePath   string
+	pidPath    string
 }
 
 type bModeClient interface {
@@ -56,6 +58,7 @@ type bModeRuntime struct {
 	tempDir    func() string
 	dial       func(path string) (bModeClient, error)
 	tmux       func(args ...string) (string, error)
+	notify     func(paths bModePaths) error
 	runTerm    func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
@@ -73,6 +76,7 @@ func defaultBModeRuntime() bModeRuntime {
 			return &wireBModeClient{client: client}, nil
 		},
 		tmux:    runTmuxCommand,
+		notify:  notifyResidentProcess,
 		runTerm: runTerm,
 	}
 }
@@ -97,6 +101,11 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		if len(cfg.files) > 0 {
 			if err := client.OpenFiles(cfg.files); err != nil {
 				return err
+			}
+			if rt.notify != nil {
+				if err := rt.notify(paths); err != nil {
+					return err
+				}
 			}
 		}
 		return focusResidentPane(paths, ctx, rt.tmux)
@@ -140,6 +149,9 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if err := writeResidentPaneID(paths.panePath, ctx.PaneID); err != nil {
+		return err
+	}
+	if err := writeResidentPID(paths.pidPath, os.Getpid()); err != nil {
 		return err
 	}
 	defer cleanupBModePaths(paths)
@@ -190,12 +202,14 @@ func tmuxWindowPaths(tempDir, key string) bModePaths {
 	return bModePaths{
 		socketPath: filepath.Join(dir, base+".sock"),
 		panePath:   filepath.Join(dir, base+".pane"),
+		pidPath:    filepath.Join(dir, base+".pid"),
 	}
 }
 
 func cleanupBModePaths(paths bModePaths) {
 	_ = os.Remove(paths.socketPath)
 	_ = os.Remove(paths.panePath)
+	_ = os.Remove(paths.pidPath)
 }
 
 func writeResidentPaneID(path, paneID string) error {
@@ -228,6 +242,47 @@ func readResidentPaneID(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+func writeResidentPID(path string, pid int) error {
+	return writeTextFile(path, fmt.Sprintf("%d\n", pid))
+}
+
+func readResidentPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
+		return 0, err
+	}
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid resident pid %d", pid)
+	}
+	return pid, nil
+}
+
+func writeTextFile(path, content string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := io.WriteString(tmp, content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
 func focusResidentPane(paths bModePaths, ctx tmuxContext, tmux func(args ...string) (string, error)) error {
 	paneID, err := readResidentPaneID(paths.panePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -241,6 +296,24 @@ func focusResidentPane(paths bModePaths, ctx tmuxContext, tmux func(args ...stri
 	}
 	_, err = tmux("select-pane", "-t", paneID)
 	return err
+}
+
+func notifyResidentProcess(paths bModePaths) error {
+	pid, err := readResidentPID(paths.pidPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(syscall.SIGUSR1); err != nil {
+		return err
+	}
+	return nil
 }
 
 func buildBServeCommand(exe string, files []string) string {

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	clienttarget "ion/internal/client/target"
 	"ion/internal/core/cmdlang"
@@ -1370,7 +1371,7 @@ func waitForTTYReady(stdin, wake *os.File) (bool, error) {
 	var readfds syscall.FdSet
 	fdSetAdd(&readfds, stdinFD)
 	fdSetAdd(&readfds, wakeFD)
-	if err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
+	if _, err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
 		if errors.Is(err, syscall.EINTR) {
 			return true, nil
 		}
@@ -1408,14 +1409,16 @@ func readWakeTags(wake *os.File) ([]byte, error) {
 }
 
 func fdSetAdd(set *syscall.FdSet, fd int) {
-	index := fd / 32
-	offset := uint(fd % 32)
+	bitsPerWord := int(unsafe.Sizeof(set.Bits[0]) * 8)
+	index := fd / bitsPerWord
+	offset := uint(fd % bitsPerWord)
 	set.Bits[index] |= 1 << offset
 }
 
 func fdSetHas(set *syscall.FdSet, fd int) bool {
-	index := fd / 32
-	offset := uint(fd % 32)
+	bitsPerWord := int(unsafe.Sizeof(set.Bits[0]) * 8)
+	index := fd / bitsPerWord
+	offset := uint(fd % bitsPerWord)
 	return set.Bits[index]&(1<<offset) != 0
 }
 

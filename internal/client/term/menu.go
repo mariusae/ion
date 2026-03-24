@@ -245,8 +245,10 @@ func menuItemPrefix(theme *uiTheme, current, hover bool) string {
 		return ""
 	}
 	switch {
-	case hover:
+	case hover && current:
 		return sgr("1", theme.bgCode(theme.cursorBG))
+	case hover:
+		return theme.prefixFor(theme.cursorBG)
 	case current:
 		return sgr("1", theme.bgCode(theme.subtleBG))
 	default:

@@ -93,6 +93,25 @@ func TestWriteMenuItemBoldsCurrentFile(t *testing.T) {
 	}
 }
 
+func TestWriteMenuItemHoverDoesNotBoldNonCurrentRow(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	item := menuItem{label: " cut", kind: menuCut}
+
+	var out bytes.Buffer
+	if err := writeMenuItem(&out, 0, 0, 16, item, true, theme); err != nil {
+		t.Fatalf("writeMenuItem() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.prefixFor(theme.cursorBG)+"│ cut") {
+		t.Fatalf("writeMenuItem() = %q, want hover background without title tint", got)
+	}
+	if strings.Contains(got, sgr("1", theme.bgCode(theme.cursorBG))+"│ cut") {
+		t.Fatalf("writeMenuItem() = %q, want non-current hover row unbolded", got)
+	}
+}
+
 func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 	t.Parallel()
 

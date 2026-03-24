@@ -27,6 +27,11 @@ type frameCursor struct {
 	col     int
 }
 
+type frameRenderer struct {
+	last        *terminalFrame
+	initialized bool
+}
+
 func newTerminalFrame(rows, cols int) *terminalFrame {
 	frame := &terminalFrame{
 		rows: make([]frameRow, rows),
@@ -38,6 +43,40 @@ func newTerminalFrame(rows, cols int) *terminalFrame {
 		}
 	}
 	return frame
+}
+
+func newFrameRenderer() *frameRenderer {
+	return &frameRenderer{}
+}
+
+func (r *frameRenderer) Reset() {
+	if r == nil {
+		return
+	}
+	r.last = nil
+	r.initialized = false
+}
+
+func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, forceFull bool) error {
+	if frame == nil {
+		return nil
+	}
+	if r == nil {
+		return writeFullFrame(stdout, frame)
+	}
+	if forceFull || !r.initialized || !sameFrameGeometry(r.last, frame) {
+		if err := writeFullFrame(stdout, frame); err != nil {
+			return err
+		}
+		r.last = cloneTerminalFrame(frame)
+		r.initialized = true
+		return nil
+	}
+	if err := writeFrameDiff(stdout, r.last, frame); err != nil {
+		return err
+	}
+	r.last = cloneTerminalFrame(frame)
+	return nil
 }
 
 func buildBufferFrame(state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) *terminalFrame {
@@ -184,6 +223,53 @@ func writeFullFrame(stdout io.Writer, frame *terminalFrame) error {
 	return writeFrameCursor(stdout, frame.cursor)
 }
 
+func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
+	if next == nil {
+		return nil
+	}
+	if !sameFrameGeometry(prev, next) {
+		return writeFullFrame(stdout, next)
+	}
+
+	if prev.title != next.title {
+		if _, err := io.WriteString(stdout, bufferWindowTitleSequence(next.title)); err != nil {
+			return err
+		}
+	}
+
+	changedRows := make([]int, 0, len(next.rows))
+	for row := range next.rows {
+		if !sameFrameRow(prev.rows[row], next.rows[row]) {
+			changedRows = append(changedRows, row)
+		}
+	}
+
+	cursorChanged := prev.cursor != next.cursor
+	if len(changedRows) == 0 && !cursorChanged && prev.title == next.title {
+		return nil
+	}
+
+	if len(changedRows) > 0 {
+		if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
+			return err
+		}
+		for _, row := range changedRows {
+			if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+				return err
+			}
+			if err := writeFrameRow(stdout, next.rows[row]); err != nil {
+				return err
+			}
+		}
+	}
+	if len(changedRows) > 0 || cursorChanged {
+		if err := writeFrameCursor(stdout, next.cursor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func writeFrameRow(stdout io.Writer, row frameRow) error {
 	last := -1
 	for i, cell := range row.cells {
@@ -219,6 +305,48 @@ func writeFrameRow(stdout io.Writer, row frameRow) error {
 		}
 	}
 	return nil
+}
+
+func cloneTerminalFrame(frame *terminalFrame) *terminalFrame {
+	if frame == nil {
+		return nil
+	}
+	clone := &terminalFrame{
+		title:  frame.title,
+		rows:   make([]frameRow, len(frame.rows)),
+		cursor: frame.cursor,
+	}
+	for i, row := range frame.rows {
+		clone.rows[i].cells = append([]frameCell(nil), row.cells...)
+	}
+	return clone
+}
+
+func sameFrameGeometry(a, b *terminalFrame) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if len(a.rows) != len(b.rows) {
+		return false
+	}
+	for i := range a.rows {
+		if len(a.rows[i].cells) != len(b.rows[i].cells) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameFrameRow(a, b frameRow) bool {
+	if len(a.cells) != len(b.cells) {
+		return false
+	}
+	for i := range a.cells {
+		if a.cells[i] != b.cells[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func writeFrameCursor(stdout io.Writer, cursor frameCursor) error {

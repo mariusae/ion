@@ -191,7 +191,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuSticky := menuStickyState{itemIndex: -1}
-	buffer, err := enterBufferMode(stdout, svc, overlay, menu, theme, focused)
+	renderer := newFrameRenderer()
+	buffer, err := enterBufferMode(stdout, svc, renderer, overlay, menu, theme, focused)
 	if err != nil {
 		return err
 	}
@@ -365,7 +366,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	redraw := func() error {
 		refreshTerminalSize()
-		return drawBufferMode(stdout, buffer, overlay, menu, theme, focused)
+		return drawBufferMode(stdout, renderer, buffer, overlay, menu, theme, focused, false)
+	}
+
+	fullRedraw := func() error {
+		refreshTerminalSize()
+		return drawBufferMode(stdout, renderer, buffer, overlay, menu, theme, focused, true)
 	}
 
 	redrawRunningCommand := func() error {
@@ -1026,7 +1032,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case wakeWinch:
 						refreshTerminalSize()
 						if inBufferMode {
-							if err := redraw(); err != nil {
+							if err := fullRedraw(); err != nil {
 								return err
 							}
 						}
@@ -1316,13 +1322,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *frameRenderer, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
 	}
 	state := newBufferState(view)
-	if err := drawBufferMode(stdout, state, overlay, menu, theme, focused); err != nil {
+	if err := drawBufferMode(stdout, renderer, state, overlay, menu, theme, focused, true); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -1649,8 +1655,12 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {
-	return writeFullFrame(stdout, buildBufferFrame(state, overlay, menu, theme, focused))
+func drawBufferMode(stdout io.Writer, renderer *frameRenderer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
+	frame := buildBufferFrame(state, overlay, menu, theme, focused)
+	if renderer == nil {
+		return writeFullFrame(stdout, frame)
+	}
+	return renderer.Render(stdout, frame, forceFull)
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {

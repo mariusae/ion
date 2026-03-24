@@ -116,3 +116,83 @@ func TestWriteFullFrameUsesFrameCursorAndTitle(t *testing.T) {
 		t.Fatalf("writeFullFrame() = %q, want cursor move to row 2 col 3", got)
 	}
 }
+
+func TestWriteFrameDiffUnchangedEmitsNothing(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(2, 4)
+	prev.title = "/tmp/alpha.txt"
+	prev.rows[0].cells[0] = frameCell{r: 'a', style: "\x1b[1m"}
+	prev.cursor = frameCursor{visible: true, row: 0, col: 1}
+	next := cloneTerminalFrame(prev)
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("writeFrameDiff() = %q, want empty output for unchanged frame", got)
+	}
+}
+
+func TestWriteFrameDiffSingleRowChangeRewritesOnlyChangedRow(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(2, 4)
+	prev.rows[0].cells[0] = frameCell{r: 'a'}
+	prev.rows[1].cells[0] = frameCell{r: 'b'}
+	prev.cursor = frameCursor{visible: true, row: 1, col: 0}
+	next := cloneTerminalFrame(prev)
+	next.rows[1].cells[0] = frameCell{r: 'z'}
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[2;1H\x1b[2Kz") {
+		t.Fatalf("writeFrameDiff() = %q, want row-2 repaint for changed row", got)
+	}
+	if strings.Contains(got, "\x1b[1;1H\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want row 1 left untouched", got)
+	}
+}
+
+func TestWriteFrameDiffCursorOnlyMoveDoesNotClearRows(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(1, 4)
+	prev.rows[0].cells[0] = frameCell{r: 'a'}
+	prev.cursor = frameCursor{visible: true, row: 0, col: 0}
+	next := cloneTerminalFrame(prev)
+	next.cursor = frameCursor{visible: true, row: 0, col: 2}
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25h\x1b[1;3H"; got != want {
+		t.Fatalf("writeFrameDiff() = %q, want %q", got, want)
+	}
+}
+
+func TestWriteFrameDiffTitleOnlyEmitsTitleSequence(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(1, 4)
+	prev.title = "/tmp/alpha.txt"
+	next := cloneTerminalFrame(prev)
+	next.title = "/tmp/beta.txt"
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b]2;beta.txt\x07") {
+		t.Fatalf("writeFrameDiff() = %q, want updated title sequence", got)
+	}
+	if strings.Contains(got, "\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want no row clears for title-only change", got)
+	}
+}

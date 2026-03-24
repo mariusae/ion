@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestConfigureCBreakTermiosDisablesInterruptAndStartStopChars(t *testing.T) {
+func TestConfigureCBreakTermiosDisablesInterruptLiteralNextAndStartStopChars(t *testing.T) {
 	t.Parallel()
 
 	termios := syscall.Termios{
@@ -15,6 +15,7 @@ func TestConfigureCBreakTermiosDisablesInterruptAndStartStopChars(t *testing.T) 
 		Lflag: syscall.ICANON | syscall.ECHO,
 	}
 	termios.Cc[syscall.VINTR] = 0x03
+	termios.Cc[syscall.VLNEXT] = 0x16
 	termios.Cc[syscall.VSTART] = 0x11
 	termios.Cc[syscall.VSTOP] = 0x13
 
@@ -31,6 +32,9 @@ func TestConfigureCBreakTermiosDisablesInterruptAndStartStopChars(t *testing.T) 
 	}
 	if got, want := termios.Cc[syscall.VINTR], uint8(posixVDisable); got != want {
 		t.Fatalf("VINTR = %#x, want %#x", got, want)
+	}
+	if got, want := termios.Cc[syscall.VLNEXT], uint8(posixVDisable); got != want {
+		t.Fatalf("VLNEXT = %#x, want %#x", got, want)
 	}
 	if got, want := termios.Cc[syscall.VSTART], uint8(posixVDisable); got != want {
 		t.Fatalf("VSTART = %#x, want %#x", got, want)

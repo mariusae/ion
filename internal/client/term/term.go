@@ -1415,7 +1415,7 @@ func waitForTTYReady(stdin, wake *os.File) (bool, error) {
 	var readfds syscall.FdSet
 	fdSetAdd(&readfds, stdinFD)
 	fdSetAdd(&readfds, wakeFD)
-	if _, err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
+	if err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
 		if errors.Is(err, syscall.EINTR) {
 			return true, nil
 		}
@@ -1650,88 +1650,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 }
 
 func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {
-	if state == nil {
-		return nil
-	}
-	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(state.name)); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25l\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
-		return err
-	}
-	viewRows := bufferViewRows(overlay)
-	p := visualRowStartForPos(state.text, state.origin)
-	inactive := bufferInactive(overlay, menu, focused)
-	for row := 0; row < viewRows; row++ {
-		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
-			return err
-		}
-		if p <= len(state.text) {
-			rowEnd := visualRowEnd(state.text, p)
-			if err := drawBufferLine(stdout, state, p, rowEnd, inactive, theme); err != nil {
-				return err
-			}
-			next := nextVisualRowStart(state.text, p)
-			if next != p {
-				p = next
-				continue
-			}
-			p = len(state.text) + 1
-		}
-	}
-	for row := viewRows + 1; row <= termRows; row++ {
-		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row); err != nil {
-			return err
-		}
-	}
-	if overlay != nil && overlay.visible {
-		historyRows := overlayHistoryRows(overlay)
-		lines := overlay.renderLines(historyRows)
-		topRow := overlayTopRow(overlay)
-		for row := 0; row < overlayTopPadRows(overlay); row++ {
-			if err := drawHUDLine(stdout, topRow+row, "", theme.hudPrefix(), theme); err != nil {
-				return err
-			}
-		}
-		startRow := topRow + overlayTopPadRows(overlay)
-		for row := 0; row < historyRows; row++ {
-			line := overlayRenderLine{}
-			if row < len(lines) {
-				line = lines[row]
-			}
-			if err := drawOverlayHistoryLine(stdout, startRow+row, line, overlay, theme); err != nil {
-				return err
-			}
-		}
-		if overlayPromptRows(overlay) > 0 {
-			if err := drawOverlayPrompt(stdout, overlay, theme); err != nil {
-				return err
-			}
-		}
-		bottomStart := topRow + overlayTopPadRows(overlay) + historyRows + overlayPromptRows(overlay)
-		for row := 0; row < overlayBottomPadRows(overlay); row++ {
-			if err := drawHUDLine(stdout, bottomStart+row, "", theme.hudPrefix(), theme); err != nil {
-				return err
-			}
-		}
-		if err := drawMenu(stdout, menu, theme); err != nil {
-			return err
-		}
-		return positionTerminalCursor(stdout, state, overlay, menu, focused)
-	}
-	if state.status != "" {
-		status := []rune(state.status)
-		if len(status) > termCols {
-			status = status[:termCols]
-		}
-		if err := drawInlineHUDLabel(stdout, termRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
-			return err
-		}
-	}
-	if err := drawMenu(stdout, menu, theme); err != nil {
-		return err
-	}
-	return positionTerminalCursor(stdout, state, overlay, menu, focused)
+	return writeFullFrame(stdout, buildBufferFrame(state, overlay, menu, theme, focused))
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {

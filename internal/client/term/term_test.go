@@ -800,7 +800,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 	t.Parallel()
 
 	prevRows, prevCols := termRows, termCols
-	termRows, termCols = 6, 20
+	termRows, termCols = 12, 20
 	t.Cleanup(func() {
 		termRows, termCols = prevRows, prevCols
 	})
@@ -812,7 +812,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 		DotStart: 1,
 		DotEnd:   1,
 	})
-	menu := buildContextMenu(state, nil, 5, 2, menuStickyState{})
+	menu := buildContextMenu(state, nil, 5, 8, menuStickyState{})
 
 	var out bytes.Buffer
 	if err := drawBufferMode(&out, state, nil, menu, theme, true); err != nil {

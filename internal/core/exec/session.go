@@ -1762,7 +1762,7 @@ func (s *Session) removeFile(target *text.File) error {
 		copy(s.Files[i:], s.Files[i+1:])
 		s.Files = s.Files[:len(s.Files)-1]
 		if s.Current == target {
-			s.Current = s.firstFile()
+			s.Current = nil
 		}
 		delete(s.closeOK, target)
 		return target.Close()

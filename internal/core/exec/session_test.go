@@ -312,7 +312,7 @@ func TestOpenFilesPathsAtomicRestoresPreviousCurrentOnFailure(t *testing.T) {
 	}
 }
 
-func TestRemoveCurrentFileSelectsRemainingFile(t *testing.T) {
+func TestRemoveCurrentFileLeavesNoCurrent(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -330,18 +330,22 @@ func TestRemoveCurrentFileSelectsRemainingFile(t *testing.T) {
 	if err := sess.OpenFilesPaths([]string{one, two}); err != nil {
 		t.Fatalf("OpenFilesPaths() error = %v", err)
 	}
-	if got, want := trimToken(sess.Current.Name.UTF8()), two; got != want {
-		t.Fatalf("current name before close = %q, want %q", got, want)
+	if sess.Current == nil {
+		t.Fatal("current file = nil, want one current file before close")
 	}
 
 	if err := sess.removeFile(sess.Current); err != nil {
 		t.Fatalf("removeFile() error = %v", err)
 	}
-	if sess.Current == nil {
-		t.Fatal("current file = nil, want remaining file selected")
+	if sess.Current != nil {
+		t.Fatalf("current file = %#v, want nil", sess.Current)
 	}
-	if got, want := trimToken(sess.Current.Name.UTF8()), one; got != want {
-		t.Fatalf("current name after close = %q, want %q", got, want)
+	menu := sess.MenuFiles()
+	if len(menu) != 1 {
+		t.Fatalf("menu len = %d, want 1", len(menu))
+	}
+	if menu[0].Current {
+		t.Fatal("remaining file marked current, want no current file")
 	}
 }
 

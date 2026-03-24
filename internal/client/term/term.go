@@ -2211,7 +2211,7 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 	}
 	row := 0
 	p := visualRowStartForPos(state.text, state.origin)
-	cursorRow := visualRowStartForPos(state.text, state.cursor)
+	cursorRow := visualCursorRowStartForPos(state.text, state.cursor)
 	viewRows := bufferViewRows(overlay)
 	for row < viewRows {
 		next := nextVisualRowStart(state.text, p)
@@ -2273,10 +2273,11 @@ func collapsedInactiveSelection(state *bufferState, inactive bool, rowStart int)
 		return 0, 0, false
 	}
 	pos := clampIndex(state.dotStart, len(state.text))
-	if visualRowStartForPos(state.text, pos) != rowStart {
+	cursorRow := visualCursorRowStartForPos(state.text, pos)
+	if cursorRow != rowStart {
 		return 0, 0, false
 	}
-	return pos, visualColumnForPos(state.text, rowStart, pos), true
+	return pos, visualColumnForPos(state.text, cursorRow, pos), true
 }
 
 func bufferInactive(overlay *overlayState, menu *menuState, focused bool) bool {
@@ -2363,7 +2364,7 @@ func handleBufferKey(state *bufferState, key int) {
 
 func movePageUp(text []rune, pos, rows int) int {
 	for i := 0; i < rows; i++ {
-		next := prevVisualRowStart(text, visualRowStartForPos(text, pos))
+		next := prevVisualRowStart(text, visualCursorRowStartForPos(text, pos))
 		if next == pos {
 			break
 		}
@@ -2374,7 +2375,7 @@ func movePageUp(text []rune, pos, rows int) int {
 
 func movePageDown(text []rune, pos, rows int) int {
 	for i := 0; i < rows; i++ {
-		next := nextVisualRowStart(text, visualRowStartForPos(text, pos))
+		next := nextVisualRowStart(text, visualCursorRowStartForPos(text, pos))
 		if next == pos {
 			break
 		}
@@ -2385,7 +2386,7 @@ func movePageDown(text []rune, pos, rows int) int {
 
 func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 	origin = visualRowStartForPos(text, origin)
-	cursorRow := visualRowStartForPos(text, cursor)
+	cursorRow := visualCursorRowStartForPos(text, cursor)
 	if cursorRow < origin {
 		return cursorRow
 	}
@@ -2413,7 +2414,7 @@ func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 }
 
 func moveLineUp(text []rune, pos int) int {
-	start := visualRowStartForPos(text, pos)
+	start := visualCursorRowStartForPos(text, pos)
 	if start == 0 {
 		return pos
 	}
@@ -2423,7 +2424,7 @@ func moveLineUp(text []rune, pos int) int {
 }
 
 func moveLineDown(text []rune, pos int) int {
-	start := visualRowStartForPos(text, pos)
+	start := visualCursorRowStartForPos(text, pos)
 	col := visualColumnForPos(text, start, pos)
 	next := nextVisualRowStart(text, start)
 	if next == start {
@@ -2521,6 +2522,19 @@ func visualRowStartForPos(text []rune, pos int) int {
 		}
 		start = next
 	}
+}
+
+func visualCursorRowStartForPos(text []rune, pos int) int {
+	pos = clampIndex(pos, len(text))
+	start := visualRowStartForPos(text, pos)
+	if pos >= len(text) {
+		return start
+	}
+	end := visualRowEnd(text, start)
+	if pos == end && end > start && end < len(text) && text[end] != '\n' {
+		return end
+	}
+	return start
 }
 
 func visualRowPosAtColumn(text []rune, start, col int) int {

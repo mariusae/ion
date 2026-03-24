@@ -170,6 +170,19 @@ func TestMovePageDownByLines(t *testing.T) {
 	}
 }
 
+func TestMovePageDownContinuesFromWrappedBoundary(t *testing.T) {
+	prevCols := termCols
+	termCols = 3
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	text := []rune("abcdef\nghij\n")
+	if got, want := movePageDown(text, 3, 1), 7; got != want {
+		t.Fatalf("movePageDown(wrap boundary) = %d, want %d", got, want)
+	}
+}
+
 func TestBufferViewRowsUsesLiveTerminalHeight(t *testing.T) {
 	prev := termRows
 	termRows = 40
@@ -406,6 +419,26 @@ func TestTerminalCursorPositionTracksWrappedRows(t *testing.T) {
 	row, col := terminalCursorPosition(state, nil)
 	if row != 1 || col != 1 {
 		t.Fatalf("terminalCursorPosition() = (%d, %d), want (1, 1)", row, col)
+	}
+}
+
+func TestTerminalCursorPositionTreatsWrapBoundaryAsNextRow(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 3
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "abcdef\n",
+		DotStart: 3,
+		DotEnd:   3,
+	})
+	state.origin = 0
+
+	row, col := terminalCursorPosition(state, nil)
+	if row != 1 || col != 0 {
+		t.Fatalf("terminalCursorPosition(wrap boundary) = (%d, %d), want (1, 0)", row, col)
 	}
 }
 
@@ -1163,6 +1196,19 @@ func TestMoveLineDownUsesWrappedRows(t *testing.T) {
 	}
 	if got, want := moveLineDown(text, 4), 8; got != want {
 		t.Fatalf("moveLineDown(next line) = %d, want %d", got, want)
+	}
+}
+
+func TestMoveLineDownFromWrappedBoundaryTreatsCursorAsNextRow(t *testing.T) {
+	prevCols := termCols
+	termCols = 3
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	text := []rune("abcdef\ngh\n")
+	if got, want := moveLineDown(text, 3), 7; got != want {
+		t.Fatalf("moveLineDown(wrap boundary) = %d, want %d", got, want)
 	}
 }
 

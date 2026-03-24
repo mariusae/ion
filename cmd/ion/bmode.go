@@ -36,6 +36,8 @@ type bModePaths struct {
 }
 
 type bModeClient interface {
+	MenuFiles() ([]wire.MenuFile, error)
+	FocusFile(id int) (wire.BufferView, error)
 	OpenFiles(files []string) (wire.BufferView, error)
 	SetAddress(expr string) (wire.BufferView, error)
 	Close() error
@@ -47,6 +49,14 @@ type wireBModeClient struct {
 
 func (c *wireBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 	return c.client.OpenFiles(files)
+}
+
+func (c *wireBModeClient) MenuFiles() ([]wire.MenuFile, error) {
+	return c.client.MenuFiles()
+}
+
+func (c *wireBModeClient) FocusFile(id int) (wire.BufferView, error) {
+	return c.client.FocusFile(id)
 }
 
 func (c *wireBModeClient) SetAddress(expr string) (wire.BufferView, error) {

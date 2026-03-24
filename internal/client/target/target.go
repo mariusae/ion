@@ -16,6 +16,8 @@ type Target struct {
 
 // Service is the client-side surface needed to open addressed targets.
 type Service interface {
+	MenuFiles() ([]wire.MenuFile, error)
+	FocusFile(id int) (wire.BufferView, error)
 	OpenFiles(files []string) (wire.BufferView, error)
 	SetAddress(expr string) (wire.BufferView, error)
 }
@@ -66,9 +68,30 @@ func Open(svc Service, args []string) (wire.BufferView, error) {
 	if len(targets) == 0 {
 		return wire.BufferView{}, nil
 	}
-	view, err := svc.OpenFiles(Paths(targets))
+
+	menu, err := svc.MenuFiles()
 	if err != nil {
 		return wire.BufferView{}, err
+	}
+	loaded := menuIDsByName(menu)
+	missing := missingPaths(targets, loaded)
+
+	var view wire.BufferView
+	if len(missing) > 0 {
+		view, err = svc.OpenFiles(missing)
+		if err != nil {
+			return wire.BufferView{}, err
+		}
+		menu, err = svc.MenuFiles()
+		if err != nil {
+			return wire.BufferView{}, err
+		}
+	}
+	if id, ok := findMenuFileID(menu, targets[len(targets)-1].Path); ok {
+		view, err = svc.FocusFile(id)
+		if err != nil {
+			return wire.BufferView{}, err
+		}
 	}
 	return ApplyLastAddress(svc, targets, view)
 }
@@ -134,4 +157,54 @@ func literalPathExists(path string) bool {
 	}
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func menuIDsByName(menu []wire.MenuFile) map[string]int {
+	ids := make(map[string]int, len(menu))
+	for _, file := range menu {
+		if file.Name == "" {
+			continue
+		}
+		if _, ok := ids[file.Name]; !ok || file.Current {
+			ids[file.Name] = file.ID
+		}
+	}
+	return ids
+}
+
+func missingPaths(targets []Target, loaded map[string]int) []string {
+	missing := make([]string, 0, len(targets))
+	queued := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if target.Path == "" {
+			continue
+		}
+		if _, ok := loaded[target.Path]; ok {
+			continue
+		}
+		if _, ok := queued[target.Path]; ok {
+			continue
+		}
+		missing = append(missing, target.Path)
+		queued[target.Path] = struct{}{}
+	}
+	return missing
+}
+
+func findMenuFileID(menu []wire.MenuFile, path string) (int, bool) {
+	var first int
+	found := false
+	for _, file := range menu {
+		if file.Name != path {
+			continue
+		}
+		if file.Current {
+			return file.ID, true
+		}
+		if !found {
+			first = file.ID
+			found = true
+		}
+	}
+	return first, found
 }

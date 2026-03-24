@@ -13,12 +13,36 @@ import (
 )
 
 type fakeBModeClient struct {
-	openCalls [][]string
-	addresses []string
+	menuFiles  []wire.MenuFile
+	openCalls  [][]string
+	focusCalls []int
+	addresses  []string
+	nextID     int
+}
+
+func (c *fakeBModeClient) MenuFiles() ([]wire.MenuFile, error) {
+	out := make([]wire.MenuFile, len(c.menuFiles))
+	copy(out, c.menuFiles)
+	return out, nil
+}
+
+func (c *fakeBModeClient) FocusFile(id int) (wire.BufferView, error) {
+	c.focusCalls = append(c.focusCalls, id)
+	for i := range c.menuFiles {
+		c.menuFiles[i].Current = c.menuFiles[i].ID == id
+	}
+	return wire.BufferView{}, nil
 }
 
 func (c *fakeBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 	c.openCalls = append(c.openCalls, append([]string(nil), files...))
+	for _, name := range files {
+		c.nextID++
+		for i := range c.menuFiles {
+			c.menuFiles[i].Current = false
+		}
+		c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Name: name, Current: true})
+	}
 	return wire.BufferView{}, nil
 }
 
@@ -172,6 +196,56 @@ func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
 		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
 	}
 	if got, want := client.addresses, []string{"12+#3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	client := &fakeBModeClient{
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "todo.txt", Current: true},
+		},
+		nextID: 7,
+	}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		tempDir: func() string { return tempDir },
+		dial:    func(string) (bModeClient, error) { return client, nil },
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		notify:  func(paths bModePaths) error { return nil },
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true, files: []string{"todo.txt:/unicode"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if len(client.openCalls) != 0 {
+		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
+	}
+	if got, want := client.focusCalls, []int{7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.addresses, []string{"/unicode"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
 	}
 }

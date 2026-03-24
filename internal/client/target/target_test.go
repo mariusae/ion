@@ -10,15 +10,39 @@ import (
 )
 
 type fakeService struct {
-	openFiles []string
-	addresses []string
+	menuFiles   []wire.MenuFile
+	openCalls   [][]string
+	focusCalls  []int
+	addresses   []string
+	nextViewSeq int
+}
+
+func (f *fakeService) MenuFiles() ([]wire.MenuFile, error) {
+	out := make([]wire.MenuFile, len(f.menuFiles))
+	copy(out, f.menuFiles)
+	return out, nil
+}
+
+func (f *fakeService) FocusFile(id int) (wire.BufferView, error) {
+	f.focusCalls = append(f.focusCalls, id)
+	for i := range f.menuFiles {
+		f.menuFiles[i].Current = f.menuFiles[i].ID == id
+	}
+	return wire.BufferView{Name: f.nameForID(id)}, nil
 }
 
 func (f *fakeService) OpenFiles(files []string) (wire.BufferView, error) {
-	f.openFiles = append([]string(nil), files...)
+	f.openCalls = append(f.openCalls, append([]string(nil), files...))
 	name := ""
 	if len(files) > 0 {
 		name = files[len(files)-1]
+	}
+	for _, file := range files {
+		f.nextViewSeq++
+		for i := range f.menuFiles {
+			f.menuFiles[i].Current = false
+		}
+		f.menuFiles = append(f.menuFiles, wire.MenuFile{ID: 100 + f.nextViewSeq, Name: file, Current: true})
 	}
 	return wire.BufferView{Name: name}, nil
 }
@@ -26,6 +50,15 @@ func (f *fakeService) OpenFiles(files []string) (wire.BufferView, error) {
 func (f *fakeService) SetAddress(expr string) (wire.BufferView, error) {
 	f.addresses = append(f.addresses, expr)
 	return wire.BufferView{Name: "addressed", DotStart: 7, DotEnd: 7}, nil
+}
+
+func (f *fakeService) nameForID(id int) string {
+	for _, file := range f.menuFiles {
+		if file.ID == id {
+			return file.Name
+		}
+	}
+	return ""
 }
 
 func TestParseNumericSuffix(t *testing.T) {
@@ -72,10 +105,39 @@ func TestOpenAppliesLastAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if got, want := svc.openFiles, []string{"one.txt", "two.txt"}; !reflect.DeepEqual(got, want) {
+	if got, want := svc.openCalls, [][]string{{"one.txt", "two.txt"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() = %#v, want %#v", got, want)
 	}
+	if got, want := svc.focusCalls, []int{102}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() = %#v, want %#v", got, want)
+	}
 	if got, want := svc.addresses, []string{"/^func"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
+	}
+	if got, want := view.Name, "addressed"; got != want {
+		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+}
+
+func TestOpenFocusesExistingFileInsteadOfReopeningIt(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "todo.txt", Current: true},
+		},
+	}
+	view, err := Open(svc, []string{"todo.txt:/unicode"})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if len(svc.openCalls) != 0 {
+		t.Fatalf("OpenFiles() calls = %#v, want none", svc.openCalls)
+	}
+	if got, want := svc.focusCalls, []int{7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() = %#v, want %#v", got, want)
+	}
+	if got, want := svc.addresses, []string{"/unicode"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
 	}
 	if got, want := view.Name, "addressed"; got != want {

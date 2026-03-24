@@ -131,6 +131,27 @@ func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	}
 }
 
+func TestHandleMouseEventWheelDownClampsOriginBeforeEOF(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "line1\nline2\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	state.origin = 6
+	overlay := newOverlayState()
+	selecting := false
+	selectStart := 0
+
+	if ok := handleMouseEvent(state, overlay, mouseEvent{button: 65}, &selecting, &selectStart); !ok {
+		t.Fatalf("wheel-down not handled")
+	}
+	if got, want := state.origin, 6; got != want {
+		t.Fatalf("origin after wheel-down = %d, want %d", got, want)
+	}
+}
+
 func TestScreenToPosUsesWrappedRows(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 3

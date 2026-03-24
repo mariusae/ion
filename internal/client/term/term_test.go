@@ -420,6 +420,15 @@ func TestLastVisualRowStartStopsAtLastContentRow(t *testing.T) {
 	}
 }
 
+func TestClampBufferOriginRejectsPhantomEOFRow(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("line1\nline2\n")
+	if got, want := clampBufferOrigin(text, len(text)), 6; got != want {
+		t.Fatalf("clampBufferOrigin(EOF) = %d, want %d", got, want)
+	}
+}
+
 func TestHandleBufferKeyCanPageBackUpFromEOFWithoutBlankOrigin(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 24, 80
@@ -451,6 +460,54 @@ func TestHandleBufferKeyCanPageBackUpFromEOFWithoutBlankOrigin(t *testing.T) {
 	handleBufferKey(state, keyUp)
 	if got := state.origin; got >= len(state.text) {
 		t.Fatalf("origin after paging back up = %d, want visible content row", got)
+	}
+}
+
+func TestSyncBufferStateClampsPhantomEOFOrigin(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "line1\nline2\n",
+			DotStart: 12,
+			DotEnd:   12,
+		},
+	}
+	state := newBufferState(svc.view)
+	state.cursor = len(state.text)
+	state.origin = len(state.text)
+
+	next, err := syncBufferState(svc, state)
+	if err != nil {
+		t.Fatalf("syncBufferState() error = %v", err)
+	}
+	if got, want := next.origin, 6; got != want {
+		t.Fatalf("syncBufferState().origin = %d, want %d", got, want)
+	}
+}
+
+func TestDrawBufferModeClampsPhantomEOFOrigin(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Name:     "in.txt",
+		Text:     "line1\nline2\n",
+		DotStart: 12,
+		DotEnd:   12,
+	})
+	state.cursor = len(state.text)
+	state.origin = len(state.text)
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, newMenuState(), buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "line2") {
+		t.Fatalf("drawBufferMode() = %q, want last content row rendered instead of blank EOF row", got)
 	}
 }
 

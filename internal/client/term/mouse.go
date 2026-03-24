@@ -223,7 +223,7 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 			if next == state.origin {
 				break
 			}
-			state.origin = clampBufferOrigin(state.text, next)
+			state.origin = next
 		}
 		return true
 	case 65:
@@ -232,7 +232,7 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 			if next == state.origin {
 				break
 			}
-			state.origin = clampBufferOrigin(state.text, next)
+			state.origin = next
 		}
 		return true
 	}

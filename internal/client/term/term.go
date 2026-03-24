@@ -1446,7 +1446,7 @@ func rememberBufferOrigin(origins map[int]int, state *bufferState) {
 	if origins == nil || state == nil || state.fileID == 0 {
 		return
 	}
-	origins[state.fileID] = clampBufferOrigin(state.text, state.origin)
+	origins[state.fileID] = visualRowStartForPos(state.text, state.origin)
 }
 
 func bufferStateFromView(view wire.BufferView, previous *bufferState, origins map[int]int) *bufferState {
@@ -1454,8 +1454,6 @@ func bufferStateFromView(view wire.BufferView, previous *bufferState, origins ma
 	next := newBufferState(view)
 	if origin, ok := origins[next.fileID]; ok {
 		next.origin = restoreBufferOrigin(next, origin)
-	} else {
-		next.origin = clampBufferOrigin(next.text, next.origin)
 	}
 	return next
 }
@@ -1538,7 +1536,7 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	}
 	next := newBufferState(view)
 	next.cursor = clampIndex(state.cursor, len(next.text))
-	next.origin = clampBufferOrigin(next.text, adjustOriginForCursor(next.text, state.origin, next.cursor, termRows))
+	next.origin = adjustOriginForCursor(next.text, state.origin, next.cursor, termRows)
 	next.dotStart = clampIndex(view.DotStart, len(next.text))
 	next.dotEnd = clampIndex(view.DotEnd, len(next.text))
 	next.markMode = state.markMode
@@ -1554,7 +1552,7 @@ func restoreBufferOrigin(state *bufferState, origin int) int {
 	}
 	clamped := clampIndex(origin, len(state.text))
 	rowStart := visualRowStartForPos(state.text, clamped)
-	return clampBufferOrigin(state.text, adjustOriginForCursor(state.text, rowStart, state.cursor, termRows))
+	return adjustOriginForCursor(state.text, rowStart, state.cursor, termRows)
 }
 
 func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {
@@ -1569,7 +1567,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	next.dotEnd = cursor
 	next.markMode = false
 	if state != nil {
-		next.origin = clampBufferOrigin(next.text, adjustOriginForCursor(next.text, state.origin, cursor, termRows))
+		next.origin = adjustOriginForCursor(next.text, state.origin, cursor, termRows)
 		next.status = state.status
 	}
 	return next, nil
@@ -1586,7 +1584,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		return err
 	}
 	viewRows := bufferViewRows(overlay)
-	p := clampBufferOrigin(state.text, state.origin)
+	p := visualRowStartForPos(state.text, state.origin)
 	for row := 0; row < viewRows; row++ {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 			return err
@@ -2165,7 +2163,7 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 		return 0, 0
 	}
 	row := 0
-	p := clampBufferOrigin(state.text, state.origin)
+	p := visualRowStartForPos(state.text, state.origin)
 	viewRows := bufferViewRows(overlay)
 	for row < viewRows {
 		rowEnd := visualRowEnd(state.text, p)
@@ -2453,22 +2451,15 @@ func visualRowPosAtColumn(text []rune, start, col int) int {
 }
 
 func visibleOriginForCursor(text []rune, cursor int) int {
-	return clampBufferOrigin(text, cursor)
-}
-
-func clampBufferOrigin(text []rune, origin int) int {
-	if len(text) == 0 {
-		return 0
+	origin := visualRowStartForPos(text, cursor)
+	if origin < len(text) || len(text) == 0 {
+		return origin
 	}
-	rowStart := visualRowStartForPos(text, clampIndex(origin, len(text)))
-	if rowStart < len(text) {
-		return rowStart
-	}
-	prev := prevVisualRowStart(text, rowStart)
-	if prev < rowStart {
+	prev := prevVisualRowStart(text, origin)
+	if prev < origin {
 		return prev
 	}
-	return 0
+	return origin
 }
 
 func hasDirtyFiles(svc wire.TermService) (bool, error) {

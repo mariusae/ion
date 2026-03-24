@@ -2237,10 +2237,10 @@ func handleBufferKey(state *bufferState, key int) {
 		}
 	case keyUp, keyPgUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = visibleOriginForCursor(state.text, state.cursor)
 	case keyDown, keyPgDn:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = visibleOriginForCursor(state.text, state.cursor)
 	case 16:
 		state.cursor = moveLineUp(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -2265,7 +2265,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 22:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = visibleOriginForCursor(state.text, state.cursor)
 	case keyAltLeft:
 		state.cursor = prevWordStart(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -2274,7 +2274,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyAltPageUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = visibleOriginForCursor(state.text, state.cursor)
 	}
 	updateSelection(state)
 }
@@ -2401,7 +2401,7 @@ func lastVisualRowStart(text []rune, start int) int {
 	last := start
 	for {
 		next := nextVisualRowStart(text, last)
-		if next == last {
+		if next == last || next >= len(text) {
 			return last
 		}
 		last = next
@@ -2448,6 +2448,18 @@ func visualRowPosAtColumn(text []rune, start, col int) int {
 		}
 	}
 	return end
+}
+
+func visibleOriginForCursor(text []rune, cursor int) int {
+	origin := visualRowStartForPos(text, cursor)
+	if origin < len(text) || len(text) == 0 {
+		return origin
+	}
+	prev := prevVisualRowStart(text, origin)
+	if prev < origin {
+		return prev
+	}
+	return origin
 }
 
 func hasDirtyFiles(svc wire.TermService) (bool, error) {

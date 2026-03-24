@@ -35,28 +35,55 @@ type uiTheme struct {
 	cursorBG    rgbColor
 }
 
+type terminalThemeReport struct {
+	mode           colorMode
+	modeSource     string
+	queryStatus    string
+	queryReason    string
+	queryMethod    string
+	queryTimeout   time.Duration
+	inputSource    string
+	outputSource   string
+	rawResponse    []byte
+	background     rgbColor
+	backgroundOK   bool
+	backgroundFrom string
+	theme          *uiTheme
+}
+
 func detectTerminalTheme(stdin *os.File, stdout io.Writer) (*uiTheme, []byte) {
-	mode := detectColorMode()
-	if mode == colorModeNone || stdin == nil || stdout == nil {
-		return nil, nil
-	}
-	bg, prefix, ok := queryTerminalBackground(stdin, stdout, 75*time.Millisecond)
-	if !ok {
-		return nil, prefix
-	}
-	return buildTheme(bg, mode), prefix
+	report, prefix := collectTerminalThemeReport(stdin, stdout)
+	return report.theme, prefix
 }
 
 func detectColorMode() colorMode {
+	mode, _ := detectColorModeWithSource()
+	return mode
+}
+
+func detectColorModeWithSource() (colorMode, string) {
 	colorterm := strings.ToLower(os.Getenv("COLORTERM"))
-	if strings.Contains(colorterm, "truecolor") || strings.Contains(colorterm, "24bit") {
-		return colorModeTrueColor
-	}
 	term := strings.ToLower(os.Getenv("TERM"))
-	if strings.Contains(term, "256color") {
-		return colorModeANSI256
+	inTmux := strings.TrimSpace(os.Getenv("TMUX")) != ""
+	if strings.Contains(colorterm, "truecolor") || strings.Contains(colorterm, "24bit") {
+		return colorModeTrueColor, fmt.Sprintf("COLORTERM=%q", os.Getenv("COLORTERM"))
 	}
-	return colorModeNone
+	if strings.Contains(term, "direct") {
+		return colorModeTrueColor, fmt.Sprintf("TERM=%q", os.Getenv("TERM"))
+	}
+	if strings.Contains(term, "256color") {
+		if inTmux {
+			return colorModeTrueColor, fmt.Sprintf("TERM=%q with TMUX set", os.Getenv("TERM"))
+		}
+		return colorModeANSI256, fmt.Sprintf("TERM=%q", os.Getenv("TERM"))
+	}
+	if os.Getenv("COLORTERM") != "" {
+		return colorModeNone, fmt.Sprintf("COLORTERM=%q", os.Getenv("COLORTERM"))
+	}
+	if os.Getenv("TERM") != "" {
+		return colorModeNone, fmt.Sprintf("TERM=%q", os.Getenv("TERM"))
+	}
+	return colorModeNone, "COLORTERM and TERM unset"
 }
 
 func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
@@ -72,6 +99,44 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 	}
 }
 
+func collectTerminalThemeReport(stdin *os.File, stdout io.Writer) (terminalThemeReport, []byte) {
+	mode, modeSource := detectColorModeWithSource()
+	report := terminalThemeReport{
+		mode:         mode,
+		modeSource:   modeSource,
+		queryTimeout: 250 * time.Millisecond,
+	}
+	if mode == colorModeNone {
+		report.queryStatus = "skipped"
+		report.queryReason = "color mode detection disabled theme probing"
+		return report, nil
+	}
+	if stdin == nil {
+		report.queryStatus = "skipped"
+		report.queryReason = "stdin is not an *os.File tty handle"
+		return report, nil
+	}
+	if stdout == nil {
+		report.queryStatus = "skipped"
+		report.queryReason = "stdout is nil"
+		return report, nil
+	}
+	bg, prefix, query := queryTerminalBackground(stdin, stdout, report.queryTimeout)
+	report.queryStatus = query.status
+	report.queryReason = query.reason
+	report.queryMethod = query.method
+	report.inputSource = query.inputSource
+	report.outputSource = query.outputSource
+	report.rawResponse = append(report.rawResponse, query.raw...)
+	if query.ok {
+		report.background = bg
+		report.backgroundOK = true
+		report.backgroundFrom = query.method
+		report.theme = buildTheme(bg, mode)
+	}
+	return report, prefix
+}
+
 func sameTheme(a, b *uiTheme) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -84,6 +149,70 @@ func alphaFor(light bool, lightAlpha, darkAlpha float64) float64 {
 		return lightAlpha
 	}
 	return darkAlpha
+}
+
+func WriteThemeDiagnostics(stdin io.Reader, stdout io.Writer) error {
+	var stdinFile *os.File
+	if f, ok := stdin.(*os.File); ok {
+		stdinFile = f
+	}
+	report, _ := collectTerminalThemeReport(stdinFile, stdout)
+	_, err := io.WriteString(stdout, formatThemeDiagnostics(report))
+	return err
+}
+
+func formatThemeDiagnostics(report terminalThemeReport) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "ion terminal diagnostics")
+	fmt.Fprintf(&b, "color_mode: %s\n", report.mode.String())
+	fmt.Fprintf(&b, "color_mode_source: %s\n", report.modeSource)
+	fmt.Fprintf(&b, "query_status: %s\n", report.queryStatus)
+	if report.queryReason != "" {
+		fmt.Fprintf(&b, "query_reason: %s\n", report.queryReason)
+	}
+	if report.queryMethod != "" {
+		fmt.Fprintf(&b, "query_method: %s\n", report.queryMethod)
+	}
+	if report.inputSource != "" {
+		fmt.Fprintf(&b, "query_input: %s\n", report.inputSource)
+	}
+	if report.outputSource != "" {
+		fmt.Fprintf(&b, "query_output: %s\n", report.outputSource)
+	}
+	if report.queryTimeout > 0 {
+		fmt.Fprintf(&b, "query_timeout_ms: %d\n", report.queryTimeout.Milliseconds())
+	}
+	if len(report.rawResponse) > 0 {
+		fmt.Fprintf(&b, "query_raw: %q\n", string(report.rawResponse))
+		fmt.Fprintf(&b, "query_raw_hex: %x\n", report.rawResponse)
+	}
+	fmt.Fprintf(&b, "theme_enabled: %t\n", report.theme != nil)
+	if !report.backgroundOK {
+		return b.String()
+	}
+	light := luminance(report.background) > 128
+	fmt.Fprintf(&b, "background_method: %s\n", report.backgroundFrom)
+	fmt.Fprintf(&b, "background_rgb: %s\n", formatRGB(report.background))
+	fmt.Fprintf(&b, "background_luminance: %.2f\n", luminance(report.background))
+	fmt.Fprintf(&b, "background_is_light: %t\n", light)
+	writeTintDiagnostics(&b, "subtle_bg", report.theme.subtleBG, report.theme)
+	writeTintDiagnostics(&b, "hud_bg", report.theme.hudBG, report.theme)
+	writeTintDiagnostics(&b, "output_bg", report.theme.outputBG, report.theme)
+	writeTintDiagnostics(&b, "title_bg", report.theme.titleBG, report.theme)
+	writeTintDiagnostics(&b, "highlight_bg", report.theme.highlightBG, report.theme)
+	writeTintDiagnostics(&b, "cursor_bg", report.theme.cursorBG, report.theme)
+	return b.String()
+}
+
+func writeTintDiagnostics(b *strings.Builder, name string, color rgbColor, theme *uiTheme) {
+	if b == nil || theme == nil {
+		return
+	}
+	fmt.Fprintf(b, "tint.%s: %s sgr=%s\n", name, formatRGB(color), theme.bgCode(color))
+}
+
+func formatRGB(color rgbColor) string {
+	return fmt.Sprintf("#%02x%02x%02x (%d,%d,%d)", color.r, color.g, color.b, color.r, color.g, color.b)
 }
 
 func luminance(c rgbColor) float64 {
@@ -112,14 +241,73 @@ func blendTint(bg rgbColor, light bool, alpha float64) rgbColor {
 	}
 }
 
-func queryTerminalBackground(stdin *os.File, stdout io.Writer, timeout time.Duration) (rgbColor, []byte, bool) {
-	if _, err := io.WriteString(stdout, "\x1b]11;?\x1b\\"); err != nil {
-		return rgbColor{}, nil, false
+type terminalQueryResult struct {
+	status       string
+	reason       string
+	method       string
+	inputSource  string
+	outputSource string
+	raw          []byte
+	ok           bool
+}
+
+func queryTerminalBackground(stdin *os.File, stdout io.Writer, timeout time.Duration) (rgbColor, []byte, terminalQueryResult) {
+	input, inputSource, inputOwned, err := openQueryInput(stdin)
+	if err != nil {
+		return rgbColor{}, nil, terminalQueryResult{
+			status: "setup_failed",
+			reason: err.Error(),
+			method: "osc-11",
+		}
+	}
+	if inputOwned {
+		defer input.Close()
 	}
 
-	fd := int(stdin.Fd())
+	output, outputSource, outputOwned, err := openQueryOutput(stdout)
+	if err != nil {
+		return rgbColor{}, nil, terminalQueryResult{
+			status:      "setup_failed",
+			reason:      err.Error(),
+			method:      "osc-11",
+			inputSource: inputSource,
+		}
+	}
+	if outputOwned {
+		defer output.Close()
+	}
+
+	state, err := enterCBreakMode(input)
+	if err != nil {
+		return rgbColor{}, nil, terminalQueryResult{
+			status:       "setup_failed",
+			reason:       err.Error(),
+			method:       "osc-11",
+			inputSource:  inputSource,
+			outputSource: outputSource,
+		}
+	}
+	defer state.restore()
+
+	if _, err := io.WriteString(output, "\x1b]11;?\x1b\\"); err != nil {
+		return rgbColor{}, nil, terminalQueryResult{
+			status:       "write_failed",
+			reason:       err.Error(),
+			method:       "osc-11",
+			inputSource:  inputSource,
+			outputSource: outputSource,
+		}
+	}
+
+	fd := int(input.Fd())
 	if err := syscall.SetNonblock(fd, true); err != nil {
-		return rgbColor{}, nil, false
+		return rgbColor{}, nil, terminalQueryResult{
+			status:       "setup_failed",
+			reason:       err.Error(),
+			method:       "osc-11",
+			inputSource:  inputSource,
+			outputSource: outputSource,
+		}
 	}
 	defer func() {
 		_ = syscall.SetNonblock(fd, false)
@@ -129,12 +317,26 @@ func queryTerminalBackground(stdin *os.File, stdout io.Writer, timeout time.Dura
 	var raw []byte
 	buf := make([]byte, 256)
 	for time.Now().Before(deadline) {
-		n, err := stdin.Read(buf)
+		n, err := input.Read(buf)
 		if n > 0 {
 			raw = append(raw, buf[:n]...)
-			color, rest, found, ok := extractOSC11Response(raw)
+			color, rest, found, ok := extractTerminalBackgroundResponse(raw)
 			if found {
-				return color, rest, ok
+				status := "parse_failed"
+				reason := "terminal responded to OSC 11 with an unparseable payload"
+				if ok {
+					status = "ok"
+					reason = ""
+				}
+				return color, rest, terminalQueryResult{
+					status:       status,
+					reason:       reason,
+					method:       "osc-11",
+					inputSource:  inputSource,
+					outputSource: outputSource,
+					raw:          append([]byte(nil), raw...),
+					ok:           ok,
+				}
 			}
 		}
 		if err == nil {
@@ -156,7 +358,49 @@ func queryTerminalBackground(stdin *os.File, stdout io.Writer, timeout time.Dura
 		}
 		break
 	}
-	return rgbColor{}, raw, false
+	return rgbColor{}, raw, terminalQueryResult{
+		status:       "no_response",
+		reason:       "terminal did not answer OSC 11 before timeout",
+		method:       "osc-11",
+		inputSource:  inputSource,
+		outputSource: outputSource,
+		raw:          append([]byte(nil), raw...),
+	}
+}
+
+func openQueryInput(stdin *os.File) (*os.File, string, bool, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
+	if err == nil {
+		return tty, "/dev/tty", true, nil
+	}
+	if stdin != nil && isTTY(stdin) {
+		return stdin, "stdin", false, nil
+	}
+	return nil, "", false, err
+}
+
+func openQueryOutput(stdout io.Writer) (*os.File, string, bool, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err == nil {
+		return tty, "/dev/tty", true, nil
+	}
+	file, ok := stdout.(*os.File)
+	if ok && isTTY(file) {
+		return file, "stdout", false, nil
+	}
+	return nil, "", false, err
+}
+
+func extractTerminalBackgroundResponse(data []byte) (rgbColor, []byte, bool, bool) {
+	if strings.Contains(string(data), "\x1bPtmux;") {
+		if color, rest, found, ok := extractTmuxWrappedOSC11Response(data); found {
+			return color, rest, found, ok
+		}
+	}
+	if color, rest, found, ok := extractOSC11Response(data); found {
+		return color, rest, found, ok
+	}
+	return rgbColor{}, data, false, false
 }
 
 func extractOSC11Response(data []byte) (rgbColor, []byte, bool, bool) {
@@ -179,6 +423,36 @@ func extractOSC11Response(data []byte) (rgbColor, []byte, bool, bool) {
 		}
 	}
 	return rgbColor{}, data, false, false
+}
+
+func extractTmuxWrappedOSC11Response(data []byte) (rgbColor, []byte, bool, bool) {
+	start := strings.Index(string(data), "\x1bPtmux;")
+	if start < 0 {
+		return rgbColor{}, data, false, false
+	}
+	payloadStart := start + len("\x1bPtmux;")
+	for i := payloadStart; i+1 < len(data); i++ {
+		if data[i] == 0x1b && data[i+1] == '\\' && (i == payloadStart || data[i-1] != 0x1b) {
+			payload := string(data[payloadStart:i])
+			payload = strings.ReplaceAll(payload, "\x1b\x1b", "\x1b")
+			color, ok := parseWrappedOSC11Payload(payload)
+			return color, spliceBytes(data, start, i+2), true, ok
+		}
+	}
+	return rgbColor{}, data, false, false
+}
+
+func parseWrappedOSC11Payload(payload string) (rgbColor, bool) {
+	if strings.HasPrefix(payload, "\x1b]11;") {
+		payload = strings.TrimPrefix(payload, "\x1b]11;")
+		switch {
+		case strings.HasSuffix(payload, "\x07"):
+			payload = strings.TrimSuffix(payload, "\x07")
+		case strings.HasSuffix(payload, "\x1b\\"):
+			payload = strings.TrimSuffix(payload, "\x1b\\")
+		}
+	}
+	return parseOSCColorPayload(payload)
 }
 
 func spliceBytes(data []byte, start, end int) []byte {
@@ -381,4 +655,15 @@ func sgr(codes ...string) string {
 
 func styleReset() string {
 	return "\x1b[39;49;22;24;27m"
+}
+
+func (m colorMode) String() string {
+	switch m {
+	case colorModeANSI256:
+		return "ansi256"
+	case colorModeTrueColor:
+		return "truecolor"
+	default:
+		return "none"
+	}
 }

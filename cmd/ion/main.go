@@ -20,6 +20,7 @@ type config struct {
 	download bool
 	bmode    bool
 	bserve   bool
+	rage     bool
 	files    []string
 }
 
@@ -58,6 +59,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
+	if cfg.rage {
+		if err := runRage(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	if err := runTerm(cfg, stdin, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "ion: %v\n", err)
 		return 1
@@ -73,6 +82,7 @@ func parseArgs(args []string) (config, error) {
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
+	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -82,7 +92,19 @@ func parseArgs(args []string) (config, error) {
 	if cfg.download && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -d cannot be combined")
 	}
+	if cfg.rage && cfg.download {
+		return config{}, fmt.Errorf("-d and -rage cannot be combined")
+	}
+	if cfg.rage && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -rage cannot be combined")
+	}
+	if cfg.rage && cfg.bserve {
+		return config{}, fmt.Errorf("-b-serve and -rage cannot be combined")
+	}
 	cfg.files = fs.Args()
+	if cfg.rage && len(cfg.files) > 0 {
+		return config{}, fmt.Errorf("-rage does not take file arguments")
+	}
 	return cfg, nil
 }
 
@@ -98,6 +120,12 @@ func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
 		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
 	})
+}
+
+func runRage(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	_ = cfg
+	_ = stderr
+	return term.WriteThemeDiagnostics(stdin, stdout)
 }
 
 func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {

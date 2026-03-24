@@ -49,6 +49,11 @@ var (
 	shimmerStart = time.Now()
 )
 
+const (
+	wakeWinch   = byte('w')
+	wakeRefresh = byte('r')
+)
+
 type bufferState struct {
 	fileID         int
 	name           string
@@ -140,6 +145,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	signal.Notify(refreshCh, syscall.SIGUSR1)
 	defer signal.Stop(winchCh)
 	defer signal.Stop(refreshCh)
+	wakeR, wakeW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer wakeR.Close()
+	defer wakeW.Close()
+	signalDone := make(chan struct{})
+	defer close(signalDone)
+	go forwardWakeSignals(signalDone, wakeW, winchCh, refreshCh)
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -944,41 +958,36 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	for {
-		handledSignal := false
-		for {
-			select {
-			case <-winchCh:
-				refreshTerminalSize()
-				handledSignal = true
-				if inBufferMode {
-					if err := redraw(); err != nil {
-						return err
-					}
-				}
-			case <-refreshCh:
-				handledSignal = true
-				if inBufferMode {
-					if err := refreshBuffer(); err != nil {
-						return err
-					}
-					if err := redraw(); err != nil {
-						return err
-					}
-				}
-			default:
-				goto signalsDrained
-			}
-		}
-	signalsDrained:
-		if handledSignal {
-			continue
-		}
 		if reader.Buffered() == 0 {
-			ready, err := waitForTTYByte(stdin, 50*time.Millisecond)
+			wake, err := waitForTTYReady(stdin, wakeR)
 			if err != nil {
 				return err
 			}
-			if !ready {
+			if wake {
+				tags, err := readWakeTags(wakeR)
+				if err != nil {
+					return err
+				}
+				for _, tag := range tags {
+					switch tag {
+					case wakeWinch:
+						refreshTerminalSize()
+						if inBufferMode {
+							if err := redraw(); err != nil {
+								return err
+							}
+						}
+					case wakeRefresh:
+						if inBufferMode {
+							if err := refreshBuffer(); err != nil {
+								return err
+							}
+							if err := redraw(); err != nil {
+								return err
+							}
+						}
+					}
+				}
 				continue
 			}
 		}
@@ -1322,6 +1331,38 @@ func isTTY(f *os.File) bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
+func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, refreshCh <-chan os.Signal) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-winchCh:
+			_, _ = wake.Write([]byte{wakeWinch})
+		case <-refreshCh:
+			_, _ = wake.Write([]byte{wakeRefresh})
+		}
+	}
+}
+
+func waitForTTYReady(stdin, wake *os.File) (bool, error) {
+	stdinFD := int(stdin.Fd())
+	wakeFD := int(wake.Fd())
+	maxFD := stdinFD
+	if wakeFD > maxFD {
+		maxFD = wakeFD
+	}
+	var readfds syscall.FdSet
+	fdSetAdd(&readfds, stdinFD)
+	fdSetAdd(&readfds, wakeFD)
+	if err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
+		if errors.Is(err, syscall.EINTR) {
+			return true, nil
+		}
+		return false, err
+	}
+	return fdSetHas(&readfds, wakeFD), nil
+}
+
 func waitForTTYByte(stdin *os.File, timeout time.Duration) (bool, error) {
 	stdinFD := int(stdin.Fd())
 	var readfds syscall.FdSet
@@ -1334,6 +1375,34 @@ func waitForTTYByte(stdin *os.File, timeout time.Duration) (bool, error) {
 		return false, err
 	}
 	return fdSetHas(&readfds, stdinFD), nil
+}
+
+func readWakeTags(wake *os.File) ([]byte, error) {
+	var tags []byte
+	buf := make([]byte, 16)
+	if err := syscall.SetNonblock(int(wake.Fd()), true); err == nil {
+		defer syscall.SetNonblock(int(wake.Fd()), false)
+	}
+	for {
+		n, err := wake.Read(buf)
+		if n > 0 {
+			tags = append(tags, buf[:n]...)
+		}
+		if err != nil {
+			var pathErr *os.PathError
+			if errors.As(err, &pathErr) && errors.Is(pathErr.Err, syscall.EAGAIN) {
+				break
+			}
+			if errors.Is(err, syscall.EAGAIN) {
+				break
+			}
+			return tags, err
+		}
+		if n < len(buf) {
+			break
+		}
+	}
+	return tags, nil
 }
 
 func fdSetAdd(set *syscall.FdSet, fd int) {

@@ -3,6 +3,7 @@ package term
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -1315,6 +1316,91 @@ func TestApplyBufferKeyCtrlSpaceSyncsSelectionToService(t *testing.T) {
 	}
 	if !next.markMode {
 		t.Fatalf("markMode = false, want true")
+	}
+}
+
+func TestCopyBufferSelectionCopiesToClipboard(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   4,
+	})
+
+	var out bytes.Buffer
+	snarf, status, err := copyBufferSelection(&out, state)
+	if err != nil {
+		t.Fatalf("copyBufferSelection() error = %v", err)
+	}
+	if got, want := string(snarf), "lph"; got != want {
+		t.Fatalf("snarf = %q, want %q", got, want)
+	}
+	if got, want := status, "snarfed"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	wantOSC52 := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte("lph")) + "\x07"
+	if got := out.String(); got != wantOSC52 {
+		t.Fatalf("clipboard output = %q, want %q", got, wantOSC52)
+	}
+}
+
+func TestCutBufferSelectionDeletesSelection(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 1,
+			DotEnd:   4,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	var out bytes.Buffer
+	next, snarf, status, err := cutBufferSelection(&out, svc, state)
+	if err != nil {
+		t.Fatalf("cutBufferSelection() error = %v", err)
+	}
+	if got, want := string(snarf), "lph"; got != want {
+		t.Fatalf("snarf = %q, want %q", got, want)
+	}
+	if got, want := status, "cut"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := string(next.text), "aa\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	wantOSC52 := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte("lph")) + "\x07"
+	if got := out.String(); got != wantOSC52 {
+		t.Fatalf("clipboard output = %q, want %q", got, wantOSC52)
+	}
+}
+
+func TestPasteBufferSnarfReplacesSelection(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 1,
+			DotEnd:   4,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, status, err := pasteBufferSnarf(svc, state, []rune("XYZ"))
+	if err != nil {
+		t.Fatalf("pasteBufferSnarf() error = %v", err)
+	}
+	if got, want := status, ""; got != want {
+		t.Fatalf("status = %q, want empty", got)
+	}
+	if got, want := string(next.text), "aXYZa\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 4; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
 	}
 }
 

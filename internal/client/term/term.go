@@ -194,6 +194,75 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		buffer = revealOverlaySelection(previous, buffer, overlay)
 	}
 
+	showOverlayDiagnostic := func(message string) {
+		if strings.TrimSpace(message) == "" {
+			return
+		}
+		menu.dismiss()
+		if overlay.visible {
+			overlay.reopen()
+		} else {
+			overlay.open("")
+		}
+		overlay.addOutput(message)
+		if buffer != nil {
+			buffer.status = ""
+		}
+	}
+
+	openTargetToken := func(token string) error {
+		if token == "" {
+			return nil
+		}
+		view, err := clienttarget.Open(svc, []string{token})
+		if err != nil {
+			showOverlayDiagnostic(diagnosticText(err))
+			return nil
+		}
+		applyBufferView(view)
+		if buffer != nil {
+			buffer.status = ""
+		}
+		return nil
+	}
+
+	copyBufferSelectionLocal := func() error {
+		copied, status, err := copyBufferSelection(stdout, buffer)
+		if err != nil {
+			return err
+		}
+		snarf = copied
+		if buffer != nil {
+			buffer.status = status
+		}
+		return nil
+	}
+
+	cutBufferSelectionLocal := func() error {
+		next, copied, status, err := cutBufferSelection(stdout, svc, buffer)
+		if err != nil {
+			return err
+		}
+		buffer = next
+		snarf = copied
+		if buffer != nil {
+			buffer.status = status
+		}
+		return nil
+	}
+
+	pasteBufferSelectionLocal := func() error {
+		next, status, err := pasteBufferSnarf(svc, buffer, snarf)
+		if err != nil {
+			return err
+		}
+		buffer = next
+		if buffer != nil {
+			buffer.status = status
+		}
+		return nil
+	}
+
 	executePending := func(final bool) (bool, error) {
 		for {
 			parser.ResetRunes(pending)
@@ -505,39 +574,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, nil
 		case menuCut:
-			snarf = snarfSelection(buffer)
-			if len(snarf) == 0 {
-				return false, nil
-			}
-			if err := copyToClipboard(stdout, snarf); err != nil {
+			if err := cutBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
-			if err != nil {
-				return false, err
-			}
-			buffer = next
-			buffer.status = "cut"
 			return false, nil
 		case menuSnarf:
-			snarf = snarfSelection(buffer)
-			if len(snarf) != 0 {
-				if err := copyToClipboard(stdout, snarf); err != nil {
-					return false, err
-				}
-				buffer.status = "snarfed"
+			if err := copyBufferSelectionLocal(); err != nil {
+				return false, err
 			}
 			return false, nil
 		case menuPaste:
-			if len(snarf) == 0 {
-				return false, nil
-			}
-			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
-			if err != nil {
+			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			buffer = next
-			buffer.status = ""
 			return false, nil
 		case menuLook:
 			next, ok, err := lookInBuffer(svc, buffer, true)
@@ -575,15 +624,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if token == "" {
 				return false, nil
 			}
-			_, err := clienttarget.Open(svc, []string{token})
-			if err != nil {
-				buffer.status = diagnosticText(err)
+			if err := openTargetToken(token); err != nil {
 				return false, nil
 			}
-			if err := refreshBuffer(); err != nil {
-				return false, err
-			}
-			buffer.status = ""
 			return false, nil
 		case menuFile:
 			view, err := svc.FocusFile(item.fileID)
@@ -680,8 +723,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							token = trimOverlaySelection(overlay.selectedText())
 						}
 						if token != "" {
-							if _, err := clienttarget.Open(svc, []string{token}); err == nil {
-								_ = refreshBuffer()
+							if err := openTargetToken(token); err == nil {
+								return true, nil
 							}
 						}
 						return true, nil
@@ -820,12 +863,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		switch key {
 		case keyAltSnarf:
-			snarf = snarfSelection(buffer)
-			if len(snarf) != 0 {
-				if err := copyToClipboard(stdout, snarf); err != nil {
-					return false, err
-				}
-				buffer.status = "snarfed"
+			if err := copyBufferSelectionLocal(); err != nil {
+				return false, err
 			}
 			return false, redraw()
 		case keyPaste:
@@ -855,34 +894,23 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 		}
 		switch r {
+		case 0x03:
+			if err := copyBufferSelectionLocal(); err != nil {
+				return false, err
+			}
+			return false, redraw()
 		case '\n':
 			overlay.reopen()
 			return false, redraw()
 		case 0x18:
-			snarf = snarfSelection(buffer)
-			if len(snarf) == 0 {
-				return false, nil
-			}
-			if err := copyToClipboard(stdout, snarf); err != nil {
+			if err := cutBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, "")
-			if err != nil {
-				return false, err
-			}
-			buffer = next
-			buffer.status = "cut"
 			return false, redraw()
-		case 0x19:
-			if len(snarf) == 0 {
-				return false, nil
-			}
-			next, err := replaceBufferRange(svc, buffer, buffer.dotStart, buffer.dotEnd, string(snarf))
-			if err != nil {
+		case 0x16, 0x19:
+			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			buffer = next
-			buffer.status = ""
 			return false, redraw()
 		case 0x11:
 			dirty, err := hasDirtyFiles(svc)
@@ -1371,7 +1399,7 @@ func waitForTTYReady(stdin, wake *os.File) (bool, error) {
 	var readfds syscall.FdSet
 	fdSetAdd(&readfds, stdinFD)
 	fdSetAdd(&readfds, wakeFD)
-	if _, err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
+	if err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
 		if errors.Is(err, syscall.EINTR) {
 			return true, nil
 		}
@@ -2675,6 +2703,43 @@ func snarfSelection(state *bufferState) []rune {
 		return nil
 	}
 	return append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+}
+
+func copyBufferSelection(stdout io.Writer, state *bufferState) ([]rune, string, error) {
+	snarf := snarfSelection(state)
+	if len(snarf) == 0 {
+		return nil, "", nil
+	}
+	if err := copyToClipboard(stdout, snarf); err != nil {
+		return nil, "", err
+	}
+	return snarf, "snarfed", nil
+}
+
+func cutBufferSelection(stdout io.Writer, svc wire.TermService, state *bufferState) (*bufferState, []rune, string, error) {
+	snarf, _, err := copyBufferSelection(stdout, state)
+	if err != nil {
+		return state, nil, "", err
+	}
+	if len(snarf) == 0 {
+		return state, nil, "", nil
+	}
+	next, err := replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+	if err != nil {
+		return state, nil, "", err
+	}
+	return next, snarf, "cut", nil
+}
+
+func pasteBufferSnarf(svc wire.TermService, state *bufferState, snarf []rune) (*bufferState, string, error) {
+	if len(snarf) == 0 {
+		return state, "", nil
+	}
+	next, err := replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(snarf))
+	if err != nil {
+		return state, "", err
+	}
+	return next, "", nil
 }
 
 func copyToClipboard(stdout io.Writer, text []rune) error {

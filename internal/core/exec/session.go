@@ -1368,6 +1368,66 @@ func (s *Session) OpenFilesPaths(files []string) error {
 	return s.openFileFields(files)
 }
 
+type openFilesSnapshot struct {
+	files      []*text.File
+	current    *text.File
+	closeOK    map[*text.File]bool
+	fileIDs    map[*text.File]int
+	nextFileID int
+}
+
+// OpenFilesPathsAtomic opens one explicit file list and rolls back the session
+// state if the final file cannot be loaded.
+func (s *Session) OpenFilesPathsAtomic(files []string) error {
+	snapshot := s.snapshotOpenFiles()
+	if err := s.OpenFilesPaths(files); err != nil {
+		s.restoreOpenFiles(snapshot)
+		return err
+	}
+	return nil
+}
+
+func (s *Session) snapshotOpenFiles() openFilesSnapshot {
+	snapshot := openFilesSnapshot{
+		files:      append([]*text.File(nil), s.Files...),
+		current:    s.Current,
+		closeOK:    make(map[*text.File]bool, len(s.closeOK)),
+		fileIDs:    make(map[*text.File]int, len(s.fileIDs)),
+		nextFileID: s.nextFileID,
+	}
+	for f, ok := range s.closeOK {
+		snapshot.closeOK[f] = ok
+	}
+	for f, id := range s.fileIDs {
+		snapshot.fileIDs[f] = id
+	}
+	return snapshot
+}
+
+func (s *Session) restoreOpenFiles(snapshot openFilesSnapshot) {
+	preserved := make(map[*text.File]struct{}, len(snapshot.files))
+	for _, f := range snapshot.files {
+		preserved[f] = struct{}{}
+	}
+	for _, f := range s.Files {
+		if _, ok := preserved[f]; ok {
+			continue
+		}
+		_ = f.Close()
+	}
+	s.Files = append([]*text.File(nil), snapshot.files...)
+	s.Current = snapshot.current
+	s.closeOK = make(map[*text.File]bool, len(snapshot.closeOK))
+	for f, ok := range snapshot.closeOK {
+		s.closeOK[f] = ok
+	}
+	s.fileIDs = make(map[*text.File]int, len(snapshot.fileIDs))
+	for f, id := range snapshot.fileIDs {
+		s.fileIDs[f] = id
+	}
+	s.nextFileID = snapshot.nextFileID
+}
+
 func (s *Session) openFileFields(fields []string) error {
 	if len(fields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {

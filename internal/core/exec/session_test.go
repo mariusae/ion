@@ -270,6 +270,47 @@ func TestOpenFilesPathsTreatsColonSuffixAsLiteralPath(t *testing.T) {
 	}
 }
 
+func TestOpenFilesPathsAtomicRestoresPreviousCurrentOnFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "notes.txt")
+	missing := filepath.Join(root, "missing.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+	previous := sess.Current
+	previousFiles := len(sess.Files)
+
+	err := sess.OpenFilesPathsAtomic([]string{missing})
+	if err == nil {
+		t.Fatal("OpenFilesPathsAtomic() error = nil, want missing-file failure")
+	}
+	if got, want := trimToken(sess.Current.Name.UTF8()), path; got != want {
+		t.Fatalf("current name = %q, want restored %q", got, want)
+	}
+	if sess.Current != previous {
+		t.Fatal("current file pointer changed on failed atomic open")
+	}
+	if got, want := len(sess.Files), previousFiles; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	if got := sess.findFileByName(missing); got != nil {
+		t.Fatalf("missing file entry = %#v, want rolled back", got)
+	}
+	if got, err := sess.CurrentText(); err != nil || got != "alpha\nbeta\n" {
+		t.Fatalf("CurrentText() = (%q, %v), want original text and no error", got, err)
+	}
+}
+
 func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	t.Parallel()
 

@@ -54,9 +54,11 @@ func configureCBreakTermios(termios *syscall.Termios) {
 		return
 	}
 	// Keep IXON/IXOFF untouched for tmux/terminal compatibility, but disable
-	// the start/stop control characters so Ctrl-Q/Ctrl-S reach the editor.
+	// the interrupt/start/stop control characters so Ctrl-C/Ctrl-Q/Ctrl-S reach
+	// the editor.
 	termios.Iflag &^= syscall.ICRNL
 	termios.Lflag &^= syscall.ICANON | syscall.ECHO
+	termios.Cc[syscall.VINTR] = posixVDisable
 	termios.Cc[syscall.VSTART] = posixVDisable
 	termios.Cc[syscall.VSTOP] = posixVDisable
 	termios.Cc[syscall.VMIN] = 1

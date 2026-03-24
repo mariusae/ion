@@ -96,7 +96,7 @@ func (w *Workspace) OpenFiles(files []string, stdout, stderr io.Writer) (wire.Bu
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
 
-	if err := w.session.OpenFilesPaths(files); err != nil {
+	if err := w.session.OpenFilesPathsAtomic(files); err != nil {
 		return wire.BufferView{}, err
 	}
 	return w.currentView()

@@ -68,7 +68,7 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 		outputBG:    blendTint(bg, light, alphaFor(light, 0.12, 0.24)),
 		titleBG:     blendTint(bg, light, alphaFor(light, 0.14, 0.26)),
 		highlightBG: blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
-		cursorBG:    blendTint(bg, light, alphaFor(light, 0.20, 0.34)),
+		cursorBG:    blendTint(bg, light, alphaFor(light, 0.26, 0.38)),
 	}
 }
 

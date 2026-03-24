@@ -187,6 +187,86 @@ func TestIonTermBufferModePageDown(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeRestoresScrollOnFileSwitch(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	firstPath := filepath.Join(workDir, "one.txt")
+	secondPath := filepath.Join(workDir, "two.txt")
+
+	var first strings.Builder
+	for i := 1; i <= 60; i++ {
+		first.WriteString(fmt.Sprintf("one%03d\n", i))
+	}
+	if err := os.WriteFile(firstPath, []byte(first.String()), 0o644); err != nil {
+		t.Fatalf("write first fixture: %v", err)
+	}
+	if err := os.WriteFile(secondPath, []byte("two001\ntwo002\n"), 0o644); err != nil {
+		t.Fatalf("write second fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "one.txt", "two.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("one001", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[B"); err != nil {
+		t.Fatalf("page down first buffer: %v", err)
+	}
+	if _, err := sess.WaitFor("one025", 2*time.Second); err != nil {
+		t.Fatalf("wait for paged buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	sess.ResetSnapshot()
+	if err := sess.WriteString("\nB two.txt\r"); err != nil {
+		t.Fatalf("switch to second file through overlay command: %v", err)
+	}
+	if _, err := sess.WaitFor("two001", 2*time.Second); err != nil {
+		t.Fatalf("wait for second file contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	sess.ResetSnapshot()
+	if err := sess.WriteString("\nB one.txt\r"); err != nil {
+		t.Fatalf("switch back to first file through overlay command: %v", err)
+	}
+	if _, err := sess.WaitFor("one025", 2*time.Second); err != nil {
+		t.Fatalf("wait for restored scroll position: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x11"); err != nil {
+		t.Fatalf("send Ctrl-Q: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermBufferModeCtrlFMovesCursor(t *testing.T) {
 	t.Parallel()
 

@@ -73,6 +73,9 @@ func TestClientRoundTripsDownloadAndTermRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentView() error = %v", err)
 	}
+	if view.ID == 0 {
+		t.Fatalf("view.ID = 0, want stable file id")
+	}
 	if got, want := view.Name, path; got != want {
 		t.Fatalf("view.Name = %q, want %q", got, want)
 	}
@@ -91,6 +94,9 @@ func TestClientRoundTripsDownloadAndTermRequests(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Name != path || !files[0].Dirty || !files[0].Current {
 		t.Fatalf("MenuFiles() = %#v, want one current dirty file %q", files, path)
+	}
+	if got, want := files[0].ID, view.ID; got != want {
+		t.Fatalf("file id = %d, want current view id %d", got, want)
 	}
 }
 

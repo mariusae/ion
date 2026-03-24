@@ -66,6 +66,7 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 
 	view := &BufferViewMessage{
 		View: BufferView{
+			ID:       17,
 			Text:     "alpha\nbeta\n",
 			Name:     "notes.txt",
 			DotStart: 2,

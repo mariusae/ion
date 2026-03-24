@@ -50,6 +50,7 @@ var (
 )
 
 type bufferState struct {
+	fileID         int
 	name           string
 	text           []rune
 	cursor         int
@@ -146,6 +147,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
+	scrollOrigins := make(map[int]int)
 	lastMouseClick := time.Time{}
 	lastMouseClickPos := -1
 	overlay := newOverlayState()
@@ -156,6 +158,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return err
 	}
 	defer exitBufferMode(stdout)
+
+	applyBufferView := func(view wire.BufferView) {
+		buffer = bufferStateFromView(view, buffer, scrollOrigins)
+	}
 
 	executePending := func(final bool) (bool, error) {
 		for {
@@ -235,7 +241,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return err
 		}
-		buffer = newBufferState(view)
+		applyBufferView(view)
 		return nil
 	}
 
@@ -563,7 +569,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = diagnosticText(err)
 				return false, nil
 			}
-			buffer = newBufferState(view)
+			applyBufferView(view)
 			buffer.status = ""
 			return false, nil
 		}
@@ -1301,6 +1307,7 @@ func newBufferState(view wire.BufferView) *bufferState {
 	dotEnd := clampIndex(view.DotEnd, len(text))
 	origin := visualRowStartForPos(text, cursor)
 	return &bufferState{
+		fileID:   view.ID,
 		name:     view.Name,
 		text:     text,
 		cursor:   cursor,
@@ -1308,6 +1315,22 @@ func newBufferState(view wire.BufferView) *bufferState {
 		dotStart: clampIndex(view.DotStart, len(text)),
 		dotEnd:   dotEnd,
 	}
+}
+
+func rememberBufferOrigin(origins map[int]int, state *bufferState) {
+	if origins == nil || state == nil || state.fileID == 0 {
+		return
+	}
+	origins[state.fileID] = visualRowStartForPos(state.text, state.origin)
+}
+
+func bufferStateFromView(view wire.BufferView, previous *bufferState, origins map[int]int) *bufferState {
+	rememberBufferOrigin(origins, previous)
+	next := newBufferState(view)
+	if origin, ok := origins[next.fileID]; ok {
+		next.origin = restoreBufferOrigin(next, origin)
+	}
+	return next
 }
 
 func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferState, error) {
@@ -1396,6 +1419,15 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	next.flashSelection = state.flashSelection
 	next.status = state.status
 	return next, nil
+}
+
+func restoreBufferOrigin(state *bufferState, origin int) int {
+	if state == nil {
+		return 0
+	}
+	clamped := clampIndex(origin, len(state.text))
+	rowStart := visualRowStartForPos(state.text, clamped)
+	return adjustOriginForCursor(state.text, rowStart, state.cursor, termRows)
 }
 
 func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {

@@ -95,9 +95,9 @@ func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
 
 	files := w.session.MenuFiles()
 	out := make([]wire.MenuFile, 0, len(files))
-	for i, f := range files {
+	for _, f := range files {
 		out = append(out, wire.MenuFile{
-			ID:      i,
+			ID:      f.ID,
 			Name:    f.Name,
 			Dirty:   f.Dirty,
 			Current: f.Current,
@@ -106,12 +106,12 @@ func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
 	return out, nil
 }
 
-// FocusFile switches the current file by file-menu position.
+// FocusFile switches the current file by stable file ID.
 func (w *Workspace) FocusFile(id int) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if err := w.session.FocusFileIndex(id); err != nil {
+	if err := w.session.FocusFileID(id); err != nil {
 		return wire.BufferView{}, err
 	}
 	return w.currentView()
@@ -185,6 +185,7 @@ func (w *Workspace) currentView() (wire.BufferView, error) {
 		name = strings.TrimRight(strings.TrimSpace(w.session.Current.Name.UTF8()), "\x00")
 	}
 	return wire.BufferView{
+		ID:       w.session.CurrentFileID(),
 		Text:     text,
 		Name:     name,
 		DotStart: int(dot.P1),

@@ -202,6 +202,9 @@ func (m *BufferViewMessage) Kind() Kind { return KindCurrentViewResponse }
 
 func (m *BufferViewMessage) MarshalBinary() ([]byte, error) {
 	var b bytes.Buffer
+	if err := writeUint32(&b, uint32(m.View.ID)); err != nil {
+		return nil, err
+	}
 	if err := writeString(&b, m.View.Text); err != nil {
 		return nil, err
 	}
@@ -219,6 +222,10 @@ func (m *BufferViewMessage) MarshalBinary() ([]byte, error) {
 
 func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 	r := bytes.NewReader(data)
+	id, err := readUint32(r)
+	if err != nil {
+		return err
+	}
 	text, err := readString(r)
 	if err != nil {
 		return err
@@ -239,6 +246,7 @@ func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("buffer view has trailing data")
 	}
 	m.View = BufferView{
+		ID:       int(id),
 		Text:     text,
 		Name:     name,
 		DotStart: int(start),

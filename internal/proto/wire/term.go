@@ -3,6 +3,7 @@ package wire
 // BufferView is the server-owned text and current selection state presented to
 // the terminal client.
 type BufferView struct {
+	ID       int
 	Text     string
 	Name     string
 	DotStart int

@@ -31,6 +31,8 @@ type Session struct {
 	LastShellCmd  string
 	ShellInput    ShellInputMode
 	closeOK       map[*text.File]bool
+	fileIDs       map[*text.File]int
+	nextFileID    int
 	execDepth     int
 	fileLoopDepth int
 	frame         *execFrame
@@ -57,6 +59,7 @@ func (e diagnosticError) Diagnostic() string {
 
 // MenuFileInfo is the server-owned file-menu snapshot exposed to clients.
 type MenuFileInfo struct {
+	ID      int
 	Name    string
 	Dirty   bool
 	Current bool
@@ -69,6 +72,8 @@ func NewSession(out io.Writer) *Session {
 		Diag:       io.Discard,
 		ShellInput: ShellInputEmpty,
 		closeOK:    make(map[*text.File]bool),
+		fileIDs:    make(map[*text.File]int),
+		nextFileID: 1,
 	}
 }
 
@@ -81,12 +86,26 @@ type execFrame struct {
 func (s *Session) AddFile(f *text.File) {
 	oldFirst := s.firstFile()
 	s.warnDuplicateName(trimToken(f.Name.UTF8()))
+	s.ensureFileID(f)
 	s.Files = append(s.Files, f)
 	s.sortFiles()
 	s.syncCloseOK(f)
 	if s.Current == nil || s.Current == oldFirst {
 		s.Current = s.firstFile()
 	}
+}
+
+func (s *Session) ensureFileID(f *text.File) int {
+	if f == nil {
+		return 0
+	}
+	if id, ok := s.fileIDs[f]; ok {
+		return id
+	}
+	id := s.nextFileID
+	s.nextFileID++
+	s.fileIDs[f] = id
+	return id
 }
 
 // Execute runs one parsed command. It returns false when execution should stop.
@@ -1830,6 +1849,7 @@ func (s *Session) MenuFiles() []MenuFileInfo {
 			continue
 		}
 		out = append(out, MenuFileInfo{
+			ID:      s.ensureFileID(f),
 			Name:    trimToken(f.Name.UTF8()),
 			Dirty:   f.Mod,
 			Current: f == s.Current,
@@ -1838,14 +1858,27 @@ func (s *Session) MenuFiles() []MenuFileInfo {
 	return out
 }
 
-// FocusFileIndex selects one file from the current menu ordering.
-func (s *Session) FocusFileIndex(idx int) error {
-	if idx < 0 || idx >= len(s.Files) {
-		return fmt.Errorf("menu index out of range")
+func (s *Session) CurrentFileID() int {
+	return s.ensureFileID(s.Current)
+}
+
+// FocusFileID selects one file from the current menu ordering by stable ID.
+func (s *Session) FocusFileID(id int) error {
+	if id <= 0 {
+		return fmt.Errorf("file id out of range")
 	}
-	f := s.Files[idx]
+	var f *text.File
+	for _, candidate := range s.Files {
+		if candidate == nil {
+			continue
+		}
+		if s.ensureFileID(candidate) == id {
+			f = candidate
+			break
+		}
+	}
 	if f == nil {
-		return fmt.Errorf("menu index out of range")
+		return fmt.Errorf("file id out of range")
 	}
 	if f.Unread {
 		if err := loadUnreadFile(f); err != nil {

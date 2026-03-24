@@ -43,6 +43,7 @@ func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
 		if file.ID != id {
 			continue
 		}
+		f.view.ID = file.ID
 		f.view.Name = file.Name
 		break
 	}
@@ -91,6 +92,58 @@ func TestNewBufferStateStartsAtDot(t *testing.T) {
 	}
 	if got, want := state.origin, 6; got != want {
 		t.Fatalf("origin = %d, want %d", got, want)
+	}
+}
+
+func TestRestoreBufferOriginKeepsPerFileScrollPosition(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\n",
+		DotStart: 18,
+		DotEnd:   18,
+	})
+	state.cursor = 18
+
+	if got, want := restoreBufferOrigin(state, 6), 6; got != want {
+		t.Fatalf("restoreBufferOrigin() = %d, want %d", got, want)
+	}
+}
+
+func TestBufferStateFromViewRestoresSavedOriginForRevisitedFile(t *testing.T) {
+	t.Parallel()
+
+	origins := make(map[int]int)
+	current := newBufferState(wire.BufferView{
+		ID:       1,
+		Text:     "one1\none2\none3\none4\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	current.origin = 10
+
+	next := bufferStateFromView(wire.BufferView{
+		ID:       2,
+		Text:     "two1\ntwo2\n",
+		DotStart: 0,
+		DotEnd:   0,
+	}, current, origins)
+
+	if got, want := origins[1], 10; got != want {
+		t.Fatalf("saved origin = %d, want %d", got, want)
+	}
+
+	next.origin = 5
+	restored := bufferStateFromView(wire.BufferView{
+		ID:       1,
+		Text:     "one1\none2\none3\none4\n",
+		DotStart: 10,
+		DotEnd:   10,
+	}, next, origins)
+
+	if got, want := restored.origin, 10; got != want {
+		t.Fatalf("restored origin = %d, want %d", got, want)
 	}
 }
 

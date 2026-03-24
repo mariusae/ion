@@ -239,6 +239,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return nil
 	}
 
+	syncBufferDot := func() error {
+		next, err := syncBufferState(svc, buffer)
+		if err != nil {
+			return err
+		}
+		buffer = next
+		return nil
+	}
+
 	redraw := func() error {
 		refreshTerminalSize()
 		return drawBufferMode(stdout, buffer, overlay, menu, theme)
@@ -669,6 +678,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.dotEnd = buffer.cursor
 			buffer.status = ""
 			mouseSelecting = false
+			if err := syncBufferDot(); err != nil {
+				return false, err
+			}
 			return false, redraw()
 		}
 		if key == keyFocusIn {
@@ -705,6 +717,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						buffer.dotStart = start
 						buffer.dotEnd = end
 						buffer.cursor = start
+						if err := syncBufferDot(); err != nil {
+							return false, err
+						}
 					}
 					next, ok, err := lookInBuffer(svc, buffer, true)
 					if err != nil {
@@ -739,6 +754,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							buffer.cursor = start
 							buffer.dotStart = start
 							buffer.dotEnd = end
+							if err := syncBufferDot(); err != nil {
+								return false, err
+							}
 							if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 								return false, err
 							}
@@ -751,6 +769,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 			}
 			if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+				if mouse.button != 64 && mouse.button != 65 {
+					if err := syncBufferDot(); err != nil {
+						return false, err
+					}
+				}
 				if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
 					if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 						return false, err
@@ -1300,7 +1323,7 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 			state.markPos = state.cursor
 		}
 		updateSelection(state)
-		return state, nil
+		return syncBufferState(svc, state)
 	case 8, 127:
 		if state.dotStart != state.dotEnd {
 			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
@@ -1351,8 +1374,28 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
 		}
 		handleBufferKey(state, key)
+		return syncBufferState(svc, state)
+	}
+}
+
+func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, error) {
+	if svc == nil || state == nil {
 		return state, nil
 	}
+	view, err := svc.SetDot(state.dotStart, state.dotEnd)
+	if err != nil {
+		return nil, err
+	}
+	next := newBufferState(view)
+	next.cursor = clampIndex(state.cursor, len(next.text))
+	next.origin = adjustOriginForCursor(next.text, state.origin, next.cursor, termRows)
+	next.dotStart = clampIndex(view.DotStart, len(next.text))
+	next.dotEnd = clampIndex(view.DotEnd, len(next.text))
+	next.markMode = state.markMode
+	next.markPos = clampIndex(state.markPos, len(next.text))
+	next.flashSelection = state.flashSelection
+	next.status = state.status
+	return next, nil
 }
 
 func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {

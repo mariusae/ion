@@ -11,9 +11,12 @@ import (
 )
 
 type fakeTermService struct {
-	view      wire.BufferView
-	menuFiles []wire.MenuFile
-	focusID   int
+	view         wire.BufferView
+	menuFiles    []wire.MenuFile
+	focusID      int
+	setDotCalls  int
+	lastDotStart int
+	lastDotEnd   int
 }
 
 func (f *fakeTermService) Bootstrap(files []string) error {
@@ -47,6 +50,9 @@ func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
 }
 
 func (f *fakeTermService) SetDot(start, end int) (wire.BufferView, error) {
+	f.setDotCalls++
+	f.lastDotStart = start
+	f.lastDotEnd = end
 	f.view.DotStart = start
 	f.view.DotEnd = end
 	return f.view, nil
@@ -713,6 +719,87 @@ func TestApplyBufferKeyPrintableReplacesSelection(t *testing.T) {
 	}
 	if got, want := next.dotEnd, 1; got != want {
 		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyMovementSyncsDotToService(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, keyRight)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := svc.setDotCalls, 1; got != want {
+		t.Fatalf("SetDot calls = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotStart, 1; got != want {
+		t.Fatalf("last dot start = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotEnd, 1; got != want {
+		t.Fatalf("last dot end = %d, want %d", got, want)
+	}
+	if got, want := next.cursor, 1; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 1; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 1; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyCtrlSpaceSyncsSelectionToService(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, 0)
+	if err != nil {
+		t.Fatalf("toggle mark applyBufferKey() error = %v", err)
+	}
+	next, err = applyBufferKey(svc, next, keyRight)
+	if err != nil {
+		t.Fatalf("move with mark applyBufferKey() error = %v", err)
+	}
+	next, err = applyBufferKey(svc, next, keyRight)
+	if err != nil {
+		t.Fatalf("second move with mark applyBufferKey() error = %v", err)
+	}
+
+	if got, want := svc.setDotCalls, 3; got != want {
+		t.Fatalf("SetDot calls = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotStart, 0; got != want {
+		t.Fatalf("last dot start = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotEnd, 2; got != want {
+		t.Fatalf("last dot end = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 0; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 2; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if !next.markMode {
+		t.Fatalf("markMode = false, want true")
 	}
 }
 

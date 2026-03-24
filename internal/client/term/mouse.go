@@ -62,29 +62,16 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 			return keyMouse, &event, nil
 		default:
 			if b >= '0' && b <= '9' {
-				num := int(b - '0')
+				seq := []byte{b}
 				for reader.Buffered() > 0 {
 					next, err := reader.ReadByte()
 					if err != nil {
 						return 0, nil, err
 					}
-					if next >= '0' && next <= '9' {
-						num = num*10 + int(next-'0')
-						continue
+					seq = append(seq, next)
+					if next >= 0x40 && next <= 0x7e {
+						return decodeCSIKey(seq), nil, nil
 					}
-					if next == '~' {
-						switch num {
-						case 3:
-							return keyDel, nil, nil
-						case 5:
-							return keyPgUp, nil, nil
-						case 6:
-							return keyPgDn, nil, nil
-						case 200:
-							return keyPaste, nil, nil
-						}
-					}
-					break
 				}
 			}
 			return keyEsc, nil, nil
@@ -98,6 +85,14 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 			return 0, nil, err
 		}
 		switch b {
+		case 'A':
+			return keyUp, nil, nil
+		case 'B':
+			return keyDown, nil, nil
+		case 'C':
+			return keyRight, nil, nil
+		case 'D':
+			return keyLeft, nil, nil
 		case 'H':
 			return keyHome, nil, nil
 		case 'F':
@@ -115,6 +110,50 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 		return keyAltBackspace, nil, nil
 	}
 	return keyEsc, nil, nil
+}
+
+func decodeCSIKey(seq []byte) int {
+	if len(seq) == 0 {
+		return keyEsc
+	}
+	final := seq[len(seq)-1]
+	switch final {
+	case 'A':
+		return keyUp
+	case 'B':
+		return keyDown
+	case 'C':
+		return keyRight
+	case 'D':
+		return keyLeft
+	case 'H':
+		return keyHome
+	case 'F':
+		return keyEnd
+	case '~':
+		num := 0
+		for _, b := range seq[:len(seq)-1] {
+			if b < '0' || b > '9' {
+				break
+			}
+			num = num*10 + int(b-'0')
+		}
+		switch num {
+		case 1, 7:
+			return keyHome
+		case 3:
+			return keyDel
+		case 4, 8:
+			return keyEnd
+		case 5:
+			return keyPgUp
+		case 6:
+			return keyPgDn
+		case 200:
+			return keyPaste
+		}
+	}
+	return keyEsc
 }
 
 func readBufferKey(reader *bufio.Reader) (int, error) {

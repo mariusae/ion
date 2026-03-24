@@ -70,6 +70,56 @@ func TestReadBufferEscapeFocusEvents(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeApplicationCursorArrows(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1bOA\x1bOB\x1bOC\x1bOD"))
+	tests := []struct {
+		name string
+		want int
+	}{
+		{name: "up", want: keyUp},
+		{name: "down", want: keyDown},
+		{name: "right", want: keyRight},
+		{name: "left", want: keyLeft},
+	}
+
+	for _, tt := range tests {
+		if _, _, err := reader.ReadRune(); err != nil {
+			t.Fatalf("%s prime reader with ESC: %v", tt.name, err)
+		}
+		key, mouse, err := readBufferEscape(reader)
+		if err != nil {
+			t.Fatalf("%s readBufferEscape() error = %v", tt.name, err)
+		}
+		if key != tt.want {
+			t.Fatalf("%s key = %d, want %d", tt.name, key, tt.want)
+		}
+		if mouse != nil {
+			t.Fatalf("%s mouse = %#v, want nil", tt.name, mouse)
+		}
+	}
+}
+
+func TestReadBufferEscapeCSIArrowWithModifier(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b[1;2B"))
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader)
+	if err != nil {
+		t.Fatalf("readBufferEscape() error = %v", err)
+	}
+	if key != keyDown {
+		t.Fatalf("key = %d, want keyDown", key)
+	}
+	if mouse != nil {
+		t.Fatalf("mouse = %#v, want nil", mouse)
+	}
+}
+
 func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	t.Parallel()
 

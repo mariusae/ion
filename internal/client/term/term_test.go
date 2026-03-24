@@ -342,6 +342,27 @@ func TestDrawInlineHUDLabelDoesNotPadTintAcrossLine(t *testing.T) {
 	}
 }
 
+func TestDrawHUDLineExpandsTabsUnderTint(t *testing.T) {
+	prevCols := termCols
+	termCols = 12
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	var out bytes.Buffer
+	if err := drawHUDLine(&out, 0, "a\tb", theme.hudPrefix(), theme); err != nil {
+		t.Fatalf("drawHUDLine() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "\t") {
+		t.Fatalf("drawHUDLine() = %q, want tabs expanded before rendering", got)
+	}
+	if !strings.Contains(got, theme.hudPrefix()+"a       b") {
+		t.Fatalf("drawHUDLine() = %q, want tab expanded to tinted spaces", got)
+	}
+}
+
 func TestNormalizeStatusResultKeepsSimpleSaveInline(t *testing.T) {
 	t.Parallel()
 
@@ -390,6 +411,33 @@ func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 	}
 	if !strings.Contains(got, theme.hudPrefix()+" alpha") {
 		t.Fatalf("drawOverlayHistoryLine() = %q, want overlay tint restored for output text", got)
+	}
+}
+
+func TestDrawOverlayHistoryLineExpandsTabsUnderOutputTint(t *testing.T) {
+	prevCols := termCols
+	termCols = 20
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	line := overlayRenderLine{text: "█ a\tb", history: 0}
+
+	var out bytes.Buffer
+	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayHistoryLine() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "\t") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want tabs expanded before rendering", got)
+	}
+	if !strings.Contains(got, theme.outputPrefix()+" ") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want tinted gutter cell", got)
+	}
+	if !strings.Contains(got, theme.hudPrefix()+" a     b") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want tab expanded under HUD tint", got)
 	}
 }
 

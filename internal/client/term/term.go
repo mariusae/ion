@@ -1563,10 +1563,11 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 					}
 				}
 			}
-			if _, err := io.WriteString(stdout, string(r)); err != nil {
+			nextCol, err := writeHUDRune(stdout, r, col, termCols)
+			if err != nil {
 				return err
 			}
-			col++
+			col = nextCol
 		}
 		if selected {
 			if prefix != "" {
@@ -1624,10 +1625,11 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		if i == 0 && r == '█' {
 			drawRune = ' '
 		}
-		if _, err := io.WriteString(stdout, string(drawRune)); err != nil {
+		nextCol, err := writeHUDRune(stdout, drawRune, col, termCols)
+		if err != nil {
 			return err
 		}
-		col++
+		col = nextCol
 	}
 	if pad := termCols - col; pad > 0 {
 		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
@@ -1665,11 +1667,7 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme 
 }
 
 func drawOverlayText(stdout io.Writer, text string) error {
-	line := []rune(text)
-	if len(line) > termCols {
-		line = line[:termCols]
-	}
-	_, err := io.WriteString(stdout, string(line))
+	_, err := writeHUDText(stdout, text, 0, termCols)
 	return err
 }
 
@@ -1697,10 +1695,11 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 		if col >= termCols {
 			break
 		}
-		if _, err := io.WriteString(stdout, string(r)); err != nil {
+		nextCol, err := writeHUDRune(stdout, r, col, termCols)
+		if err != nil {
 			return err
 		}
-		col++
+		col = nextCol
 	}
 	if theme != nil {
 		if _, err := io.WriteString(stdout, styleReset()); err != nil {
@@ -1730,15 +1729,19 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 	if theme == nil || prefix == "" {
 		return drawOverlayText(stdout, text)
 	}
-	line := []rune(text)
-	if len(line) > termCols {
-		line = line[:termCols]
+	if _, err := io.WriteString(stdout, prefix); err != nil {
+		return err
 	}
-	plain := string(line)
-	if pad := termCols - len(line); pad > 0 {
-		plain += strings.Repeat(" ", pad)
+	col, err := writeHUDText(stdout, text, 0, termCols)
+	if err != nil {
+		return err
 	}
-	_, err := io.WriteString(stdout, prefix+plain+styleReset())
+	if pad := termCols - col; pad > 0 {
+		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
+			return err
+		}
+	}
+	_, err = io.WriteString(stdout, styleReset())
 	return err
 }
 
@@ -1749,11 +1752,13 @@ func drawInlineHUDLabel(stdout io.Writer, row int, text, prefix string, theme *u
 	if theme == nil || prefix == "" {
 		return drawOverlayText(stdout, text)
 	}
-	line := []rune(text)
-	if len(line) > termCols {
-		line = line[:termCols]
+	if _, err := io.WriteString(stdout, prefix); err != nil {
+		return err
 	}
-	_, err := io.WriteString(stdout, prefix+string(line)+styleReset())
+	if _, err := writeHUDText(stdout, text, 0, termCols); err != nil {
+		return err
+	}
+	_, err := io.WriteString(stdout, styleReset())
 	return err
 }
 
@@ -1762,16 +1767,17 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 		return err
 	}
 	runes := []rune(text)
-	if len(runes) > termCols {
-		runes = runes[:termCols]
-	}
 	currentPrefix := basePrefix
 	if currentPrefix != "" {
 		if _, err := io.WriteString(stdout, currentPrefix); err != nil {
 			return err
 		}
 	}
+	col := 0
 	for i, r := range runes {
+		if col >= termCols {
+			break
+		}
 		nextPrefix := shimmerPrefix(theme, i, len(runes))
 		if nextPrefix != currentPrefix {
 			transition := nextPrefix
@@ -1786,9 +1792,11 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 			}
 			currentPrefix = nextPrefix
 		}
-		if _, err := io.WriteString(stdout, string(r)); err != nil {
+		nextCol, err := writeHUDRune(stdout, r, col, termCols)
+		if err != nil {
 			return err
 		}
+		col = nextCol
 	}
 	if currentPrefix != basePrefix {
 		transition := basePrefix
@@ -1799,7 +1807,7 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 			return err
 		}
 	}
-	if pad := termCols - len(runes); pad > 0 {
+	if pad := termCols - col; pad > 0 {
 		if _, err := io.WriteString(stdout, strings.Repeat(" ", pad)); err != nil {
 			return err
 		}
@@ -1810,6 +1818,46 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 		}
 	}
 	return nil
+}
+
+const hudTabWidth = 8
+
+func writeHUDText(stdout io.Writer, text string, startCol, maxCols int) (int, error) {
+	col := startCol
+	for _, r := range text {
+		if col >= maxCols {
+			break
+		}
+		nextCol, err := writeHUDRune(stdout, r, col, maxCols)
+		if err != nil {
+			return col, err
+		}
+		col = nextCol
+	}
+	return col, nil
+}
+
+func writeHUDRune(stdout io.Writer, r rune, col, maxCols int) (int, error) {
+	if r == '\t' {
+		advance := hudTabWidth - (col % hudTabWidth)
+		if advance <= 0 {
+			advance = hudTabWidth
+		}
+		if col+advance > maxCols {
+			advance = maxCols - col
+		}
+		if advance <= 0 {
+			return col, nil
+		}
+		if _, err := io.WriteString(stdout, strings.Repeat(" ", advance)); err != nil {
+			return col, err
+		}
+		return col + advance, nil
+	}
+	if _, err := io.WriteString(stdout, string(r)); err != nil {
+		return col, err
+	}
+	return col + 1, nil
 }
 
 func shimmerPrefix(theme *uiTheme, index, length int) string {

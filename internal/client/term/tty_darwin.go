@@ -34,10 +34,7 @@ func enterCBreakMode(f *os.File) (*ttyState, error) {
 		return nil, fmt.Errorf("get terminal mode: %w", errno)
 	}
 	orig := termios
-	termios.Iflag &^= syscall.ICRNL
-	termios.Lflag &^= syscall.ICANON | syscall.ECHO
-	termios.Cc[syscall.VMIN] = 1
-	termios.Cc[syscall.VTIME] = 0
+	configureCBreakTermios(&termios)
 	if _, _, errno := syscall.Syscall6(
 		syscall.SYS_IOCTL,
 		uintptr(fd),
@@ -48,6 +45,18 @@ func enterCBreakMode(f *os.File) (*ttyState, error) {
 		return nil, fmt.Errorf("set terminal mode: %w", errno)
 	}
 	return &ttyState{fd: fd, orig: orig}, nil
+}
+
+func configureCBreakTermios(termios *syscall.Termios) {
+	if termios == nil {
+		return
+	}
+	// Disable canonical input, echo, CR translation, and software flow control
+	// so editor control keys like Ctrl-Q are delivered to the client.
+	termios.Iflag &^= syscall.ICRNL | syscall.IXON | syscall.IXOFF
+	termios.Lflag &^= syscall.ICANON | syscall.ECHO
+	termios.Cc[syscall.VMIN] = 1
+	termios.Cc[syscall.VTIME] = 0
 }
 
 func (s *ttyState) restore() error {

@@ -35,6 +35,35 @@ func (m *BootstrapRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// OpenFilesRequest carries one explicit file-open list for a live terminal
+// client without reparsing shell-style whitespace.
+type OpenFilesRequest struct {
+	Files []string
+}
+
+func (m *OpenFilesRequest) Kind() Kind { return KindOpenFilesRequest }
+
+func (m *OpenFilesRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeStringSlice(&b, m.Files); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *OpenFilesRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	files, err := readStringSlice(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("open-files request has trailing data")
+	}
+	m.Files = files
+	return nil
+}
+
 // OKResponse acknowledges one successful request with no typed payload.
 type OKResponse struct{}
 

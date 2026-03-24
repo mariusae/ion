@@ -91,6 +91,19 @@ func (c *Client) CurrentView() (wire.BufferView, error) {
 	return resp.View, nil
 }
 
+// OpenFiles opens one explicit file list in the shared workspace.
+func (c *Client) OpenFiles(files []string) (wire.BufferView, error) {
+	_, msg, err := c.roundTrip(&wire.OpenFilesRequest{Files: files})
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	resp, ok := msg.(*wire.BufferViewMessage)
+	if !ok {
+		return wire.BufferView{}, fmt.Errorf("open-files response type %T, want *wire.BufferViewMessage", msg)
+	}
+	return resp.View, nil
+}
+
 // MenuFiles returns the current file-menu snapshot.
 func (c *Client) MenuFiles() ([]wire.MenuFile, error) {
 	_, msg, err := c.roundTrip(&wire.MenuFilesRequest{})

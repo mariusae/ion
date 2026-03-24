@@ -18,6 +18,7 @@ type Kind uint16
 
 const (
 	KindBootstrapRequest Kind = iota + 1
+	KindOpenFilesRequest
 	KindOKResponse
 	KindCommandRequest
 	KindCommandResponse
@@ -139,6 +140,9 @@ func DecodeMessage(frame Frame) (any, error) {
 	switch frame.Kind {
 	case KindBootstrapRequest:
 		var msg BootstrapRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindOpenFilesRequest:
+		var msg OpenFilesRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindOKResponse:
 		return &OKResponse{}, nil

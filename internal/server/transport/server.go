@@ -35,10 +35,9 @@ func (s *Server) Serve(listener net.Listener) error {
 			}
 			return err
 		}
-		if err := s.ServeConn(conn); err != nil {
-			_ = conn.Close()
-			return err
-		}
+		go func() {
+			_ = s.ServeConn(conn)
+		}()
 	}
 }
 
@@ -81,6 +80,12 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 			return writeError(conn, frame.RequestID, session.ID(), err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.OKResponse{})
+	case *wire.OpenFilesRequest:
+		view, err := session.OpenFiles(msg.Files)
+		if err != nil {
+			return writeError(conn, frame.RequestID, session.ID(), err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.CommandRequest:
 		cont, err := session.Execute(msg.Script)
 		if err != nil {

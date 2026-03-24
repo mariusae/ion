@@ -18,6 +18,8 @@ import (
 
 type config struct {
 	download bool
+	bmode    bool
+	bserve   bool
 	files    []string
 }
 
@@ -40,6 +42,22 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
+	if cfg.bserve {
+		if err := runBServe(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.bmode {
+		if err := runBMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	if err := runTerm(cfg, stdin, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "ion: %v\n", err)
 		return 1
@@ -53,8 +71,16 @@ func parseArgs(args []string) (config, error) {
 	fs := flag.NewFlagSet("ion", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
+	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
+	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	if cfg.download && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -d cannot be combined")
+	}
+	if cfg.download && cfg.bserve {
+		return config{}, fmt.Errorf("-b-serve and -d cannot be combined")
 	}
 	cfg.files = fs.Args()
 	return cfg, nil
@@ -76,12 +102,18 @@ func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
 	server := transport.New(ws)
-
 	socketPath, cleanup, err := makeSocketPath()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+	return withServerSocket(server, socketPath, stdout, stderr, runClient)
+}
+
+func withServerSocket(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		return err
+	}
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return err

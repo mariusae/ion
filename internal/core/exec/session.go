@@ -1357,7 +1357,18 @@ func (s *Session) openFiles(nameToken *text.String) error {
 		}
 		return s.openNamelessFile()
 	}
-	fields := list.fields
+	return s.openFileFields(list.fields)
+}
+
+// OpenFilesPaths opens one explicit file list without reparsing a command token.
+func (s *Session) OpenFilesPaths(files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	return s.openFileFields(files)
+}
+
+func (s *Session) openFileFields(fields []string) error {
 	lineNo, colNo := 0, 0
 	if len(fields) > 0 {
 		fields[len(fields)-1], lineNo, colNo = splitFileLineSuffix(fields[len(fields)-1])

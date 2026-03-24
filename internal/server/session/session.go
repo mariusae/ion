@@ -81,6 +81,11 @@ func (s *TermSession) CurrentView() (wire.BufferView, error) {
 	return s.ws.CurrentView()
 }
 
+// OpenFiles opens one explicit file list in the shared workspace.
+func (s *TermSession) OpenFiles(files []string) (wire.BufferView, error) {
+	return s.ws.OpenFiles(files, s.stdout, s.stderr)
+}
+
 // MenuFiles returns the current workspace menu snapshot.
 func (s *TermSession) MenuFiles() ([]wire.MenuFile, error) {
 	return s.ws.MenuFiles()

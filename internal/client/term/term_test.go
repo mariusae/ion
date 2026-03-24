@@ -33,6 +33,13 @@ func (f *fakeTermService) CurrentView() (wire.BufferView, error) {
 	return f.view, nil
 }
 
+func (f *fakeTermService) OpenFiles(files []string) (wire.BufferView, error) {
+	if len(files) > 0 {
+		f.view.Name = files[len(files)-1]
+	}
+	return f.view, nil
+}
+
 func (f *fakeTermService) MenuFiles() ([]wire.MenuFile, error) {
 	return append([]wire.MenuFile(nil), f.menuFiles...), nil
 }

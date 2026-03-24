@@ -22,6 +22,7 @@ type MenuFile struct {
 type TermService interface {
 	DownloadService
 	CurrentView() (BufferView, error)
+	OpenFiles(files []string) (BufferView, error)
 	MenuFiles() ([]MenuFile, error)
 	FocusFile(id int) (BufferView, error)
 	SetDot(start, end int) (BufferView, error)

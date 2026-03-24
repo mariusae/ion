@@ -1006,7 +1006,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if inBufferMode {
 			if overlay.visible {
 				if r == 0x1b {
-					key, mouse, err := readBufferEscapeTTY(reader, stdin)
+					key, mouse, err := readBufferEscape(reader)
 					if err != nil {
 						return err
 					}
@@ -1167,7 +1167,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				continue
 			}
 			if r == 0x1b {
-				key, mouse, err := readBufferEscapeTTY(reader, stdin)
+				key, mouse, err := readBufferEscape(reader)
 				if err != nil {
 					return err
 				}
@@ -1361,20 +1361,6 @@ func waitForTTYReady(stdin, wake *os.File) (bool, error) {
 		return false, err
 	}
 	return fdSetHas(&readfds, wakeFD), nil
-}
-
-func waitForTTYByte(stdin *os.File, timeout time.Duration) (bool, error) {
-	stdinFD := int(stdin.Fd())
-	var readfds syscall.FdSet
-	fdSetAdd(&readfds, stdinFD)
-	tv := syscall.NsecToTimeval(timeout.Nanoseconds())
-	if err := syscall.Select(stdinFD+1, &readfds, nil, nil, &tv); err != nil {
-		if errors.Is(err, syscall.EINTR) {
-			return false, nil
-		}
-		return false, err
-	}
-	return fdSetHas(&readfds, stdinFD), nil
 }
 
 func readWakeTags(wake *os.File) ([]byte, error) {

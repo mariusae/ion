@@ -1145,9 +1145,9 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	}
 	written := b.String()
 	if s.AutoIndent && fullWrite {
-		trimmed := trimTrailingEOLWhitespace(written)
+		trimmed, mappedDot := trimTrailingEOLWhitespaceDot(written, f.Dot)
 		if trimmed != written {
-			if err := s.applyFullBufferReplacement(f, trimmed); err != nil {
+			if err := s.applyFullBufferReplacement(f, trimmed, mappedDot); err != nil {
 				return err
 			}
 			written = trimmed
@@ -1196,7 +1196,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	return nil
 }
 
-func (s *Session) applyFullBufferReplacement(f *text.File, replacement string) (err error) {
+func (s *Session) applyFullBufferReplacement(f *text.File, replacement string, mappedDot text.Range) (err error) {
 	if f == nil {
 		return nil
 	}
@@ -1224,11 +1224,15 @@ func (s *Session) applyFullBufferReplacement(f *text.File, replacement string) (
 					return err
 				}
 			}
-			f.NDot = text.Range{}
+			f.NDot = mappedDot
 			return nil
 		}
 		txt := text.NewStringFromUTF8(replacement)
-		return s.replaceLogged(f, &txt, 0, full, seq)
+		if err := s.replaceLogged(f, &txt, 0, full, seq); err != nil {
+			return err
+		}
+		f.NDot = mappedDot
+		return nil
 	})
 }
 
@@ -1244,29 +1248,68 @@ func (s *Session) fileText(f *text.File) (string, error) {
 }
 
 func trimTrailingEOLWhitespace(src string) string {
-	if src == "" {
-		return ""
+	trimmed, _ := trimTrailingEOLWhitespaceMap(src)
+	return trimmed
+}
+
+func trimTrailingEOLWhitespaceDot(src string, dot text.Range) (string, text.Range) {
+	trimmed, mapping := trimTrailingEOLWhitespaceMap(src)
+	if len(mapping) == 0 {
+		return trimmed, text.Range{}
 	}
+	start := dot.P1
+	end := dot.P2
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if int(start) >= len(mapping) {
+		start = text.Posn(len(mapping) - 1)
+	}
+	if int(end) >= len(mapping) {
+		end = text.Posn(len(mapping) - 1)
+	}
+	return trimmed, text.Range{P1: mapping[start], P2: mapping[end]}
+}
+
+func trimTrailingEOLWhitespaceMap(src string) (string, []text.Posn) {
+	if src == "" {
+		return "", []text.Posn{0}
+	}
+	runes := []rune(src)
+	mapping := make([]text.Posn, len(runes)+1)
 	var b strings.Builder
-	start := 0
-	for start < len(src) {
-		end := strings.IndexByte(src[start:], '\n')
-		hasNewline := end >= 0
-		if hasNewline {
-			end += start
-		} else {
-			end = len(src)
+	srcPos := 0
+	dstPos := 0
+	for srcPos < len(runes) {
+		lineEnd := srcPos
+		for lineEnd < len(runes) && runes[lineEnd] != '\n' {
+			lineEnd++
 		}
-		line := strings.TrimRight(src[start:end], " \t")
-		b.WriteString(line)
-		if hasNewline {
+		trimEnd := lineEnd
+		for trimEnd > srcPos && (runes[trimEnd-1] == ' ' || runes[trimEnd-1] == '\t') {
+			trimEnd--
+		}
+		for p := srcPos; p <= trimEnd; p++ {
+			mapping[p] = text.Posn(dstPos + (p - srcPos))
+		}
+		for p := trimEnd + 1; p <= lineEnd; p++ {
+			mapping[p] = text.Posn(dstPos + (trimEnd - srcPos))
+		}
+		b.WriteString(string(runes[srcPos:trimEnd]))
+		dstPos += trimEnd - srcPos
+		if lineEnd < len(runes) && runes[lineEnd] == '\n' {
 			b.WriteByte('\n')
-			start = end + 1
+			dstPos++
+			mapping[lineEnd+1] = text.Posn(dstPos)
+			srcPos = lineEnd + 1
 			continue
 		}
-		start = end
+		srcPos = lineEnd
 	}
-	return b.String()
+	return b.String(), mapping
 }
 
 func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {

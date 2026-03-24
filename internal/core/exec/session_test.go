@@ -661,6 +661,31 @@ func TestSaveCurrentTrimsTrailingWhitespaceWhenAutoIndentEnabled(t *testing.T) {
 	}
 }
 
+func TestSaveCurrentPreservesDotWhenTrimRemovesCursorWhitespace(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha  \n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+	if err := sess.SetCurrentDot(6, 6); err != nil {
+		t.Fatalf("SetCurrentDot() error = %v", err)
+	}
+
+	if _, err := sess.SaveCurrent(); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+	if got, want := sess.CurrentDot(), (text.Range{P1: 5, P2: 5}); got != want {
+		t.Fatalf("CurrentDot() = %#v, want %#v", got, want)
+	}
+}
+
 func TestSaveCurrentPreservesTrailingWhitespaceWhenAutoIndentDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -712,6 +737,18 @@ func TestSaveCurrentTrimsLargeBufferWithoutLogInsertLimit(t *testing.T) {
 	}
 	if want := strings.Repeat("x", text.MaxStringRunes+257) + "\n"; string(got) != want {
 		t.Fatalf("disk contents length = %d, want %d", len(got), len(want))
+	}
+}
+
+func TestTrimTrailingEOLWhitespaceDotMapsIntoLineEnd(t *testing.T) {
+	t.Parallel()
+
+	trimmed, dot := trimTrailingEOLWhitespaceDot("alpha  \n", text.Range{P1: 6, P2: 6})
+	if got, want := trimmed, "alpha\n"; got != want {
+		t.Fatalf("trimmed = %q, want %q", got, want)
+	}
+	if got, want := dot, (text.Range{P1: 5, P2: 5}); got != want {
+		t.Fatalf("dot = %#v, want %#v", got, want)
 	}
 }
 

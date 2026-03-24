@@ -2150,15 +2150,11 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 	}
 	row := 0
 	p := visualRowStartForPos(state.text, state.origin)
+	cursorRow := visualRowStartForPos(state.text, state.cursor)
 	viewRows := bufferViewRows(overlay)
 	for row < viewRows {
-		rowEnd := visualRowEnd(state.text, p)
 		next := nextVisualRowStart(state.text, p)
-		cursorInRow := state.cursor >= p && state.cursor <= rowEnd
-		if next != p && next != rowEnd {
-			cursorInRow = state.cursor >= p && state.cursor < next
-		}
-		if cursorInRow {
+		if p == cursorRow {
 			col := visualColumnForPos(state.text, p, state.cursor)
 			if col >= bufferWrapCols() {
 				col = bufferWrapCols() - 1
@@ -2354,9 +2350,13 @@ func nextVisualRowStart(text []rune, start int) int {
 	start = clampIndex(start, len(text))
 	end := visualRowEnd(text, start)
 	if end < len(text) && text[end] == '\n' {
-		return end + 1
+		next := end + 1
+		if next >= len(text) {
+			return start
+		}
+		return next
 	}
-	if end > start {
+	if end > start && end < len(text) {
 		return end
 	}
 	return start
@@ -2387,7 +2387,7 @@ func lastVisualRowStart(text []rune, start int) int {
 	last := start
 	for {
 		next := nextVisualRowStart(text, last)
-		if next == last {
+		if next == last || next >= len(text) {
 			return last
 		}
 		last = next
@@ -2396,6 +2396,9 @@ func lastVisualRowStart(text []rune, start int) int {
 
 func visualRowStartForPos(text []rune, pos int) int {
 	pos = clampIndex(pos, len(text))
+	if pos == len(text) && pos > 0 && text[pos-1] == '\n' {
+		pos--
+	}
 	start := lineStart(text, pos)
 	for {
 		end := visualRowEnd(text, start)

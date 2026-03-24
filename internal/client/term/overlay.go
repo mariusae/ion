@@ -62,6 +62,24 @@ func (o *overlayState) open(prefill string) {
 	o.savedInput = o.savedInput[:0]
 }
 
+func (o *overlayState) reopen() {
+	o.visible = true
+	o.scroll = 0
+	o.running = false
+	o.selecting = false
+	o.selectBtn2 = false
+	o.selectStart = overlaySelectionPos{line: -1}
+	o.selectEnd = overlaySelectionPos{line: -1}
+	o.recallIdx = -1
+	o.savedInput = o.savedInput[:0]
+	if o.cursor < 0 {
+		o.cursor = 0
+	}
+	if o.cursor > len(o.input) {
+		o.cursor = len(o.input)
+	}
+}
+
 func (o *overlayState) close() {
 	o.visible = false
 	o.scroll = 0

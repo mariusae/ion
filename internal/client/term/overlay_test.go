@@ -40,6 +40,45 @@ func TestOverlayRecallRestoresSavedInput(t *testing.T) {
 	}
 }
 
+func TestOverlayReopenPreservesDraftAndCursor(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("draft")
+	overlay.moveLeft()
+	overlay.moveLeft()
+	overlay.close()
+
+	overlay.reopen()
+
+	if !overlay.visible {
+		t.Fatal("overlay.visible = false, want true after reopen")
+	}
+	if got, want := string(overlay.input), "draft"; got != want {
+		t.Fatalf("input = %q, want %q", got, want)
+	}
+	if got, want := overlay.cursor, 3; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestOverlayOpenPrefillReplacesDraft(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("draft")
+	overlay.close()
+
+	overlay.open("/")
+
+	if got, want := string(overlay.input), "/"; got != want {
+		t.Fatalf("input = %q, want %q", got, want)
+	}
+	if got, want := overlay.cursor, 1; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
 func TestOutputCaptureFlushesBufferedLines(t *testing.T) {
 	t.Parallel()
 

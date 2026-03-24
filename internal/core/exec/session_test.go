@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -684,6 +685,33 @@ func TestSaveCurrentPreservesTrailingWhitespaceWhenAutoIndentDisabled(t *testing
 	}
 	if want := "alpha  \n\tbeta \n"; string(got) != want {
 		t.Fatalf("disk contents = %q, want %q", string(got), want)
+	}
+}
+
+func TestSaveCurrentTrimsLargeBufferWithoutLogInsertLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	large := strings.Repeat("x", text.MaxStringRunes+257) + "  \n"
+	if err := os.WriteFile(path, []byte(large), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	if _, err := sess.SaveCurrent(); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := strings.Repeat("x", text.MaxStringRunes+257) + "\n"; string(got) != want {
+		t.Fatalf("disk contents length = %d, want %d", len(got), len(want))
 	}
 }
 

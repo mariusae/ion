@@ -80,6 +80,41 @@ func TestFileChangeAndUndoRestoresContent(t *testing.T) {
 	}
 }
 
+func TestFileLogInsertAllowsLargeInsert(t *testing.T) {
+	t.Parallel()
+
+	d, err := NewDisk()
+	if err != nil {
+		t.Fatalf("NewDisk() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	f := NewFile(d)
+	f.Unread = false
+	large := strings.Repeat("x", MaxStringRunes+257)
+
+	if err := f.LogInsert(0, []rune(large), 1); err != nil {
+		t.Fatalf("LogInsert() error = %v", err)
+	}
+	if _, _, _, err := f.Update(false); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got, want := f.B.String(), large; got != want {
+		t.Fatalf("buffer = %q, want %q", got, want)
+	}
+
+	if _, _, err := f.Undo(true, true); err != nil {
+		t.Fatalf("Undo() error = %v", err)
+	}
+	if got := f.B.String(); got != "" {
+		t.Fatalf("after undo buffer = %q, want empty", got)
+	}
+}
+
 func TestFileLogSetNameUpdateUndo(t *testing.T) {
 	t.Parallel()
 

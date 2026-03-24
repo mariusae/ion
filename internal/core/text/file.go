@@ -230,11 +230,24 @@ func (f *File) LogSetName(s *String, currentSeq uint32) error {
 
 // LogInsert appends an insertion to epsilon.
 func (f *File) LogInsert(p0 Posn, s []rune, currentSeq uint32) error {
-	if f.Rescuing || len(s) == 0 {
+	if len(s) > MaxStringRunes {
+		for start := 0; start < len(s); start += MaxStringRunes {
+			end := start + MaxStringRunes
+			if end > len(s) {
+				end = len(s)
+			}
+			if err := f.logInsertChunk(p0, s[start:end], currentSeq); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	if len(s) > MaxStringRunes {
-		return fmt.Errorf("loginsert too large")
+	return f.logInsertChunk(p0, s, currentSeq)
+}
+
+func (f *File) logInsertChunk(p0 Posn, s []rune, currentSeq uint32) error {
+	if f.Rescuing || len(s) == 0 {
+		return nil
 	}
 	if f.Seq < currentSeq {
 		if err := f.MarkState(currentSeq); err != nil {

@@ -196,3 +196,32 @@ func TestWriteFrameDiffTitleOnlyEmitsTitleSequence(t *testing.T) {
 		t.Fatalf("writeFrameDiff() = %q, want no row clears for title-only change", got)
 	}
 }
+
+func TestFrameRendererRecordsStatsByClass(t *testing.T) {
+	t.Parallel()
+
+	renderer := newFrameRenderer()
+	stats := &frameRenderStats{
+		enabled: true,
+		counts:  make(map[redrawClass]*frameRenderAggregate),
+	}
+
+	initial := newTerminalFrame(1, 4)
+	var out bytes.Buffer
+	if err := renderer.Render(&out, initial, redrawInitial, true, stats); err != nil {
+		t.Fatalf("Render(initial) error = %v", err)
+	}
+	if got := stats.counts[redrawInitial]; got == nil || got.full != 1 || got.rows != 1 || got.bytes == 0 {
+		t.Fatalf("initial stats = %#v, want one full render with one touched row and nonzero bytes", got)
+	}
+
+	out.Reset()
+	next := cloneTerminalFrame(initial)
+	next.cursor = frameCursor{visible: true, row: 0, col: 1}
+	if err := renderer.Render(&out, next, redrawBuffer, false, stats); err != nil {
+		t.Fatalf("Render(buffer) error = %v", err)
+	}
+	if got := stats.counts[redrawBuffer]; got == nil || got.diff != 1 || got.renders != 1 || got.bytes == 0 {
+		t.Fatalf("buffer stats = %#v, want one diff render with nonzero bytes", got)
+	}
+}

@@ -3,6 +3,7 @@ package term
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -32,6 +33,43 @@ type frameRenderer struct {
 	initialized bool
 }
 
+type redrawClass string
+
+const (
+	redrawInitial redrawClass = "initial"
+	redrawBuffer  redrawClass = "buffer"
+	redrawOverlay redrawClass = "overlay"
+	redrawMenu    redrawClass = "menu"
+	redrawTheme   redrawClass = "theme"
+	redrawRefresh redrawClass = "refresh"
+	redrawResize  redrawClass = "resize"
+)
+
+type frameRenderStats struct {
+	enabled bool
+	out     io.Writer
+	counts  map[redrawClass]*frameRenderAggregate
+}
+
+type frameRenderAggregate struct {
+	renders int
+	full    int
+	diff    int
+	rows    int
+	bytes   int
+}
+
+type frameRenderResult struct {
+	full  bool
+	rows  int
+	bytes int
+}
+
+type countingWriter struct {
+	w     io.Writer
+	count int
+}
+
 func newTerminalFrame(rows, cols int) *terminalFrame {
 	frame := &terminalFrame{
 		rows: make([]frameRow, rows),
@@ -49,6 +87,67 @@ func newFrameRenderer() *frameRenderer {
 	return &frameRenderer{}
 }
 
+func newFrameRenderStats(out io.Writer) *frameRenderStats {
+	return &frameRenderStats{
+		enabled: strings.TrimSpace(os.Getenv("ION_RENDER_TRACE")) != "",
+		out:     out,
+		counts:  make(map[redrawClass]*frameRenderAggregate),
+	}
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	w.count += n
+	return n, err
+}
+
+func (s *frameRenderStats) Record(class redrawClass, result frameRenderResult) {
+	if s == nil || !s.enabled {
+		return
+	}
+	agg := s.counts[class]
+	if agg == nil {
+		agg = &frameRenderAggregate{}
+		s.counts[class] = agg
+	}
+	agg.renders++
+	if result.full {
+		agg.full++
+	} else {
+		agg.diff++
+	}
+	agg.rows += result.rows
+	agg.bytes += result.bytes
+}
+
+func (s *frameRenderStats) Report() error {
+	if s == nil || !s.enabled || s.out == nil {
+		return nil
+	}
+	order := []redrawClass{
+		redrawInitial,
+		redrawResize,
+		redrawRefresh,
+		redrawBuffer,
+		redrawOverlay,
+		redrawMenu,
+		redrawTheme,
+	}
+	if _, err := io.WriteString(s.out, "ion: render stats\n"); err != nil {
+		return err
+	}
+	for _, class := range order {
+		agg := s.counts[class]
+		if agg == nil || agg.renders == 0 {
+			continue
+		}
+		if _, err := fmt.Fprintf(s.out, "  %s: renders=%d full=%d diff=%d rows=%d bytes=%d\n", class, agg.renders, agg.full, agg.diff, agg.rows, agg.bytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *frameRenderer) Reset() {
 	if r == nil {
 		return
@@ -57,25 +156,36 @@ func (r *frameRenderer) Reset() {
 	r.initialized = false
 }
 
-func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, forceFull bool) error {
+func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class redrawClass, forceFull bool, stats *frameRenderStats) error {
 	if frame == nil {
 		return nil
 	}
 	if r == nil {
 		return writeFullFrame(stdout, frame)
 	}
+	counted := &countingWriter{w: stdout}
+	result := frameRenderResult{}
 	if forceFull || !r.initialized || !sameFrameGeometry(r.last, frame) {
-		if err := writeFullFrame(stdout, frame); err != nil {
+		if err := writeFullFrame(counted, frame); err != nil {
 			return err
 		}
+		result = frameRenderResult{full: true, rows: len(frame.rows), bytes: counted.count}
 		r.last = cloneTerminalFrame(frame)
 		r.initialized = true
+		if stats != nil {
+			stats.Record(class, result)
+		}
 		return nil
 	}
-	if err := writeFrameDiff(stdout, r.last, frame); err != nil {
+	changedRows := changedFrameRows(r.last, frame)
+	if err := writeFrameDiff(counted, r.last, frame); err != nil {
 		return err
 	}
+	result = frameRenderResult{rows: len(changedRows), bytes: counted.count}
 	r.last = cloneTerminalFrame(frame)
+	if stats != nil {
+		stats.Record(class, result)
+	}
 	return nil
 }
 
@@ -237,12 +347,7 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 		}
 	}
 
-	changedRows := make([]int, 0, len(next.rows))
-	for row := range next.rows {
-		if !sameFrameRow(prev.rows[row], next.rows[row]) {
-			changedRows = append(changedRows, row)
-		}
-	}
+	changedRows := changedFrameRows(prev, next)
 
 	cursorChanged := prev.cursor != next.cursor
 	if len(changedRows) == 0 && !cursorChanged && prev.title == next.title {
@@ -347,6 +452,19 @@ func sameFrameRow(a, b frameRow) bool {
 		}
 	}
 	return true
+}
+
+func changedFrameRows(prev, next *terminalFrame) []int {
+	if !sameFrameGeometry(prev, next) {
+		return nil
+	}
+	changed := make([]int, 0, len(next.rows))
+	for row := range next.rows {
+		if !sameFrameRow(prev.rows[row], next.rows[row]) {
+			changed = append(changed, row)
+		}
+	}
+	return changed
 }
 
 func writeFrameCursor(stdout io.Writer, cursor frameCursor) error {

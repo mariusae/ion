@@ -9,6 +9,8 @@ import (
 	"unsafe"
 )
 
+const posixVDisable = 0xff
+
 type ttyState struct {
 	fd   int
 	orig syscall.Termios
@@ -34,10 +36,7 @@ func enterCBreakMode(f *os.File) (*ttyState, error) {
 		return nil, fmt.Errorf("get terminal mode: %w", errno)
 	}
 	orig := termios
-	termios.Iflag &^= syscall.ICRNL
-	termios.Lflag &^= syscall.ICANON | syscall.ECHO
-	termios.Cc[syscall.VMIN] = 1
-	termios.Cc[syscall.VTIME] = 0
+	configureCBreakTermios(&termios)
 	if _, _, errno := syscall.Syscall6(
 		syscall.SYS_IOCTL,
 		uintptr(fd),
@@ -48,6 +47,20 @@ func enterCBreakMode(f *os.File) (*ttyState, error) {
 		return nil, fmt.Errorf("set terminal mode: %w", errno)
 	}
 	return &ttyState{fd: fd, orig: orig}, nil
+}
+
+func configureCBreakTermios(termios *syscall.Termios) {
+	if termios == nil {
+		return
+	}
+	// Keep IXON/IXOFF untouched for tmux/terminal compatibility, but disable
+	// the start/stop control characters so Ctrl-Q/Ctrl-S reach the editor.
+	termios.Iflag &^= syscall.ICRNL
+	termios.Lflag &^= syscall.ICANON | syscall.ECHO
+	termios.Cc[syscall.VSTART] = posixVDisable
+	termios.Cc[syscall.VSTOP] = posixVDisable
+	termios.Cc[syscall.VMIN] = 1
+	termios.Cc[syscall.VTIME] = 0
 }
 
 func (s *ttyState) restore() error {

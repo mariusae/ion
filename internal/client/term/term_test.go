@@ -543,7 +543,7 @@ func TestDrawOverlayHistoryLineBoldsCommittedCommand(t *testing.T) {
 	}
 }
 
-func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
+func TestDrawOverlayPromptUsesOverlayTintWithoutPromptGlyph(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20
 	t.Cleanup(func() {
@@ -560,8 +560,11 @@ func TestDrawOverlayPromptUsesChevronAndOverlayTint(t *testing.T) {
 		t.Fatalf("drawOverlayPrompt() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, theme.hudPrefix()+"› ,p") {
-		t.Fatalf("drawOverlayPrompt() = %q, want chevron prompt with overlay tint", got)
+	if !strings.Contains(got, theme.hudPrefix()+",p") {
+		t.Fatalf("drawOverlayPrompt() = %q, want command input with overlay tint", got)
+	}
+	if strings.Contains(got, "› ") {
+		t.Fatalf("drawOverlayPrompt() = %q, want no prompt glyph", got)
 	}
 	if strings.Contains(got, "\x1b[1;") {
 		t.Fatalf("drawOverlayPrompt() = %q, want non-bold live prompt", got)

@@ -577,8 +577,8 @@ func TestIonTermBufferModeCtrlWSaveWarningUsesHUD(t *testing.T) {
 	if _, err := sess.WaitFor("in.txt: #5", 2*time.Second); err != nil {
 		t.Fatalf("wait for save count in HUD: %v\n%s", err, sess.Snapshot())
 	}
-	if _, err := sess.WaitFor("› ", 2*time.Second); err != nil {
-		t.Fatalf("wait for HUD prompt after save warning: %v\n%s", err, sess.Snapshot())
+	if _, err := sess.WaitFor("\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+		t.Fatalf("wait for HUD cursor after save warning: %v\n%s", err, sess.Snapshot())
 	}
 
 	if err := sess.WriteString("q\r"); err != nil {
@@ -896,7 +896,7 @@ func TestIonTermOverlayUnhandledControlFallsThroughToBuffer(t *testing.T) {
 	if err := sess.WriteString("\x1b\n"); err != nil {
 		t.Fatalf("enter buffer mode and open overlay: %v", err)
 	}
-	if _, err := sess.WaitFor(": \x1b[7m \x1b[27m", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor("\x1b[7m \x1b[27m", 2*time.Second); err != nil {
 		t.Fatalf("wait for overlay prompt: %v\n%s", err, sess.Snapshot())
 	}
 
@@ -1078,8 +1078,8 @@ func TestIonTermBufferModeSnarfAndPaste(t *testing.T) {
 	if _, err := sess.WaitFor("?changed files", 2*time.Second); err != nil {
 		t.Fatalf("wait for changed-files warning after Ctrl-Q: %v\n%s", err, sess.Snapshot())
 	}
-	if _, err := sess.WaitFor("› ", 2*time.Second); err != nil {
-		t.Fatalf("wait for HUD prompt after Ctrl-Q: %v\n%s", err, sess.Snapshot())
+	if _, err := sess.WaitFor("\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+		t.Fatalf("wait for HUD cursor after Ctrl-Q: %v\n%s", err, sess.Snapshot())
 	}
 	if err := sess.WriteString("q\r"); err != nil {
 		t.Fatalf("send second quit: %v", err)
@@ -1142,14 +1142,14 @@ func TestIonTermBufferModeOverlayRecall(t *testing.T) {
 	if err := sess.WriteString("\x10"); err != nil {
 		t.Fatalf("recall last overlay command: %v", err)
 	}
-	if _, err := sess.WaitFor(": ,p\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor(",p\x1b[7m \x1b[27m", 2*time.Second); err != nil {
 		t.Fatalf("wait for recalled overlay prompt: %v\n%s", err, sess.Snapshot())
 	}
 
 	if err := sess.WriteString("\n\x1f"); err != nil {
 		t.Fatalf("close overlay and reopen with slash preload: %v", err)
 	}
-	if _, err := sess.WaitFor(": /\x1b[7m \x1b[27m", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor("/\x1b[7m \x1b[27m", 2*time.Second); err != nil {
 		t.Fatalf("wait for slash-preloaded overlay prompt: %v\n%s", err, sess.Snapshot())
 	}
 

@@ -1719,10 +1719,7 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 			return err
 		}
 	}
-	if _, err := io.WriteString(stdout, "› "); err != nil {
-		return err
-	}
-	col := 2
+	col := 0
 	for _, r := range overlay.input {
 		if col >= termCols {
 			break
@@ -2000,7 +1997,7 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {
 	if overlay != nil && overlay.visible {
 		row := termRows - 1 - overlayBottomPadRows(overlay)
-		col := 2 + overlay.cursor
+		col := overlay.cursor
 		if col > termCols-1 {
 			col = termCols - 1
 		}

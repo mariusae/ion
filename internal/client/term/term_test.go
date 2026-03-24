@@ -217,6 +217,30 @@ func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	}
 }
 
+func TestDrawBufferLineHighlightsExpandedTabSpaces(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "\talpha\n",
+		DotStart: 0,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 1, nil); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b[7m        \x1b[27m") {
+		t.Fatalf("drawBufferLine() = %q, want selected tab drawn as highlighted spaces", got)
+	}
+}
+
 func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20
@@ -341,6 +365,26 @@ func TestTerminalCursorPositionTracksWrappedRows(t *testing.T) {
 	row, col := terminalCursorPosition(state, nil)
 	if row != 1 || col != 1 {
 		t.Fatalf("terminalCursorPosition() = (%d, %d), want (1, 1)", row, col)
+	}
+}
+
+func TestTerminalCursorPositionAccountsForTabWidth(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 16
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "\talpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	state.origin = 0
+
+	row, col := terminalCursorPosition(state, nil)
+	if row != 0 || col != 8 {
+		t.Fatalf("terminalCursorPosition() = (%d, %d), want (0, 8)", row, col)
 	}
 }
 

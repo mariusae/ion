@@ -1677,23 +1677,32 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 }
 
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {
+	selected := false
 	col := 0
 	for p := start; p < end && col < termCols; p++ {
-		selected := !state.flashSelection && p >= state.dotStart && p < state.dotEnd
-		if selected {
-			if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
-				return err
+		wantSelected := !state.flashSelection && p >= state.dotStart && p < state.dotEnd
+		if wantSelected != selected {
+			selected = wantSelected
+			if selected {
+				if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
+					return err
+				}
+			} else {
+				if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
+					return err
+				}
 			}
 		}
-		if _, err := io.WriteString(stdout, string(state.text[p])); err != nil {
+		nextCol, err := writeBufferRune(stdout, state.text[p], col, termCols)
+		if err != nil {
 			return err
 		}
-		if selected {
-			if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
-				return err
-			}
+		col = nextCol
+	}
+	if selected {
+		if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
+			return err
 		}
-		col++
 	}
 	return nil
 }
@@ -1849,7 +1858,10 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 	return nil
 }
 
-const hudTabWidth = 8
+const (
+	hudTabWidth    = 8
+	bufferTabWidth = 8
+)
 
 func writeHUDText(stdout io.Writer, text string, startCol, maxCols int) (int, error) {
 	col := startCol
@@ -1867,17 +1879,19 @@ func writeHUDText(stdout io.Writer, text string, startCol, maxCols int) (int, er
 }
 
 func writeHUDRune(stdout io.Writer, r rune, col, maxCols int) (int, error) {
+	return writeDisplayRune(stdout, r, col, maxCols, hudTabWidth)
+}
+
+func writeBufferRune(stdout io.Writer, r rune, col, maxCols int) (int, error) {
+	return writeDisplayRune(stdout, r, col, maxCols, bufferTabWidth)
+}
+
+func writeDisplayRune(stdout io.Writer, r rune, col, maxCols, tabWidth int) (int, error) {
+	advance := runeDisplayAdvance(r, col, maxCols, tabWidth)
+	if advance <= 0 {
+		return col, nil
+	}
 	if r == '\t' {
-		advance := hudTabWidth - (col % hudTabWidth)
-		if advance <= 0 {
-			advance = hudTabWidth
-		}
-		if col+advance > maxCols {
-			advance = maxCols - col
-		}
-		if advance <= 0 {
-			return col, nil
-		}
 		if _, err := io.WriteString(stdout, strings.Repeat(" ", advance)); err != nil {
 			return col, err
 		}
@@ -1887,6 +1901,23 @@ func writeHUDRune(stdout io.Writer, r rune, col, maxCols int) (int, error) {
 		return col, err
 	}
 	return col + 1, nil
+}
+
+func runeDisplayAdvance(r rune, col, maxCols, tabWidth int) int {
+	if maxCols <= 0 || col >= maxCols {
+		return 0
+	}
+	if r == '\t' {
+		advance := tabWidth - (col % tabWidth)
+		if advance <= 0 {
+			advance = tabWidth
+		}
+		if col+advance > maxCols {
+			advance = maxCols - col
+		}
+		return advance
+	}
+	return 1
 }
 
 func shimmerPrefix(theme *uiTheme, index, length int) string {
@@ -2017,7 +2048,7 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 			cursorInRow = state.cursor >= p && state.cursor < next
 		}
 		if cursorInRow {
-			col := state.cursor - p
+			col := visualColumnForPos(state.text, p, state.cursor)
 			if col >= bufferWrapCols() {
 				col = bufferWrapCols() - 1
 			}
@@ -2170,14 +2201,14 @@ func moveLineUp(text []rune, pos int) int {
 	if start == 0 {
 		return pos
 	}
-	col := pos - start
+	col := visualColumnForPos(text, start, pos)
 	prev := prevVisualRowStart(text, start)
 	return visualRowPosAtColumn(text, prev, col)
 }
 
 func moveLineDown(text []rune, pos int) int {
 	start := visualRowStartForPos(text, pos)
-	col := pos - start
+	col := visualColumnForPos(text, start, pos)
 	next := nextVisualRowStart(text, start)
 	if next == start {
 		return pos
@@ -2194,8 +2225,15 @@ func bufferWrapCols() int {
 
 func visualRowEnd(text []rune, start int) int {
 	start = clampIndex(start, len(text))
+	col := 0
 	end := start
-	for end < len(text) && text[end] != '\n' && end-start < bufferWrapCols() {
+	maxCols := bufferWrapCols()
+	for end < len(text) && text[end] != '\n' && col < maxCols {
+		advance := bufferRuneAdvance(text[end], col, maxCols)
+		if advance <= 0 {
+			break
+		}
+		col += advance
 		end++
 	}
 	return end
@@ -2217,11 +2255,14 @@ func prevVisualRowStart(text []rune, start int) int {
 	start = clampIndex(start, len(text))
 	currentLineStart := lineStart(text, start)
 	if start > currentLineStart {
-		prev := start - bufferWrapCols()
-		if prev < currentLineStart {
-			prev = currentLineStart
+		prev := currentLineStart
+		for {
+			next := nextVisualRowStart(text, prev)
+			if next == prev || next >= start {
+				return prev
+			}
+			prev = next
 		}
-		return prev
 	}
 	if currentLineStart == 0 {
 		return 0
@@ -2231,31 +2272,31 @@ func prevVisualRowStart(text []rune, start int) int {
 }
 
 func lastVisualRowStart(text []rune, start int) int {
-	end := lineEnd(text, start)
-	if end <= start {
-		return start
+	start = clampIndex(start, len(text))
+	last := start
+	for {
+		next := nextVisualRowStart(text, last)
+		if next == last {
+			return last
+		}
+		last = next
 	}
-	return start + ((end-start-1)/bufferWrapCols())*bufferWrapCols()
 }
 
 func visualRowStartForPos(text []rune, pos int) int {
 	pos = clampIndex(pos, len(text))
 	start := lineStart(text, pos)
-	end := lineEnd(text, start)
-	if pos > end {
-		pos = end
+	for {
+		end := visualRowEnd(text, start)
+		if pos <= end {
+			return start
+		}
+		next := nextVisualRowStart(text, start)
+		if next == start {
+			return start
+		}
+		start = next
 	}
-	if pos == start {
-		return start
-	}
-	offset := pos - start
-	if pos == end {
-		offset--
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	return start + (offset/bufferWrapCols())*bufferWrapCols()
 }
 
 func visualRowPosAtColumn(text []rune, start, col int) int {
@@ -2263,11 +2304,25 @@ func visualRowPosAtColumn(text []rune, start, col int) int {
 		col = 0
 	}
 	end := visualRowEnd(text, start)
-	pos := start + col
-	if pos > end {
-		return end
+	if col == 0 {
+		return start
 	}
-	return pos
+	visualCol := 0
+	maxCols := bufferWrapCols()
+	for pos := start; pos < end; pos++ {
+		if col == visualCol {
+			return pos
+		}
+		advance := bufferRuneAdvance(text[pos], visualCol, maxCols)
+		if advance <= 0 {
+			break
+		}
+		visualCol += advance
+		if col <= visualCol {
+			return pos + 1
+		}
+	}
+	return end
 }
 
 func hasDirtyFiles(svc wire.TermService) (bool, error) {
@@ -2308,6 +2363,28 @@ func linePosAtColumn(text []rune, start, col int) int {
 		return end
 	}
 	return pos
+}
+
+func bufferRuneAdvance(r rune, col, maxCols int) int {
+	return runeDisplayAdvance(r, col, maxCols, bufferTabWidth)
+}
+
+func visualColumnForPos(text []rune, start, pos int) int {
+	start = clampIndex(start, len(text))
+	pos = clampIndex(pos, len(text))
+	if pos < start {
+		pos = start
+	}
+	col := 0
+	maxCols := bufferWrapCols()
+	for i := start; i < pos && i < len(text) && text[i] != '\n' && col < maxCols; i++ {
+		advance := bufferRuneAdvance(text[i], col, maxCols)
+		if advance <= 0 {
+			break
+		}
+		col += advance
+	}
+	return col
 }
 
 func lineStart(text []rune, pos int) int {

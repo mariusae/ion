@@ -262,9 +262,5 @@ func screenToPos(state *bufferState, overlay *overlayState, row, col int) (int, 
 		}
 		p = next
 	}
-	end := visualRowEnd(state.text, p)
-	if col > end-p {
-		col = end - p
-	}
-	return p + col, true
+	return visualRowPosAtColumn(state.text, p, col), true
 }

@@ -120,3 +120,33 @@ func TestScreenToPosUsesWrappedRows(t *testing.T) {
 		t.Fatalf("screenToPos() = %d, want %d", got, want)
 	}
 }
+
+func TestScreenToPosUsesExpandedTabColumns(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 16
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "\talpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	pos, ok := screenToPos(state, nil, 0, 0)
+	if !ok {
+		t.Fatalf("screenToPos() ok = false, want true")
+	}
+	if got, want := pos, 0; got != want {
+		t.Fatalf("screenToPos(start of tab) = %d, want %d", got, want)
+	}
+
+	pos, ok = screenToPos(state, nil, 0, 3)
+	if !ok {
+		t.Fatalf("screenToPos() ok = false, want true")
+	}
+	if got, want := pos, 1; got != want {
+		t.Fatalf("screenToPos(inside tab) = %d, want %d", got, want)
+	}
+}

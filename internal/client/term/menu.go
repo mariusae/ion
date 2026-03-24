@@ -31,21 +31,25 @@ type menuItem struct {
 }
 
 type menuState struct {
-	visible  bool
-	x        int
-	y        int
-	width    int
-	height   int
-	hover    int
-	lastItem int
-	title    string
-	items    []menuItem
+	visible bool
+	x       int
+	y       int
+	width   int
+	height  int
+	hover   int
+	title   string
+	items   []menuItem
+}
+
+type menuStickyState struct {
+	itemIndex          int
+	preferPreviousFile bool
+	previousFileID     int
 }
 
 func newMenuState() *menuState {
 	return &menuState{
-		hover:    -1,
-		lastItem: -1,
+		hover: -1,
 	}
 }
 
@@ -54,9 +58,8 @@ func (m *menuState) dismiss() {
 	m.hover = -1
 }
 
-func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY int, lastItem int) *menuState {
+func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY int, sticky menuStickyState) *menuState {
 	menu := newMenuState()
-	menu.lastItem = lastItem
 	if buffer == nil {
 		return menu
 	}
@@ -134,16 +137,17 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY
 	}
 
 	menu.x = clickX - menu.width/2
-	if lastItem >= 0 && lastItem < len(menu.items) {
+	stickyHover := resolveMenuStickyHover(menu.items, sticky)
+	if stickyHover >= 0 && stickyHover < len(menu.items) {
 		itemRow := 1
-		for i := 0; i < lastItem; i++ {
+		for i := 0; i < stickyHover; i++ {
 			itemRow++
 			if menu.items[i].sepAfter && i < len(menu.items)-1 {
 				itemRow++
 			}
 		}
 		menu.y = clickY - itemRow
-		menu.hover = lastItem
+		menu.hover = stickyHover
 	} else {
 		menu.y = clickY - menu.height/2
 	}
@@ -175,7 +179,7 @@ func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 	}
 	inner := menu.width - 2
 	row := menu.y
-	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner), theme.titlePrefix(), theme); err != nil {
+	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), theme.titlePrefix(), theme); err != nil {
 		return err
 	}
 	row++
@@ -185,13 +189,13 @@ func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 		}
 		row++
 		if item.sepAfter && i < len(menu.items)-1 {
-			if err := writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+", theme.subtlePrefix(), theme); err != nil {
+			if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder("", inner, '├', '┤', '─'), theme.subtlePrefix(), theme); err != nil {
 				return err
 			}
 			row++
 		}
 	}
-	return writeMenuLine(stdout, row, menu.x, "+"+strings.Repeat("-", inner)+"+", theme.subtlePrefix(), theme)
+	return writeMenuLine(stdout, row, menu.x, formatMenuBorder("", inner, '╰', '╯', '─'), theme.subtlePrefix(), theme)
 }
 
 func writeMenuLine(stdout io.Writer, row, col int, line, prefix string, theme *uiTheme) error {
@@ -224,27 +228,27 @@ func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover b
 		if hover {
 			content = "\x1b[7m" + content + "\x1b[27m"
 		}
-		return writeMenuLine(stdout, row, col, "|"+content+"|", "", nil)
+		return writeMenuLine(stdout, row, col, "│"+content+"│", "", nil)
 	}
 	prefix := theme.subtlePrefix()
 	if hover {
 		prefix = theme.hoverPrefix()
 	}
-	return writeMenuLine(stdout, row, col, "|"+content+"|", prefix, theme)
+	return writeMenuLine(stdout, row, col, "│"+content+"│", prefix, theme)
 }
 
-func formatMenuBorder(title string, inner int) string {
+func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill rune) string {
 	runes := []rune(title)
 	if len(runes) > inner {
 		runes = runes[:inner]
 	}
 	text := string(runes)
 	if pad := inner - len(runes); pad > 0 {
-		left := pad / 2
-		right := pad - left
-		text = strings.Repeat("-", left) + text + strings.Repeat("-", right)
+		leftPad := pad / 2
+		rightPad := pad - leftPad
+		text = strings.Repeat(string(fill), leftPad) + text + strings.Repeat(string(fill), rightPad)
 	}
-	return "+" + text + "+"
+	return string(leftBorder) + text + string(rightBorder)
 }
 
 func (m *menuState) itemAt(x, y int) int {
@@ -280,6 +284,51 @@ func currentMark(current bool) rune {
 		return '.'
 	}
 	return ' '
+}
+
+func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
+	if sticky.preferPreviousFile {
+		if idx := menuItemIndexByFileID(items, sticky.previousFileID); idx >= 0 {
+			return idx
+		}
+	}
+	if sticky.itemIndex >= 0 && sticky.itemIndex < len(items) {
+		return sticky.itemIndex
+	}
+	return -1
+}
+
+func nextMenuStickyState(menu *menuState, itemIndex int, item menuItem) menuStickyState {
+	next := menuStickyState{itemIndex: itemIndex}
+	if item.kind != menuFile {
+		return next
+	}
+	if currentID, ok := currentMenuFileID(menu); ok {
+		next.preferPreviousFile = true
+		next.previousFileID = currentID
+	}
+	return next
+}
+
+func currentMenuFileID(menu *menuState) (int, bool) {
+	if menu == nil {
+		return 0, false
+	}
+	for _, item := range menu.items {
+		if item.kind == menuFile && item.current {
+			return item.fileID, true
+		}
+	}
+	return 0, false
+}
+
+func menuItemIndexByFileID(items []menuItem, fileID int) int {
+	for i, item := range items {
+		if item.kind == menuFile && item.fileID == fileID {
+			return i
+		}
+	}
+	return -1
 }
 
 func escapeSearchPattern(pattern string) string {

@@ -150,7 +150,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	lastMouseClickPos := -1
 	overlay := newOverlayState()
 	menu := newMenuState()
-	menuLastItem := -1
+	menuSticky := menuStickyState{itemIndex: -1}
 	buffer, err := enterBufferMode(stdout, svc, overlay, menu, theme)
 	if err != nil {
 		return err
@@ -457,12 +457,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		menu = buildContextMenu(buffer, files, clickX, clickY, menuLastItem)
+		menu = buildContextMenu(buffer, files, clickX, clickY, menuSticky)
 		return redraw()
 	}
 
 	executeMenuItem := func(item menuItem) (bool, error) {
-		menuLastItem = menu.hover
+		menuSticky = nextMenuStickyState(menu, menu.hover, item)
 		menu.dismiss()
 		switch item.kind {
 		case menuWrite:

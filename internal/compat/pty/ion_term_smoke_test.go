@@ -2165,10 +2165,10 @@ func TestIonTermBufferModeContextMenuOpenAndDismiss(t *testing.T) {
 	if err := sess.WriteString("\x1b[<2;20;10M"); err != nil {
 		t.Fatalf("open context menu: %v", err)
 	}
-	if _, err := sess.WaitFor("| write", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor("│ write", 2*time.Second); err != nil {
 		t.Fatalf("wait for context menu contents: %v\n%s", err, sess.Snapshot())
 	}
-	if _, err := sess.WaitFor("| /regexp", 2*time.Second); err != nil {
+	if _, err := sess.WaitFor("│ /regexp", 2*time.Second); err != nil {
 		t.Fatalf("wait for regexp menu item: %v\n%s", err, sess.Snapshot())
 	}
 

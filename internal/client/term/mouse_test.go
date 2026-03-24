@@ -36,6 +36,40 @@ func TestReadBufferEscapeMouse(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeFocusEvents(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b[I\x1b[O"))
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with first ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader)
+	if err != nil {
+		t.Fatalf("readBufferEscape(focus-in) error = %v", err)
+	}
+	if key != keyFocusIn {
+		t.Fatalf("focus-in key = %d, want keyFocusIn", key)
+	}
+	if mouse != nil {
+		t.Fatalf("focus-in mouse = %#v, want nil", mouse)
+	}
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with second ESC: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader)
+	if err != nil {
+		t.Fatalf("readBufferEscape(focus-out) error = %v", err)
+	}
+	if key != keyFocusOut {
+		t.Fatalf("focus-out key = %d, want keyFocusOut", key)
+	}
+	if mouse != nil {
+		t.Fatalf("focus-out mouse = %#v, want nil", mouse)
+	}
+}
+
 func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	t.Parallel()
 

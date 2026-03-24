@@ -65,11 +65,18 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 		mode:        mode,
 		subtleBG:    blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
 		hudBG:       blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
-		outputBG:    blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
+		outputBG:    blendTint(bg, light, alphaFor(light, 0.12, 0.24)),
 		titleBG:     blendTint(bg, light, alphaFor(light, 0.14, 0.26)),
 		highlightBG: blendTint(bg, light, alphaFor(light, 0.10, 0.20)),
 		cursorBG:    blendTint(bg, light, alphaFor(light, 0.16, 0.30)),
 	}
+}
+
+func sameTheme(a, b *uiTheme) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func alphaFor(light bool, lightAlpha, darkAlpha float64) float64 {

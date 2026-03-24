@@ -455,6 +455,60 @@ func TestIonTermBufferModeCtrlWSaves(t *testing.T) {
 	}
 }
 
+func TestIonTermBufferModeCtrlWSaveWarningUsesHUD(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	if err := os.WriteFile(path, []byte("alpha"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b\x17"); err != nil {
+		t.Fatalf("enter buffer mode and save warning fixture: %v", err)
+	}
+	if _, err := sess.WaitFor("?warning: last char not newline", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for save warning in HUD: %v\n%s", err, sess.Snapshot())
+	}
+	if _, err := sess.WaitFor("in.txt: #5", 2*time.Second); err != nil {
+		t.Fatalf("wait for save count in HUD: %v\n%s", err, sess.Snapshot())
+	}
+	if _, err := sess.WaitFor("› ", 2*time.Second); err != nil {
+		t.Fatalf("wait for HUD prompt after save warning: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("q\r"); err != nil {
+		t.Fatalf("quit from warning HUD: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermBufferModeBackspaceDeletesAndSaves(t *testing.T) {
 	t.Parallel()
 

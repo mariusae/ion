@@ -38,6 +38,8 @@ const (
 	keyAltPageUp
 	keyAltSnarf
 	keyAltBackspace
+	keyFocusIn
+	keyFocusOut
 )
 
 var (
@@ -274,6 +276,68 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return redraw()
 	}
 
+	flashOverlaySelection := func() error {
+		if overlay == nil || !overlay.hasSelection() {
+			return nil
+		}
+		overlay.flashSelection = true
+		if err := redraw(); err != nil {
+			overlay.flashSelection = false
+			return err
+		}
+		time.Sleep(80 * time.Millisecond)
+		overlay.flashSelection = false
+		return redraw()
+	}
+
+	clearTransientStatus := func() {
+		if buffer != nil {
+			buffer.status = ""
+		}
+	}
+
+	refreshThemeOnFocus := func() error {
+		nextTheme, prefetched := detectTerminalTheme(stdin, stdout)
+		if len(prefetched) > 0 {
+			reader = bufio.NewReader(io.MultiReader(bytes.NewReader(prefetched), reader))
+		}
+		if sameTheme(theme, nextTheme) {
+			return nil
+		}
+		theme = nextTheme
+		if inBufferMode {
+			return redraw()
+		}
+		return nil
+	}
+
+	saveWithCapture := func() (string, []string, error) {
+		var lines []string
+		if capture != nil {
+			capture.Start(func(line string) {
+				lines = append(lines, line)
+			})
+		}
+		status, err := svc.Save()
+		if capture != nil {
+			capture.Stop()
+		}
+		return status, lines, err
+	}
+
+	applyStatusResult := func(status string, lines []string) {
+		inline, hud := normalizeStatusResult(status, lines)
+		if len(hud) == 0 {
+			buffer.status = inline
+			return
+		}
+		overlay.open("")
+		for _, line := range hud {
+			overlay.addOutput(line)
+		}
+		buffer.status = ""
+	}
+
 	executeDirect := func(line string, captureOutput bool) (bool, []string, error) {
 		parser.ResetRunes([]rune(line))
 		cmd, err := parser.ParseWithFinal(true)
@@ -393,11 +457,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		menu.dismiss()
 		switch item.kind {
 		case menuWrite:
-			msg, err := svc.Save()
+			msg, lines, err := saveWithCapture()
 			if err != nil {
 				buffer.status = diagnosticText(err)
 			} else {
-				buffer.status = msg
+				applyStatusResult(msg, lines)
 			}
 			return false, nil
 		case menuCut:
@@ -531,16 +595,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return false, nil
 	}
 
-	handleOverlayMouse := func(event mouseEvent) bool {
+	handleOverlayMouse := func(event mouseEvent) (bool, error) {
 		if !overlay.visible {
-			return false
+			return false, nil
 		}
 		if event.y < overlayTopRow(overlay) {
 			if event.pressed {
 				overlay.close()
-				return true
+				return true, nil
 			}
-			return false
+			return false, nil
 		}
 		switch event.button {
 		case 64:
@@ -554,7 +618,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if overlay.selecting {
 					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
 				}
-				return true
+				return true, nil
 			}
 			if btn := event.button & 3; btn == 0 || btn == 2 {
 				if event.pressed {
@@ -564,7 +628,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.selectBtn2 = btn == 2
 						overlay.selectStart = pos
 						overlay.selectEnd = pos
-						return true
+						return true, nil
 					}
 				} else if overlay.selecting {
 					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
@@ -584,14 +648,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								_ = refreshBuffer()
 							}
 						}
-						return true
+						return true, nil
 					}
 					_ = copyToClipboard(stdout, overlay.selectedText())
-					return true
+					return true, flashOverlaySelection()
 				}
 			}
 		}
-		return true
+		return true, nil
 	}
 
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
@@ -606,6 +670,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			mouseSelecting = false
 			return false, redraw()
+		}
+		if key == keyFocusIn {
+			return false, refreshThemeOnFocus()
+		}
+		if key == keyFocusOut {
+			return false, nil
 		}
 		if key == keyMouse {
 			if mouse == nil {
@@ -795,11 +865,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				overlay.open("w ")
 				return false, redraw()
 			}
-			msg, err := svc.Save()
+			msg, lines, err := saveWithCapture()
 			if err != nil {
 				buffer.status = diagnosticText(err)
 			} else {
-				buffer.status = msg
+				applyStatusResult(msg, lines)
 			}
 			return false, redraw()
 		case 0x1f:
@@ -872,6 +942,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					if err != nil {
 						return err
 					}
+					if key != keyFocusIn && key != keyFocusOut {
+						clearTransientStatus()
+					}
 					switch key {
 					case keyEsc:
 						if menu.visible {
@@ -894,7 +967,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								return nil
 							}
-							if handleOverlayMouse(*mouse) {
+							handled, err := handleOverlayMouse(*mouse)
+							if err != nil {
+								return err
+							}
+							if handled {
 								if err := redraw(); err != nil {
 									return err
 								}
@@ -938,6 +1015,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.scrollNewer(5)
 					case keyDel:
 						overlay.deleteForward()
+					case keyFocusIn:
+						if err := refreshThemeOnFocus(); err != nil {
+							return err
+						}
+						continue
+					case keyFocusOut:
+						continue
 					default:
 						overlay.close()
 						done, err := handleBufferSpecial(key, mouse)
@@ -957,6 +1041,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if menu.visible {
 					menu.dismiss()
 				}
+				clearTransientStatus()
 				switch r {
 				case '\r':
 					done, err := submitOverlay()
@@ -1018,6 +1103,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if err != nil {
 					return err
 				}
+				if key != keyFocusIn && key != keyFocusOut {
+					clearTransientStatus()
+				}
 				done, err := handleBufferSpecial(key, mouse)
 				if err != nil {
 					return err
@@ -1027,6 +1115,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				continue
 			}
+			clearTransientStatus()
 			done, err := handleBufferRune(r)
 			if err != nil {
 				return err
@@ -1111,7 +1200,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlaySta
 }
 
 func exitBufferMode(stdout io.Writer) error {
-	_, err := io.WriteString(stdout, "\x1b[?25h\x1b[0 q\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
+	_, err := io.WriteString(stdout, "\x1b[?25h\x1b[0 q\x1b[?1000l\x1b[?1002l\x1b[?1004l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
 	return err
 }
 
@@ -1121,6 +1210,49 @@ func diagnosticText(err error) string {
 		return diag.Diagnostic()
 	}
 	return "?" + err.Error()
+}
+
+func normalizeStatusResult(status string, captured []string) (string, []string) {
+	hud := make([]string, 0, len(captured)+4)
+	appendHUD := func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		hud = append(hud, line)
+	}
+	for _, line := range captured {
+		appendHUD(line)
+	}
+
+	inline := ""
+	statusPrefix := ""
+	for _, raw := range strings.Split(status, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if idx := strings.Index(line, "?warning:"); idx >= 0 {
+			appendHUD(line[idx:])
+			statusPrefix = strings.TrimSpace(line[:idx])
+			continue
+		}
+		if statusPrefix != "" {
+			appendHUD(strings.TrimSpace(statusPrefix + " " + line))
+			statusPrefix = ""
+			continue
+		}
+		if inline == "" && len(hud) == 0 {
+			inline = line
+			continue
+		}
+		if inline != "" {
+			appendHUD(inline)
+			inline = ""
+		}
+		appendHUD(line)
+	}
+	return inline, hud
 }
 
 func isTTY(f *os.File) bool {
@@ -1248,7 +1380,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(state.name)); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25h\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
+	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25h\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
 		return err
 	}
 	viewRows := bufferViewRows(overlay)
@@ -1315,7 +1447,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		if len(status) > termCols {
 			status = status[:termCols]
 		}
-		if err := drawHUDLine(stdout, termRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
+		if err := drawInlineHUDLabel(stdout, termRows-1, string(status), theme.subtlePrefix(), theme); err != nil {
 			return err
 		}
 	}
@@ -1330,20 +1462,25 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
 	}
 	start, end, ok := overlay.selectionBounds()
-	offset := line.offset
 	selStart := 0
 	selEnd := 0
-	if ok && line.history >= start.line && line.history <= end.line {
+	contentOffset := line.offset
+	if ok && !overlay.flashSelection && line.history >= start.line && line.history <= end.line {
+		if line.command {
+			selStart = 0
+		} else {
+			selStart = contentOffset
+		}
 		selEnd = len([]rune(line.text))
 	}
-	if ok && line.history == start.line {
-		selStart = start.col + offset
+	if ok && !overlay.flashSelection && line.history == start.line {
+		selStart = start.col + contentOffset
 	}
-	if ok && line.history == end.line {
-		selEnd = end.col + offset
+	if ok && !overlay.flashSelection && line.history == end.line {
+		selEnd = end.col + contentOffset
 	}
-	if selStart < 0 {
-		selStart = 0
+	if selStart < contentOffset {
+		selStart = contentOffset
 	}
 	if selEnd < selStart {
 		selEnd = selStart
@@ -1562,6 +1699,21 @@ func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme)
 	return err
 }
 
+func drawInlineHUDLabel(stdout io.Writer, row int, text, prefix string, theme *uiTheme) error {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+		return err
+	}
+	if theme == nil || prefix == "" {
+		return drawOverlayText(stdout, text)
+	}
+	line := []rune(text)
+	if len(line) > termCols {
+		line = line[:termCols]
+	}
+	_, err := io.WriteString(stdout, prefix+string(line)+styleReset())
+	return err
+}
+
 func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, theme *uiTheme) error {
 	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 		return err
@@ -1618,20 +1770,20 @@ func drawShimmerHUDLine(stdout io.Writer, row int, text, basePrefix string, them
 }
 
 func shimmerPrefix(theme *uiTheme, index, length int) string {
-	intensity := shimmerIntensity(index, length, time.Since(shimmerStart))
+	dimness := shimmerBandDimness(index, length, time.Since(shimmerStart))
 	if theme != nil && theme.mode == colorModeTrueColor {
 		bg := theme.hudBG
-		fg := blendColors(bg, contrastColor(bg), intensity*0.9)
+		fg := blendColors(contrastColor(bg), bg, dimness*0.55)
 		return sgr("1", theme.bgCode(bg), theme.fgCode(fg))
 	}
 	attr := ""
 	switch {
-	case intensity < 0.2:
-		attr = "2"
-	case intensity < 0.6:
+	case dimness < 0.2:
+		attr = "1"
+	case dimness < 0.6:
 		attr = "22"
 	default:
-		attr = "1"
+		attr = "2"
 	}
 	if theme != nil {
 		return sgr(attr, theme.bgCode(theme.hudBG))
@@ -1655,6 +1807,18 @@ func shimmerIntensity(index, length int, elapsed time.Duration) float64 {
 		return 0.28
 	}
 	return t
+}
+
+func shimmerBandDimness(index, length int, elapsed time.Duration) float64 {
+	intensity := shimmerIntensity(index, length, elapsed)
+	dimness := (intensity - 0.28) / (1.0 - 0.28)
+	if dimness < 0 {
+		return 0
+	}
+	if dimness > 1 {
+		return 1
+	}
+	return dimness
 }
 
 func contrastColor(bg rgbColor) rgbColor {

@@ -50,6 +50,10 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 			return keyHome, nil, nil
 		case 'F':
 			return keyEnd, nil, nil
+		case 'I':
+			return keyFocusIn, nil, nil
+		case 'O':
+			return keyFocusOut, nil, nil
 		case '<':
 			event, err := readMouseEvent(reader)
 			if err != nil {

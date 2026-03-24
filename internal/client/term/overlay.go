@@ -17,18 +17,19 @@ type overlayEntry struct {
 }
 
 type overlayState struct {
-	visible     bool
-	input       []rune
-	cursor      int
-	history     []overlayEntry
-	scroll      int
-	running     bool
-	selecting   bool
-	selectBtn2  bool
-	selectStart overlaySelectionPos
-	selectEnd   overlaySelectionPos
-	recallIdx   int
-	savedInput  []rune
+	visible        bool
+	input          []rune
+	cursor         int
+	history        []overlayEntry
+	scroll         int
+	running        bool
+	flashSelection bool
+	selecting      bool
+	selectBtn2     bool
+	selectStart    overlaySelectionPos
+	selectEnd      overlaySelectionPos
+	recallIdx      int
+	savedInput     []rune
 }
 
 type overlaySelectionPos struct {

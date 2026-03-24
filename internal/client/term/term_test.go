@@ -179,6 +179,9 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	if !strings.Contains(got, "\x1b[?25h\x1b[6 q") {
 		t.Fatalf("drawBufferMode() = %q, want steady bar cursor sequence", got)
 	}
+	if !strings.Contains(got, "\x1b[?1004h") {
+		t.Fatalf("drawBufferMode() = %q, want focus reporting enabled", got)
+	}
 	if !strings.Contains(got, "\x1b[1;2H") {
 		t.Fatalf("drawBufferMode() = %q, want terminal cursor positioned at row 1 col 2", got)
 	}
@@ -217,8 +220,8 @@ func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	if err := exitBufferMode(&out); err != nil {
 		t.Fatalf("exitBufferMode() error = %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[0 q") {
-		t.Fatalf("exitBufferMode() = %q, want visible default-cursor reset", got)
+	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[0 q") || !strings.Contains(got, "\x1b[?1004l") {
+		t.Fatalf("exitBufferMode() = %q, want visible default-cursor reset and focus-report disable", got)
 	}
 }
 
@@ -307,8 +310,53 @@ func TestBuildThemeUsesOverlayAndOutputTintsInLightMode(t *testing.T) {
 	if got, want := theme.hudBG, (rgbColor{r: 244, g: 244, b: 244}); got != want {
 		t.Fatalf("hudBG = %#v, want %#v", got, want)
 	}
-	if got, want := theme.outputBG, (rgbColor{r: 229, g: 229, b: 229}); got != want {
+	if got, want := theme.outputBG, (rgbColor{r: 224, g: 224, b: 224}); got != want {
 		t.Fatalf("outputBG = %#v, want %#v", got, want)
+	}
+}
+
+func TestDrawInlineHUDLabelDoesNotPadTintAcrossLine(t *testing.T) {
+	prevCols := termCols
+	termCols = 20
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	var out bytes.Buffer
+	if err := drawInlineHUDLabel(&out, 0, "saved", theme.subtlePrefix(), theme); err != nil {
+		t.Fatalf("drawInlineHUDLabel() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.subtlePrefix()+"saved"+styleReset()) {
+		t.Fatalf("drawInlineHUDLabel() = %q, want tinted status text", got)
+	}
+	if strings.Contains(got, theme.subtlePrefix()+"saved "+styleReset()) {
+		t.Fatalf("drawInlineHUDLabel() = %q, want no full-line padded background", got)
+	}
+}
+
+func TestNormalizeStatusResultKeepsSimpleSaveInline(t *testing.T) {
+	t.Parallel()
+
+	inline, hud := normalizeStatusResult("in.txt: #11", nil)
+	if got, want := inline, "in.txt: #11"; got != want {
+		t.Fatalf("inline status = %q, want %q", got, want)
+	}
+	if len(hud) != 0 {
+		t.Fatalf("hud lines = %q, want none", hud)
+	}
+}
+
+func TestNormalizeStatusResultRoutesWarningsToHUD(t *testing.T) {
+	t.Parallel()
+
+	inline, hud := normalizeStatusResult("todo.txt: ?warning: last char not newline\n#734", nil)
+	if inline != "" {
+		t.Fatalf("inline status = %q, want empty", inline)
+	}
+	if got, want := hud, []string{"?warning: last char not newline", "todo.txt: #734"}; !equalStrings(got, want) {
+		t.Fatalf("hud lines = %q, want %q", got, want)
 	}
 }
 
@@ -336,6 +384,35 @@ func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 	}
 	if !strings.Contains(got, theme.hudPrefix()+" alpha") {
 		t.Fatalf("drawOverlayHistoryLine() = %q, want overlay tint restored for output text", got)
+	}
+}
+
+func TestDrawOverlayHistoryLineSelectionStartsAfterOutputGutter(t *testing.T) {
+	prevCols := termCols
+	termCols = 20
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.selectStart = overlaySelectionPos{line: 0, col: 0}
+	overlay.selectEnd = overlaySelectionPos{line: 0, col: 2}
+	line := overlayRenderLine{text: "█ alpha", history: 0, offset: 2}
+
+	var out bytes.Buffer
+	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayHistoryLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.outputPrefix()+" ") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want tinted gutter preserved", got)
+	}
+	if !strings.Contains(got, highlightPrefix(theme, false)+"al") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want selection highlight on content only", got)
+	}
+	if strings.Contains(got, highlightPrefix(theme, false)+" ") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want no selection highlight on gutter", got)
 	}
 }
 
@@ -441,6 +518,14 @@ func TestShimmerIntensityKeepsCommandVisibleOffBand(t *testing.T) {
 
 	if got := shimmerIntensity(0, 8, 1500*time.Millisecond); got < 0.28 {
 		t.Fatalf("shimmerIntensity() = %f, want >= 0.28", got)
+	}
+}
+
+func TestShimmerBandDimnessIsZeroOffBand(t *testing.T) {
+	t.Parallel()
+
+	if got := shimmerBandDimness(0, 8, 1500*time.Millisecond); got != 0 {
+		t.Fatalf("shimmerBandDimness() = %f, want 0 off band", got)
 	}
 }
 

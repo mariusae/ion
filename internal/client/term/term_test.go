@@ -273,8 +273,8 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[?25h\x1b[6 q") {
-		t.Fatalf("drawBufferMode() = %q, want steady bar cursor sequence", got)
+	if !strings.Contains(got, "\x1b[?25l\x1b[6 q") {
+		t.Fatalf("drawBufferMode() = %q, want redraw to hide cursor before painting with steady bar shape", got)
 	}
 	if !strings.Contains(got, "\x1b[?1004h") {
 		t.Fatalf("drawBufferMode() = %q, want focus reporting enabled", got)

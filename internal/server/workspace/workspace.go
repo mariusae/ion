@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -57,6 +59,9 @@ func (w *Workspace) Bootstrap(files []string, stdout, stderr io.Writer) error {
 			s := text.NewStringFromUTF8(name)
 			if err := f.Name.DupString(&s); err != nil {
 				return err
+			}
+			if _, err := os.Stat(name); err != nil && errors.Is(err, os.ErrNotExist) {
+				f.Unread = false
 			}
 			w.session.AddFile(f)
 		}

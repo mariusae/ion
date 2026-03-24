@@ -9,15 +9,43 @@ import (
 	"strings"
 	"testing"
 
+	clienttarget "ion/internal/client/target"
 	"ion/internal/proto/wire"
 )
 
 type fakeBModeClient struct {
-	menuFiles  []wire.MenuFile
-	openCalls  [][]string
-	focusCalls []int
-	addresses  []string
-	nextID     int
+	bootstrapCalls [][]string
+	menuFiles      []wire.MenuFile
+	openCalls      [][]string
+	focusCalls     []int
+	addresses      []string
+	nextID         int
+}
+
+func (c *fakeBModeClient) Bootstrap(files []string) error {
+	c.bootstrapCalls = append(c.bootstrapCalls, append([]string(nil), files...))
+	if len(files) == 0 {
+		if len(c.menuFiles) == 0 {
+			c.nextID++
+			c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Current: true})
+		}
+		return nil
+	}
+	for _, name := range files {
+		seen := false
+		for _, file := range c.menuFiles {
+			if file.Name == name {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			continue
+		}
+		c.nextID++
+		c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Name: name})
+	}
+	return nil
 }
 
 func (c *fakeBModeClient) MenuFiles() ([]wire.MenuFile, error) {
@@ -146,8 +174,14 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 	if err := runBModeWith(config{bmode: true, files: []string{"a.txt", "b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := client.openCalls, [][]string{{"a.txt", "b.txt"}}; !reflect.DeepEqual(got, want) {
+	if got, want := client.bootstrapCalls, [][]string{{"a.txt", "b.txt"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.openCalls, [][]string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.focusCalls, []int{2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
 	}
 	if len(client.addresses) != 0 {
 		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
@@ -192,8 +226,14 @@ func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
 	if err := runBModeWith(config{bmode: true, files: []string{"README.md:12:4"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := client.openCalls, [][]string{{"README.md"}}; !reflect.DeepEqual(got, want) {
+	if got, want := client.bootstrapCalls, [][]string{{"README.md"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.openCalls, [][]string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
 	}
 	if got, want := client.addresses, []string{"12+#3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
@@ -238,6 +278,9 @@ func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.
 
 	if err := runBModeWith(config{bmode: true, files: []string{"todo.txt:/unicode"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if len(client.bootstrapCalls) != 0 {
+		t.Fatalf("Bootstrap() calls = %#v, want none", client.bootstrapCalls)
 	}
 	if len(client.openCalls) != 0 {
 		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
@@ -296,6 +339,79 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 	}
 	if !foundSplit {
 		t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
+	}
+}
+
+func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	client := &fakeBModeClient{
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "todo.txt", Current: true},
+		},
+		nextID: 7,
+	}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		tempDir: func() string { return tempDir },
+		dial:    func(string) (bModeClient, error) { return client, nil },
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		notify:  func(paths bModePaths) error { return nil },
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true, files: []string{"missing.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if got, want := client.bootstrapCalls, [][]string{{"missing.txt"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.focusCalls, []int{8}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	}
+	if len(client.openCalls) != 0 {
+		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
+	}
+}
+
+func TestBootstrapTargetSessionKeepsMissingTargetsFocusable(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeBModeClient{}
+	targets := clienttarget.ParseAll([]string{"missing.txt"})
+
+	if err := bootstrapTargetSession(client, targets); err != nil {
+		t.Fatalf("bootstrapTargetSession() error = %v", err)
+	}
+	if got, want := client.bootstrapCalls, [][]string{{"missing.txt"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+	if _, err := clienttarget.Open(client, []string{"missing.txt"}); err != nil {
+		t.Fatalf("clienttarget.Open() error = %v", err)
+	}
+	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	}
+	if len(client.openCalls) != 0 {
+		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
 	}
 }
 

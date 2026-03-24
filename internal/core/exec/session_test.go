@@ -311,6 +311,39 @@ func TestOpenFilesPathsAtomicRestoresPreviousCurrentOnFailure(t *testing.T) {
 	}
 }
 
+func TestRemoveCurrentFileSelectsRemainingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	one := filepath.Join(dir, "one.txt")
+	two := filepath.Join(dir, "two.txt")
+	if err := os.WriteFile(one, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write one.txt: %v", err)
+	}
+	if err := os.WriteFile(two, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("write two.txt: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	if err := sess.OpenFilesPaths([]string{one, two}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+	if got, want := trimToken(sess.Current.Name.UTF8()), two; got != want {
+		t.Fatalf("current name before close = %q, want %q", got, want)
+	}
+
+	if err := sess.removeFile(sess.Current); err != nil {
+		t.Fatalf("removeFile() error = %v", err)
+	}
+	if sess.Current == nil {
+		t.Fatal("current file = nil, want remaining file selected")
+	}
+	if got, want := trimToken(sess.Current.Name.UTF8()), one; got != want {
+		t.Fatalf("current name after close = %q, want %q", got, want)
+	}
+}
+
 func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	t.Parallel()
 

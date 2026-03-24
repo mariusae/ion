@@ -1635,11 +1635,11 @@ func (s *Session) removeFile(target *text.File) error {
 		if f != target {
 			continue
 		}
-		if s.Current == target {
-			s.Current = nil
-		}
 		copy(s.Files[i:], s.Files[i+1:])
 		s.Files = s.Files[:len(s.Files)-1]
+		if s.Current == target {
+			s.Current = s.firstFile()
+		}
 		delete(s.closeOK, target)
 		return target.Close()
 	}

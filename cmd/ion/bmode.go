@@ -36,6 +36,7 @@ type bModePaths struct {
 }
 
 type bModeClient interface {
+	Bootstrap(files []string) error
 	MenuFiles() ([]wire.MenuFile, error)
 	FocusFile(id int) (wire.BufferView, error)
 	OpenFiles(files []string) (wire.BufferView, error)
@@ -45,6 +46,10 @@ type bModeClient interface {
 
 type wireBModeClient struct {
 	client *clientsession.Client
+}
+
+func (c *wireBModeClient) Bootstrap(files []string) error {
+	return c.client.Bootstrap(files)
 }
 
 func (c *wireBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
@@ -115,6 +120,10 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	if err == nil {
 		defer client.Close()
 		if len(cfg.files) > 0 {
+			targets := clienttarget.ParseAll(cfg.files)
+			if err := bootstrapMissingTargets(client, targets); err != nil {
+				return err
+			}
 			if _, err := clienttarget.Open(client, cfg.files); err != nil {
 				return err
 			}
@@ -180,7 +189,7 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err := bootstrapTargetSession(client, targets); err != nil {
 			return err
 		}
-		if _, err := clienttarget.ApplyLastAddress(client, targets, wire.BufferView{}); err != nil {
+		if _, err := clienttarget.Open(client, cfg.files); err != nil {
 			return err
 		}
 		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
@@ -355,26 +364,60 @@ func runTermWithTargets(args []string, stdin io.Reader, stdout, stderr io.Writer
 		if err := bootstrapTargetSession(client, targets); err != nil {
 			return err
 		}
-		if _, err := clienttarget.ApplyLastAddress(client, targets, wire.BufferView{}); err != nil {
+		if _, err := clienttarget.Open(client, args); err != nil {
 			return err
 		}
 		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
 	})
 }
 
-func bootstrapTargetSession(client *clientsession.Client, targets []clienttarget.Target) error {
-	paths := clienttarget.Paths(targets)
+func bootstrapTargetSession(client bModeClient, targets []clienttarget.Target) error {
+	paths := uniqueTargetPaths(targets)
 	if len(paths) == 0 {
 		return client.Bootstrap(nil)
 	}
-	if err := client.Bootstrap(paths[:1]); err != nil {
+	return client.Bootstrap(paths)
+}
+
+func bootstrapMissingTargets(client bModeClient, targets []clienttarget.Target) error {
+	menu, err := client.MenuFiles()
+	if err != nil {
 		return err
 	}
-	if len(paths) == 1 {
+	loaded := make(map[string]struct{}, len(menu))
+	for _, file := range menu {
+		if file.Name == "" {
+			continue
+		}
+		loaded[file.Name] = struct{}{}
+	}
+	var missing []string
+	for _, path := range uniqueTargetPaths(targets) {
+		if _, ok := loaded[path]; ok {
+			continue
+		}
+		missing = append(missing, path)
+	}
+	if len(missing) == 0 {
 		return nil
 	}
-	_, err := client.OpenFiles(paths[1:])
-	return err
+	return client.Bootstrap(missing)
+}
+
+func uniqueTargetPaths(targets []clienttarget.Target) []string {
+	paths := make([]string, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if target.Path == "" {
+			continue
+		}
+		if _, ok := seen[target.Path]; ok {
+			continue
+		}
+		seen[target.Path] = struct{}{}
+		paths = append(paths, target.Path)
+	}
+	return paths
 }
 
 func shellQuote(s string) string {

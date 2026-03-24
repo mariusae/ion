@@ -1613,7 +1613,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(state.name)); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25h\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
+	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25l\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
 		return err
 	}
 	viewRows := bufferViewRows(overlay)

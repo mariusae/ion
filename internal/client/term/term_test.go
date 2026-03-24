@@ -1457,6 +1457,54 @@ func TestApplyBufferKeyPrintableAdvancesAcrossRepeatedTyping(t *testing.T) {
 	}
 }
 
+func TestApplyBufferKeyNewlineCopiesLeadingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "  alpha\n",
+			DotStart: 4,
+			DotEnd:   4,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKeyWithOptions(svc, state, '\n', Options{AutoIndent: true})
+	if err != nil {
+		t.Fatalf("applyBufferKeyWithOptions() error = %v", err)
+	}
+	if got, want := string(next.text), "  al\n  pha\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 7; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyNewlineWithoutAutoIndent(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "  alpha\n",
+			DotStart: 4,
+			DotEnd:   4,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKeyWithOptions(svc, state, '\n', Options{AutoIndent: false})
+	if err != nil {
+		t.Fatalf("applyBufferKeyWithOptions() error = %v", err)
+	}
+	if got, want := string(next.text), "  al\npha\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 5; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
 func TestApplyBufferKeyCtrlKDeletesToLineEnd(t *testing.T) {
 	t.Parallel()
 

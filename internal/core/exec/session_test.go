@@ -627,6 +627,66 @@ func TestWriteWarnsWhenDiskFileChanged(t *testing.T) {
 	}
 }
 
+func TestSaveCurrentTrimsTrailingWhitespaceWhenAutoIndentEnabled(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha  \n\tbeta \n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	if _, err := sess.SaveCurrent(); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "alpha\n\tbeta\n"; string(got) != want {
+		t.Fatalf("disk contents = %q, want %q", string(got), want)
+	}
+	current, err := sess.CurrentText()
+	if err != nil {
+		t.Fatalf("CurrentText() error = %v", err)
+	}
+	if want := "alpha\n\tbeta\n"; current != want {
+		t.Fatalf("CurrentText() = %q, want %q", current, want)
+	}
+}
+
+func TestSaveCurrentPreservesTrailingWhitespaceWhenAutoIndentDisabled(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha  \n\tbeta \n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.AutoIndent = false
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	if _, err := sess.SaveCurrent(); err != nil {
+		t.Fatalf("SaveCurrent() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "alpha  \n\tbeta \n"; string(got) != want {
+		t.Fatalf("disk contents = %q, want %q", string(got), want)
+	}
+}
+
 func TestReplaceCurrentDeletesRange(t *testing.T) {
 	t.Parallel()
 

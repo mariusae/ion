@@ -80,7 +80,7 @@ type bModeRuntime struct {
 	dial       func(path string) (bModeClient, error)
 	tmux       func(args ...string) (string, error)
 	notify     func(paths bModePaths) error
-	runTerm    func(args []string, stdin io.Reader, stdout, stderr io.Writer) error
+	runTerm    func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 func defaultBModeRuntime() bModeRuntime {
@@ -112,7 +112,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		return err
 	}
 	if !ok {
-		return rt.runTerm(cfg.files, stdin, stdout, stderr)
+		return rt.runTerm(cfg, stdin, stdout, stderr)
 	}
 	paths := tmuxWindowPaths(rt.tempDir(), ctx.Key())
 
@@ -145,7 +145,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	if err != nil {
 		return err
 	}
-	cmd := buildBServeCommand(exe, cfg.files)
+	cmd := buildBServeCommand(exe, cfg)
 	paneID, err := rt.tmux("split-window", "-c", wd, "-P", "-F", "#{pane_id}", cmd)
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	defer cleanupBModePaths(paths)
 
 	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.New()
+	ws := workspace.NewWithAutoIndent(cfg.autoindent)
 	server := transport.New(ws)
 	return withServerSocket(server, paths.socketPath, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
 		targets := clienttarget.ParseAll(cfg.files)
@@ -192,7 +192,7 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		if _, err := clienttarget.Open(client, cfg.files); err != nil {
 			return err
 		}
-		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
+		return term.RunBootstrapped(stdin, stdout, stderr, client, capture, term.Options{AutoIndent: cfg.autoindent})
 	})
 }
 
@@ -348,26 +348,30 @@ func notifyResidentProcess(paths bModePaths) error {
 	return nil
 }
 
-func buildBServeCommand(exe string, files []string) string {
-	args := []string{shellQuote(exe), "-b-serve", "--"}
-	for _, file := range files {
+func buildBServeCommand(exe string, cfg config) string {
+	args := []string{shellQuote(exe)}
+	if !cfg.autoindent {
+		args = append(args, "-A")
+	}
+	args = append(args, "-b-serve", "--")
+	for _, file := range cfg.files {
 		args = append(args, shellQuote(file))
 	}
 	return "exec " + strings.Join(args, " ")
 }
 
-func runTermWithTargets(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	targets := clienttarget.ParseAll(args)
+func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	targets := clienttarget.ParseAll(cfg.files)
 	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.New()
+	ws := workspace.NewWithAutoIndent(cfg.autoindent)
 	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
 		if err := bootstrapTargetSession(client, targets); err != nil {
 			return err
 		}
-		if _, err := clienttarget.Open(client, args); err != nil {
+		if _, err := clienttarget.Open(client, cfg.files); err != nil {
 			return err
 		}
-		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
+		return term.RunBootstrapped(stdin, stdout, stderr, client, capture, term.Options{AutoIndent: cfg.autoindent})
 	})
 }
 

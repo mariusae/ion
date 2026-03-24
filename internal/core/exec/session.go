@@ -27,6 +27,7 @@ type Session struct {
 	Seq           uint32
 	Out           io.Writer
 	Diag          io.Writer
+	AutoIndent    bool
 	QuitOK        bool
 	LastShellCmd  string
 	ShellInput    ShellInputMode
@@ -70,6 +71,7 @@ func NewSession(out io.Writer) *Session {
 	return &Session{
 		Out:        out,
 		Diag:       io.Discard,
+		AutoIndent: true,
 		ShellInput: ShellInputEmpty,
 		closeOK:    make(map[*text.File]bool),
 		fileIDs:    make(map[*text.File]int),
@@ -1136,15 +1138,25 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 		}
 	}
 
+	fullWrite := a.R.P1 == 0 && a.R.P2 == text.Posn(f.B.Len())
 	var b strings.Builder
 	if _, err := f.WriteRangeTo(&b, a.R.P1, a.R.P2); err != nil {
 		return err
 	}
-	if err := os.WriteFile(name, []byte(b.String()), 0o666); err != nil {
+	written := b.String()
+	if s.AutoIndent && fullWrite {
+		trimmed := trimTrailingEOLWhitespace(written)
+		if trimmed != written {
+			if err := s.applyFullBufferReplacement(f, trimmed); err != nil {
+				return err
+			}
+			written = trimmed
+		}
+	}
+	if err := os.WriteFile(name, []byte(written), 0o666); err != nil {
 		return createFileError(name, err)
 	}
 
-	fullWrite := a.R.P1 == 0 && a.R.P2 == text.Posn(f.B.Len())
 	if fullWrite && (currentName == "" || name == currentName) {
 		f.MarkClean()
 	}
@@ -1170,22 +1182,91 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	}
 
 	missingFinalNewline := false
-	if a.R.P2 > a.R.P1 {
-		r, err := f.ReadRune(a.R.P2 - 1)
-		if err != nil {
-			return err
-		}
-		missingFinalNewline = r != '\n'
+	if len(written) > 0 {
+		missingFinalNewline = written[len(written)-1] != '\n'
 	}
 	if missingFinalNewline {
 		if _, err := fmt.Fprintln(s.Diag, "?warning: last char not newline"); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(b.String())); err != nil {
+	if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(written)); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Session) applyFullBufferReplacement(f *text.File, replacement string) (err error) {
+	if f == nil {
+		return nil
+	}
+	current, readErr := s.fileText(f)
+	if readErr != nil {
+		return readErr
+	}
+	if current == replacement {
+		return nil
+	}
+	startedFrame := s.beginFrame()
+	defer func() {
+		if startedFrame {
+			ferr := s.finishFrame(err == nil)
+			if err == nil && ferr != nil {
+				err = ferr
+			}
+		}
+	}()
+	full := text.Posn(f.B.Len())
+	return s.mutate(f, func(seq uint32) error {
+		if replacement == "" {
+			if full > 0 {
+				if err := f.LogDelete(0, full, seq); err != nil {
+					return err
+				}
+			}
+			f.NDot = text.Range{}
+			return nil
+		}
+		txt := text.NewStringFromUTF8(replacement)
+		return s.replaceLogged(f, &txt, 0, full, seq)
+	})
+}
+
+func (s *Session) fileText(f *text.File) (string, error) {
+	if f == nil {
+		return "", nil
+	}
+	var b strings.Builder
+	if _, err := f.WriteTo(&b); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func trimTrailingEOLWhitespace(src string) string {
+	if src == "" {
+		return ""
+	}
+	var b strings.Builder
+	start := 0
+	for start < len(src) {
+		end := strings.IndexByte(src[start:], '\n')
+		hasNewline := end >= 0
+		if hasNewline {
+			end += start
+		} else {
+			end = len(src)
+		}
+		line := strings.TrimRight(src[start:end], " \t")
+		b.WriteString(line)
+		if hasNewline {
+			b.WriteByte('\n')
+			start = end + 1
+			continue
+		}
+		start = end
+	}
+	return b.String()
 }
 
 func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {

@@ -17,11 +17,12 @@ import (
 )
 
 type config struct {
-	download bool
-	bmode    bool
-	bserve   bool
-	rage     bool
-	files    []string
+	download   bool
+	bmode      bool
+	bserve     bool
+	rage       bool
+	autoindent bool
+	files      []string
 }
 
 func main() {
@@ -75,17 +76,20 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 }
 
 func parseArgs(args []string) (config, error) {
-	var cfg config
+	cfg := config{autoindent: true}
+	var disableAutoIndent bool
 
 	fs := flag.NewFlagSet("ion", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
+	fs.BoolVar(&disableAutoIndent, "A", false, "turn off autoindent mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
 	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	cfg.autoindent = !disableAutoIndent
 	if cfg.download && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -d cannot be combined")
 	}
@@ -109,16 +113,16 @@ func parseArgs(args []string) (config, error) {
 }
 
 func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	return withLocalServer(workspace.New(), stdout, stderr, func(client *clientsession.Client) error {
+	return withLocalServer(workspace.NewWithAutoIndent(cfg.autoindent), stdout, stderr, func(client *clientsession.Client) error {
 		return download.Run(cfg.files, stdin, stderr, client)
 	})
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.New()
+	ws := workspace.NewWithAutoIndent(cfg.autoindent)
 	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
-		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
+		return term.Run(cfg.files, stdin, stdout, stderr, client, capture, term.Options{AutoIndent: cfg.autoindent})
 	})
 }
 

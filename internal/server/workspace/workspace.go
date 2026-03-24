@@ -22,14 +22,25 @@ type Workspace struct {
 
 // New constructs a workspace backed by a core execution session.
 func New() *Workspace {
-	return NewWithShellInput(exec.ShellInputEmpty)
+	return NewWithOptions(exec.ShellInputEmpty, true)
+}
+
+// NewWithAutoIndent constructs a workspace with one autoindent policy.
+func NewWithAutoIndent(autoIndent bool) *Workspace {
+	return NewWithOptions(exec.ShellInputEmpty, autoIndent)
 }
 
 // NewWithShellInput constructs a workspace with one shell-stdin policy.
 func NewWithShellInput(mode exec.ShellInputMode) *Workspace {
+	return NewWithOptions(mode, true)
+}
+
+// NewWithOptions constructs a workspace with one shell-stdin and autoindent policy.
+func NewWithOptions(mode exec.ShellInputMode, autoIndent bool) *Workspace {
 	sess := exec.NewSession(io.Discard)
 	sess.Diag = io.Discard
 	sess.ShellInput = mode
+	sess.AutoIndent = autoIndent
 	return &Workspace{session: sess}
 }
 

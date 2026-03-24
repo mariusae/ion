@@ -74,6 +74,10 @@ type diagnosticReporter interface {
 	Diagnostic() string
 }
 
+type Options struct {
+	AutoIndent bool
+}
+
 type overlayOutputQueue struct {
 	mu     sync.Mutex
 	lines  []string
@@ -111,7 +115,7 @@ func (q *overlayOutputQueue) popAll() []string {
 //
 // For now this shares the command-mode loop with the download client while the
 // full terminal UI from term.c is ported behind this package boundary.
-func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
+func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture, options Options) error {
 	inFile, ok := stdin.(*os.File)
 	if !ok || !isTTY(inFile) {
 		return fmt.Errorf("terminal mode requires a tty; use ion -d for command mode")
@@ -119,19 +123,24 @@ func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.Ter
 	if err := svc.Bootstrap(files); err != nil {
 		return err
 	}
-	return runTTY(inFile, stdout, stderr, svc, capture)
+	return runTTY(inFile, stdout, stderr, svc, capture, options)
 }
 
 // RunBootstrapped starts the terminal UI after the caller has already loaded startup files.
-func RunBootstrapped(stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
+func RunBootstrapped(stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture, options Options) error {
 	inFile, ok := stdin.(*os.File)
 	if !ok || !isTTY(inFile) {
 		return fmt.Errorf("terminal mode requires a tty; use ion -d for command mode")
 	}
-	return runTTY(inFile, stdout, stderr, svc, capture)
+	return runTTY(inFile, stdout, stderr, svc, capture, options)
 }
 
-func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
+func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture, options Options) error {
+	if !options.AutoIndent {
+		options.AutoIndent = false
+	} else {
+		options.AutoIndent = true
+	}
 	state, err := enterCBreakMode(stdin)
 	if err != nil {
 		return err
@@ -430,6 +439,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		status, err := svc.Save()
 		if capture != nil {
 			capture.Stop()
+		}
+		if err == nil {
+			if view, viewErr := svc.CurrentView(); viewErr == nil {
+				applyBufferView(view)
+			} else {
+				err = viewErr
+			}
 		}
 		return status, lines, err
 	}
@@ -882,7 +898,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			return false, redraw()
 		}
-		buffer, err = applyBufferKey(svc, buffer, key)
+		buffer, err = applyBufferKeyWithOptions(svc, buffer, key, options)
 		if err != nil {
 			return false, err
 		}
@@ -986,7 +1002,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if r == '\r' {
 			r = '\n'
 		}
-		next, err := applyBufferKey(svc, buffer, int(r))
+		next, err := applyBufferKeyWithOptions(svc, buffer, int(r), options)
 		if err != nil {
 			return false, err
 		}
@@ -1492,6 +1508,10 @@ func bufferStateFromView(view wire.BufferView, previous *bufferState, origins ma
 }
 
 func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferState, error) {
+	return applyBufferKeyWithOptions(svc, state, key, Options{AutoIndent: true})
+}
+
+func applyBufferKeyWithOptions(svc wire.TermService, state *bufferState, key int, options Options) (*bufferState, error) {
 	if state == nil {
 		return state, nil
 	}
@@ -1548,8 +1568,14 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 			return replaceBufferRange(svc, state, state.cursor, state.cursor+1, "")
 		}
 		return state, nil
-	case '\t', '\n':
+	case '\t':
 		return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
+	case '\n':
+		replacement := "\n"
+		if options.AutoIndent {
+			replacement = autoIndentNewline(state)
+		}
+		return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, replacement)
 	default:
 		if key >= 32 && key < keyEsc {
 			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, string(rune(key)))
@@ -1557,6 +1583,23 @@ func applyBufferKey(svc wire.TermService, state *bufferState, key int) (*bufferS
 		handleBufferKey(state, key)
 		return syncBufferState(svc, state)
 	}
+}
+
+func autoIndentNewline(state *bufferState) string {
+	if state == nil {
+		return "\n"
+	}
+	start := lineStart(state.text, state.cursor)
+	end := start
+	for end < len(state.text) {
+		switch state.text[end] {
+		case ' ', '\t':
+			end++
+		default:
+			return "\n" + string(state.text[start:end])
+		}
+	}
+	return "\n" + string(state.text[start:end])
 }
 
 func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, error) {

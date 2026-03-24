@@ -113,13 +113,16 @@ func TestRunBModeFallsBackToTerminalOutsideTmux(t *testing.T) {
 	rt := bModeRuntime{
 		getenv:  func(string) string { return "" },
 		tempDir: t.TempDir,
-		runTerm: func(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+		runTerm: func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+			if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("runTerm files = %#v, want %#v", got, want)
+			}
 			called = true
 			return nil
 		},
 	}
 
-	if err := runBModeWith(config{bmode: true}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, files: []string{"alpha"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	if !called {
@@ -321,7 +324,7 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 		runTerm: runTermWithTargets,
 	}
 
-	if err := runBModeWith(config{bmode: true, files: []string{"a.txt", "b b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, autoindent: true, files: []string{"a.txt", "b b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	foundSplit := false
@@ -340,6 +343,46 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 	if !foundSplit {
 		t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 	}
+}
+
+func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		tempDir:    t.TempDir,
+		dial: func(string) (bModeClient, error) {
+			return nil, errors.New("dial unix: connect: no such file or directory")
+		},
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		notify:  func(paths bModePaths) error { return nil },
+		runTerm: runTermWithTargets,
+	}
+
+	if err := runBModeWith(config{bmode: true, autoindent: false, files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	for _, call := range tmux.calls {
+		if len(call) >= 7 && call[0] == "split-window" {
+			if !strings.Contains(call[6], "exec '/tmp/bin/ion' -A -b-serve -- 'a.txt'") {
+				t.Fatalf("split-window command = %q, want -A propagated to b-serve", call[6])
+			}
+			return
+		}
+	}
+	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 }
 
 func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
@@ -424,6 +467,21 @@ func TestParseArgsRecognizesBMode(t *testing.T) {
 	}
 	if !cfg.bmode || cfg.download || cfg.bserve {
 		t.Fatalf("config = %#v, want bmode only", cfg)
+	}
+	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsDisablesAutoIndentWithAFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-A", "alpha"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.autoindent {
+		t.Fatalf("config.autoindent = true, want false")
 	}
 	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("files = %#v, want %#v", got, want)

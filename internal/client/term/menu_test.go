@@ -1,6 +1,7 @@
 package term
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -46,6 +47,49 @@ func TestFormatMenuBorderUsesContiguousUnicodeBorders(t *testing.T) {
 	}
 	if got, want := formatMenuBorder("", 6, '├', '┤', '─'), "├──────┤"; got != want {
 		t.Fatalf("separator border = %q, want %q", got, want)
+	}
+}
+
+func TestDrawMenuUsesUniformTopRowTint(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	menu := &menuState{
+		visible: true,
+		x:       0,
+		y:       0,
+		width:   10,
+		height:  3,
+		title:   " title ",
+		items:   []menuItem{{label: " item", kind: menuCut}},
+	}
+
+	var out bytes.Buffer
+	if err := drawMenu(&out, menu, theme); err != nil {
+		t.Fatalf("drawMenu() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, theme.titlePrefix()) {
+		t.Fatalf("drawMenu() = %q, want no distinct title-row tint", got)
+	}
+	if !strings.Contains(got, theme.subtlePrefix()+"╭") {
+		t.Fatalf("drawMenu() = %q, want top border rendered with subtle tint", got)
+	}
+}
+
+func TestWriteMenuItemBoldsCurrentFile(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	item := menuItem{label: " '. in.txt", kind: menuFile, current: true}
+
+	var out bytes.Buffer
+	if err := writeMenuItem(&out, 0, 0, 16, item, false, theme); err != nil {
+		t.Fatalf("writeMenuItem() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, sgr("1", theme.bgCode(theme.subtleBG))+"│ '. in.txt") {
+		t.Fatalf("writeMenuItem() = %q, want current file row bold on subtle background", got)
 	}
 }
 

@@ -179,7 +179,7 @@ func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 	}
 	inner := menu.width - 2
 	row := menu.y
-	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), theme.titlePrefix(), theme); err != nil {
+	if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), theme.subtlePrefix(), theme); err != nil {
 		return err
 	}
 	row++
@@ -225,16 +225,33 @@ func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover b
 		content += strings.Repeat(" ", pad)
 	}
 	if theme == nil {
+		if item.current && hover {
+			content = "\x1b[1;7m" + content + "\x1b[27;22m"
+			return writeMenuLine(stdout, row, col, "│"+content+"│", "", nil)
+		}
 		if hover {
 			content = "\x1b[7m" + content + "\x1b[27m"
+		} else if item.current {
+			content = "\x1b[1m" + content + "\x1b[22m"
 		}
 		return writeMenuLine(stdout, row, col, "│"+content+"│", "", nil)
 	}
-	prefix := theme.subtlePrefix()
-	if hover {
-		prefix = theme.hoverPrefix()
-	}
+	prefix := menuItemPrefix(theme, item.current, hover)
 	return writeMenuLine(stdout, row, col, "│"+content+"│", prefix, theme)
+}
+
+func menuItemPrefix(theme *uiTheme, current, hover bool) string {
+	if theme == nil {
+		return ""
+	}
+	switch {
+	case hover:
+		return sgr("1", theme.bgCode(theme.cursorBG))
+	case current:
+		return sgr("1", theme.bgCode(theme.subtleBG))
+	default:
+		return theme.subtlePrefix()
+	}
 }
 
 func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill rune) string {

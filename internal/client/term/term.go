@@ -187,7 +187,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	defer exitBufferMode(stdout)
 
 	applyBufferView := func(view wire.BufferView) {
+		previous := buffer
 		buffer = bufferStateFromView(view, buffer, scrollOrigins)
+		buffer = revealOverlaySelection(previous, buffer, overlay)
 	}
 
 	executePending := func(final bool) (bool, error) {
@@ -1583,7 +1585,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		}
 		if p <= len(state.text) {
 			rowEnd := visualRowEnd(state.text, p)
-			if err := drawBufferLine(stdout, state, p, rowEnd, theme); err != nil {
+			if err := drawBufferLine(stdout, state, p, rowEnd, overlay, theme); err != nil {
 				return err
 			}
 			next := nextVisualRowStart(state.text, p)
@@ -1793,22 +1795,59 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 	return nil
 }
 
-func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme *uiTheme) error {
-	selected := false
+type bufferHighlightKind int
+
+const (
+	bufferHighlightNone bufferHighlightKind = iota
+	bufferHighlightSelection
+	bufferHighlightCollapsed
+)
+
+func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, overlay *overlayState, theme *uiTheme) error {
+	current := bufferHighlightNone
 	col := 0
-	for p := start; p < end && col < termCols; p++ {
-		wantSelected := !state.flashSelection && p >= state.dotStart && p < state.dotEnd
-		if wantSelected != selected {
-			selected = wantSelected
-			if selected {
-				if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
-					return err
-				}
-			} else {
+	collapsedPos, collapsedCol, collapsedVisible := collapsedOverlaySelection(state, overlay, start)
+	collapsedPainted := false
+	switchHighlight := func(next bufferHighlightKind) error {
+		if next == current {
+			return nil
+		}
+		switch next {
+		case bufferHighlightNone:
+			if current != bufferHighlightNone {
 				if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
 					return err
 				}
 			}
+		case bufferHighlightSelection:
+			if _, err := io.WriteString(stdout, highlightPrefix(theme, false)); err != nil {
+				return err
+			}
+		case bufferHighlightCollapsed:
+			if _, err := io.WriteString(stdout, highlightPrefix(theme, true)); err != nil {
+				return err
+			}
+		}
+		current = next
+		return nil
+	}
+	for p := start; p < end && col < termCols; p++ {
+		next := bufferHighlightNone
+		if collapsedVisible {
+			if collapsedCol >= termCols {
+				if p == end-1 {
+					next = bufferHighlightCollapsed
+					collapsedPainted = true
+				}
+			} else if p == collapsedPos {
+				next = bufferHighlightCollapsed
+				collapsedPainted = true
+			}
+		} else if !state.flashSelection && p >= state.dotStart && p < state.dotEnd {
+			next = bufferHighlightSelection
+		}
+		if err := switchHighlight(next); err != nil {
+			return err
 		}
 		nextCol, err := writeBufferRune(stdout, state.text[p], col, termCols)
 		if err != nil {
@@ -1816,7 +1855,17 @@ func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, theme 
 		}
 		col = nextCol
 	}
-	if selected {
+	if collapsedVisible && !collapsedPainted && collapsedCol == col && col < termCols {
+		if err := switchHighlight(bufferHighlightCollapsed); err != nil {
+			return err
+		}
+		nextCol, err := writeBufferRune(stdout, ' ', col, termCols)
+		if err != nil {
+			return err
+		}
+		col = nextCol
+	}
+	if current != bufferHighlightNone {
 		if _, err := io.WriteString(stdout, highlightReset(theme)); err != nil {
 			return err
 		}
@@ -2208,6 +2257,35 @@ func highlightReset(theme *uiTheme) string {
 		return "\x1b[27m"
 	}
 	return styleReset()
+}
+
+func collapsedOverlaySelection(state *bufferState, overlay *overlayState, rowStart int) (int, int, bool) {
+	if state == nil || overlay == nil || !overlay.visible {
+		return 0, 0, false
+	}
+	if state.dotStart != state.dotEnd {
+		return 0, 0, false
+	}
+	pos := clampIndex(state.dotStart, len(state.text))
+	if visualRowStartForPos(state.text, pos) != rowStart {
+		return 0, 0, false
+	}
+	return pos, visualColumnForPos(state.text, rowStart, pos), true
+}
+
+func revealOverlaySelection(previous, next *bufferState, overlay *overlayState) *bufferState {
+	if next == nil || overlay == nil || !overlay.visible {
+		return next
+	}
+	if previous == nil || previous.fileID != next.fileID {
+		return next
+	}
+	if previous.dotStart == next.dotStart && previous.dotEnd == next.dotEnd {
+		return next
+	}
+	rows := bufferViewRows(overlay)
+	next.origin = adjustOriginForCursor(next.text, next.origin, next.dotStart, rows)
+	return next
 }
 
 func handleBufferKey(state *bufferState, key int) {

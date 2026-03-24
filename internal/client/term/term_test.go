@@ -222,7 +222,7 @@ func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	state.flashSelection = true
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 5, nil); err != nil {
+	if err := drawBufferLine(&out, state, 0, 5, nil, nil); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	if strings.Contains(out.String(), "\x1b[7m") {
@@ -246,7 +246,7 @@ func TestDrawBufferLineHighlightsExpandedTabSpaces(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 1, nil); err != nil {
+	if err := drawBufferLine(&out, state, 0, 1, nil, nil); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b[7m        \x1b[27m") {
@@ -768,6 +768,96 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 	}
 }
 
+func TestDrawBufferLineShowsDarkerCollapsedSelectionInOverlay(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want darker collapsed-selection cursor tint", got)
+	}
+	if strings.Contains(got, theme.selectionPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want collapsed selection to avoid normal selection tint", got)
+	}
+}
+
+func TestDrawBufferLineKeepsOneRuneSelectionDistinctFromCollapsedSelection(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   2,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.selectionPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want one-rune selection to keep normal selection tint", got)
+	}
+	if strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want one-rune selection to avoid collapsed-selection tint", got)
+	}
+}
+
+func TestDrawBufferLineShowsCollapsedSelectionAtEndOfLine(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 5,
+		DotEnd:   5,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "alpha"+theme.cursorPrefix()+" ") {
+		t.Fatalf("drawBufferLine() = %q, want tinted block at end-of-line cursor position", got)
+	}
+}
+
 func TestDrawShimmerHUDLineRendersTextWithoutSpinnerGlyphs(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20
@@ -902,6 +992,74 @@ func TestDrawBufferModeWrapsLongLines(t *testing.T) {
 	if !strings.Contains(got, "\x1b[2;1H\x1b[2Kdef") {
 		t.Fatalf("drawBufferMode() = %q, want second wrapped row", got)
 	}
+}
+
+func TestRevealOverlaySelectionAdjustsOriginWhenDotMovesInSameFile(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addCommand("/unicode")
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	previous.origin = visualRowStartForPos(previous.text, 0)
+	next := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 24,
+		DotEnd:   29,
+	})
+	next.origin = previous.origin
+
+	revealed := revealOverlaySelection(previous, next, overlay)
+	if !bufferPosVisible(revealed, overlay, revealed.dotStart) {
+		t.Fatalf("dotStart %d not visible after reveal; origin=%d", revealed.dotStart, revealed.origin)
+	}
+}
+
+func TestRevealOverlaySelectionPreservesOriginAcrossFileSwitches(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	previous := &bufferState{fileID: 7, origin: 12, dotStart: 0, dotEnd: 0}
+	next := &bufferState{fileID: 8, origin: 12, dotStart: 24, dotEnd: 29}
+
+	revealed := revealOverlaySelection(previous, next, overlay)
+	if got, want := revealed.origin, 12; got != want {
+		t.Fatalf("origin = %d, want preserved origin %d on file switch", got, want)
+	}
+}
+
+func bufferPosVisible(state *bufferState, overlay *overlayState, pos int) bool {
+	if state == nil {
+		return false
+	}
+	pos = clampIndex(pos, len(state.text))
+	target := visualRowStartForPos(state.text, pos)
+	row := visualRowStartForPos(state.text, state.origin)
+	limit := bufferViewRows(overlay)
+	for i := 0; i < limit; i++ {
+		if row == target {
+			return true
+		}
+		next := nextVisualRowStart(state.text, row)
+		if next == row {
+			break
+		}
+		row = next
+	}
+	return false
 }
 
 func TestMoveLineDownUsesWrappedRows(t *testing.T) {

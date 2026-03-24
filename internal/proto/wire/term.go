@@ -25,6 +25,7 @@ type TermService interface {
 	OpenFiles(files []string) (BufferView, error)
 	MenuFiles() ([]MenuFile, error)
 	FocusFile(id int) (BufferView, error)
+	SetAddress(expr string) (BufferView, error)
 	SetDot(start, end int) (BufferView, error)
 	Replace(start, end int, text string) (BufferView, error)
 	Undo() (BufferView, error)

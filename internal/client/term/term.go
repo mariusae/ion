@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	clienttarget "ion/internal/client/target"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
@@ -116,6 +117,15 @@ func Run(files []string, stdin io.Reader, stdout, stderr io.Writer, svc wire.Ter
 	}
 	if err := svc.Bootstrap(files); err != nil {
 		return err
+	}
+	return runTTY(inFile, stdout, stderr, svc, capture)
+}
+
+// RunBootstrapped starts the terminal UI after the caller has already loaded startup files.
+func RunBootstrapped(stdin io.Reader, stdout, stderr io.Writer, svc wire.TermService, capture *OutputCapture) error {
+	inFile, ok := stdin.(*os.File)
+	if !ok || !isTTY(inFile) {
+		return fmt.Errorf("terminal mode requires a tty; use ion -d for command mode")
 	}
 	return runTTY(inFile, stdout, stderr, svc, capture)
 }
@@ -567,13 +577,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if token == "" {
 				return false, nil
 			}
-			done, _, err := executeDirect("B "+token+"\n", false)
+			_, err := clienttarget.Open(svc, []string{token})
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
-			}
-			if done {
-				return true, nil
 			}
 			if err := refreshBuffer(); err != nil {
 				return false, err
@@ -675,8 +682,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							token = trimOverlaySelection(overlay.selectedText())
 						}
 						if token != "" {
-							done, _, err := executeDirect("B "+token+"\n", false)
-							if err == nil && !done {
+							if _, err := clienttarget.Open(svc, []string{token}); err == nil {
 								_ = refreshBuffer()
 							}
 						}

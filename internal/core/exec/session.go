@@ -1369,19 +1369,10 @@ func (s *Session) OpenFilesPaths(files []string) error {
 }
 
 func (s *Session) openFileFields(fields []string) error {
-	lineNo, colNo := 0, 0
-	if len(fields) > 0 {
-		fields[len(fields)-1], lineNo, colNo = splitFileLineSuffix(fields[len(fields)-1])
-	}
 	if len(fields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
 			if shouldOpenNamelessForCurrent(current) {
-				if lineNo > 0 || colNo > 0 {
-					return s.openNamelessFileFromPath(fields[0], lineNo, colNo)
-				}
-				if lineNo == 0 && colNo == 0 {
-					return s.openNamelessFile()
-				}
+				return s.openNamelessFile()
 			}
 		}
 	}
@@ -1420,11 +1411,6 @@ func (s *Session) openFileFields(fields []string) error {
 			return err
 		}
 	}
-	if lineNo > 0 {
-		if err := setFilePosition(current, lineNo, colNo); err != nil {
-			return err
-		}
-	}
 	if currentExisted && !currentWasUnread {
 		return s.printFileStatusName(current.Mod, true, "")
 	}
@@ -1440,53 +1426,6 @@ func (s *Session) openNamelessFile() error {
 	s.AddFile(f)
 	s.Current = f
 	return s.printFileStatus(f, true)
-}
-
-func (s *Session) openNamelessFileFromPath(name string, lineNo, colNo int) error {
-	d, err := text.NewDisk()
-	if err != nil {
-		return err
-	}
-	f := text.NewFile(d)
-	data, err := os.ReadFile(name)
-	if err != nil {
-		_ = f.Close()
-		return openFileError(name, err)
-	}
-	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := setFilePosition(f, lineNo, colNo); err != nil {
-		_ = f.Close()
-		return err
-	}
-	s.AddFile(f)
-	s.Current = f
-	return s.printFileStatus(f, true)
-}
-
-func setFilePosition(f *text.File, lineNo, colNo int) error {
-	if f == nil || lineNo <= 0 {
-		return nil
-	}
-	a, err := ionaddr.LineAddr(text.Posn(lineNo), ionaddr.Address{
-		F: f,
-		R: text.Range{},
-	}, 0)
-	if err != nil {
-		return err
-	}
-	if colNo > 0 {
-		a.R.P2 = a.R.P1
-		a, err = ionaddr.CharAddr(text.Posn(colNo-1), a, 1)
-		if err != nil {
-			return err
-		}
-	}
-	f.Dot = a.R
-	f.NDot = a.R
-	return nil
 }
 
 func shouldOpenNamelessForCurrent(f *text.File) bool {
@@ -1759,6 +1698,29 @@ func (s *Session) SetCurrentDot(start, end text.Posn) error {
 	return nil
 }
 
+// SetCurrentAddress resolves one sam address against the current file and makes it dot.
+func (s *Session) SetCurrentAddress(expr string) error {
+	parser := ioncmd.NewParser(expr + "\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		return err
+	}
+	if cmd == nil || cmd.Cmdc != '\n' || cmd.Addr == nil {
+		return fmt.Errorf("address")
+	}
+	f, a, err := s.resolveCommandAddress(cmd)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf("no current file")
+	}
+	s.Current = f
+	f.Dot = a.R
+	f.NDot = a.R
+	return nil
+}
+
 // ReplaceCurrent replaces the current file range with UTF-8 text.
 func (s *Session) ReplaceCurrent(start, end text.Posn, replacement string) (err error) {
 	if s.Current == nil {
@@ -1981,43 +1943,6 @@ func textStringFromBytes(data []byte) (*text.String, text.Posn, error) {
 		return nil, 0, err
 	}
 	return &s, count, nil
-}
-
-func splitFileLineSuffix(name string) (base string, lineNo, colNo int) {
-	base = name
-	last := strings.LastIndexByte(name, ':')
-	if last <= 0 || last+1 >= len(name) {
-		return base, 0, 0
-	}
-	n, ok := parseDecimal(name[last+1:])
-	if !ok {
-		return base, 0, 0
-	}
-	lineNo = n
-	base = name[:last]
-	prev := strings.LastIndexByte(base, ':')
-	if prev > 0 {
-		if c, ok := parseDecimal(base[prev+1:]); ok {
-			colNo = lineNo
-			lineNo = c
-			base = base[:prev]
-		}
-	}
-	return base, lineNo, colNo
-}
-
-func parseDecimal(s string) (int, bool) {
-	if s == "" {
-		return 0, false
-	}
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, true
 }
 
 func containsNullByte(data []byte) bool {

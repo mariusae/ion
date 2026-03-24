@@ -8,15 +8,23 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"ion/internal/proto/wire"
 )
 
 type fakeBModeClient struct {
 	openCalls [][]string
+	addresses []string
 }
 
-func (c *fakeBModeClient) OpenFiles(files []string) error {
+func (c *fakeBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 	c.openCalls = append(c.openCalls, append([]string(nil), files...))
-	return nil
+	return wire.BufferView{}, nil
+}
+
+func (c *fakeBModeClient) SetAddress(expr string) (wire.BufferView, error) {
+	c.addresses = append(c.addresses, expr)
+	return wire.BufferView{}, nil
 }
 
 func (c *fakeBModeClient) Close() error { return nil }
@@ -53,7 +61,7 @@ func TestRunBModeFallsBackToTerminalOutsideTmux(t *testing.T) {
 	rt := bModeRuntime{
 		getenv:  func(string) string { return "" },
 		tempDir: t.TempDir,
-		runTerm: func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+		runTerm: func(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			called = true
 			return nil
 		},
@@ -101,7 +109,7 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 			}
 			return nil
 		},
-		runTerm: runTerm,
+		runTerm: runTermWithTargets,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
@@ -117,9 +125,54 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 	if got, want := client.openCalls, [][]string{{"a.txt", "b.txt"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
 	}
+	if len(client.addresses) != 0 {
+		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
+	}
 	lastTwo := tmux.calls[len(tmux.calls)-2:]
 	if !reflect.DeepEqual(lastTwo, [][]string{{"select-window", "-t", "@2"}, {"select-pane", "-t", "%9"}}) {
 		t.Fatalf("focus calls = %#v, want select-window/select-pane", lastTwo)
+	}
+}
+
+func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	client := &fakeBModeClient{}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		tempDir: func() string { return tempDir },
+		dial:    func(string) (bModeClient, error) { return client, nil },
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		notify:  func(paths bModePaths) error { return nil },
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true, files: []string{"README.md:12:4"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if got, want := client.openCalls, [][]string{{"README.md"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.addresses, []string{"12+#3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
 	}
 }
 
@@ -148,7 +201,7 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 			return tmux.run(args...)
 		},
 		notify:  func(paths bModePaths) error { return nil },
-		runTerm: runTerm,
+		runTerm: runTermWithTargets,
 	}
 
 	if err := runBModeWith(config{bmode: true, files: []string{"a.txt", "b b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {

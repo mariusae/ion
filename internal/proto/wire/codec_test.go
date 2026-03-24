@@ -78,6 +78,23 @@ func TestOpenFilesRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAddressRequestRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := &AddressRequest{Expr: "/^func"}
+	data, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+	var got AddressRequest
+	if err := got.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, *want) {
+		t.Fatalf("round trip = %#v, want %#v", got, *want)
+	}
+}
+
 func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 	t.Parallel()
 

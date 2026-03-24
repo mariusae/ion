@@ -96,6 +96,11 @@ func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
 	return s.ws.FocusFile(id)
 }
 
+// SetAddress resolves one sam address against the current file.
+func (s *TermSession) SetAddress(expr string) (wire.BufferView, error) {
+	return s.ws.SetAddress(expr)
+}
+
 // SetDot updates the current selection.
 func (s *TermSession) SetDot(start, end int) (wire.BufferView, error) {
 	return s.ws.SetDot(start, end)

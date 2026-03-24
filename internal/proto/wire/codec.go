@@ -30,6 +30,7 @@ const (
 	KindMenuFilesRequest
 	KindMenuFilesResponse
 	KindFocusRequest
+	KindAddressRequest
 	KindSetDotRequest
 	KindReplaceRequest
 	KindUndoRequest
@@ -170,6 +171,9 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindFocusRequest:
 		var msg FocusRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindAddressRequest:
+		var msg AddressRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindSetDotRequest:
 		var msg SetDotRequest

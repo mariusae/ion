@@ -12,7 +12,9 @@ import (
 	"syscall"
 
 	clientsession "ion/internal/client/session"
+	clienttarget "ion/internal/client/target"
 	"ion/internal/client/term"
+	"ion/internal/proto/wire"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
@@ -34,7 +36,8 @@ type bModePaths struct {
 }
 
 type bModeClient interface {
-	OpenFiles(files []string) error
+	OpenFiles(files []string) (wire.BufferView, error)
+	SetAddress(expr string) (wire.BufferView, error)
 	Close() error
 }
 
@@ -42,9 +45,12 @@ type wireBModeClient struct {
 	client *clientsession.Client
 }
 
-func (c *wireBModeClient) OpenFiles(files []string) error {
-	_, err := c.client.OpenFiles(files)
-	return err
+func (c *wireBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
+	return c.client.OpenFiles(files)
+}
+
+func (c *wireBModeClient) SetAddress(expr string) (wire.BufferView, error) {
+	return c.client.SetAddress(expr)
 }
 
 func (c *wireBModeClient) Close() error {
@@ -59,7 +65,7 @@ type bModeRuntime struct {
 	dial       func(path string) (bModeClient, error)
 	tmux       func(args ...string) (string, error)
 	notify     func(paths bModePaths) error
-	runTerm    func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
+	runTerm    func(args []string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 func defaultBModeRuntime() bModeRuntime {
@@ -77,7 +83,7 @@ func defaultBModeRuntime() bModeRuntime {
 		},
 		tmux:    runTmuxCommand,
 		notify:  notifyResidentProcess,
-		runTerm: runTerm,
+		runTerm: runTermWithTargets,
 	}
 }
 
@@ -91,7 +97,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		return err
 	}
 	if !ok {
-		return rt.runTerm(cfg, stdin, stdout, stderr)
+		return rt.runTerm(cfg.files, stdin, stdout, stderr)
 	}
 	paths := tmuxWindowPaths(rt.tempDir(), ctx.Key())
 
@@ -99,7 +105,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	if err == nil {
 		defer client.Close()
 		if len(cfg.files) > 0 {
-			if err := client.OpenFiles(cfg.files); err != nil {
+			if _, err := clienttarget.Open(client, cfg.files); err != nil {
 				return err
 			}
 			if rt.notify != nil {
@@ -160,7 +166,14 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	ws := workspace.New()
 	server := transport.New(ws)
 	return withServerSocket(server, paths.socketPath, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
-		return term.Run(cfg.files, stdin, stdout, stderr, client, capture)
+		targets := clienttarget.ParseAll(cfg.files)
+		if err := bootstrapTargetSession(client, targets); err != nil {
+			return err
+		}
+		if _, err := clienttarget.ApplyLastAddress(client, targets, wire.BufferView{}); err != nil {
+			return err
+		}
+		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
 	})
 }
 
@@ -322,6 +335,36 @@ func buildBServeCommand(exe string, files []string) string {
 		args = append(args, shellQuote(file))
 	}
 	return "exec " + strings.Join(args, " ")
+}
+
+func runTermWithTargets(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	targets := clienttarget.ParseAll(args)
+	capture := term.NewOutputCapture(stdout, stderr)
+	ws := workspace.New()
+	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
+		if err := bootstrapTargetSession(client, targets); err != nil {
+			return err
+		}
+		if _, err := clienttarget.ApplyLastAddress(client, targets, wire.BufferView{}); err != nil {
+			return err
+		}
+		return term.RunBootstrapped(stdin, stdout, stderr, client, capture)
+	})
+}
+
+func bootstrapTargetSession(client *clientsession.Client, targets []clienttarget.Target) error {
+	paths := clienttarget.Paths(targets)
+	if len(paths) == 0 {
+		return client.Bootstrap(nil)
+	}
+	if err := client.Bootstrap(paths[:1]); err != nil {
+		return err
+	}
+	if len(paths) == 1 {
+		return nil
+	}
+	_, err := client.OpenFiles(paths[1:])
+	return err
 }
 
 func shellQuote(s string) string {

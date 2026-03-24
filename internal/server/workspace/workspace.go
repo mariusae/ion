@@ -131,6 +131,17 @@ func (w *Workspace) FocusFile(id int) (wire.BufferView, error) {
 	return w.currentView()
 }
 
+// SetAddress resolves one sam address against the current file.
+func (w *Workspace) SetAddress(expr string) (wire.BufferView, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.session.SetCurrentAddress(expr); err != nil {
+		return wire.BufferView{}, err
+	}
+	return w.currentView()
+}
+
 // SetDot updates the current selection for the terminal client.
 func (w *Workspace) SetDot(start, end int) (wire.BufferView, error) {
 	w.mu.Lock()

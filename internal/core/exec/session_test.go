@@ -213,6 +213,63 @@ func TestQuotedFileAddressLoadsUnreadFileAndReportsStatus(t *testing.T) {
 	}
 }
 
+func TestSetCurrentAddressMovesDotWithoutPrinting(t *testing.T) {
+	t.Parallel()
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	if _, _, err := f.LoadInitial(bytes.NewReader([]byte("one\nfunc here\ntwo\n"))); err != nil {
+		t.Fatalf("load initial: %v", err)
+	}
+
+	var out bytes.Buffer
+	sess := NewSession(&out)
+	sess.Diag = io.Discard
+	sess.AddFile(f)
+	sess.Current = f
+
+	if err := sess.SetCurrentAddress("/func"); err != nil {
+		t.Fatalf("SetCurrentAddress() error = %v", err)
+	}
+	if got, want := out.String(), ""; got != want {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+	if got, want := f.Dot, (text.Range{P1: 4, P2: 8}); got != want {
+		t.Fatalf("dot = %#v, want %#v", got, want)
+	}
+}
+
+func TestOpenFilesPathsTreatsColonSuffixAsLiteralPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "notes:2")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write literal colon file: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+	if got, want := trimToken(sess.Current.Name.UTF8()), path; got != want {
+		t.Fatalf("current name = %q, want %q", got, want)
+	}
+	if got, want := sess.Current.Dot, (text.Range{}); got != want {
+		t.Fatalf("dot = %#v, want zero value", got)
+	}
+}
+
 func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	t.Parallel()
 

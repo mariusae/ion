@@ -386,6 +386,34 @@ func (m *FocusRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// AddressRequest resolves one sam address against the current file.
+type AddressRequest struct {
+	Expr string
+}
+
+func (m *AddressRequest) Kind() Kind { return KindAddressRequest }
+
+func (m *AddressRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeString(&b, m.Expr); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *AddressRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	expr, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("address request has trailing data")
+	}
+	m.Expr = expr
+	return nil
+}
+
 // SetDotRequest updates one client's current selection range.
 type SetDotRequest struct {
 	Start int

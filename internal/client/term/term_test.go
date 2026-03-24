@@ -58,6 +58,11 @@ func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
 	return f.view, nil
 }
 
+func (f *fakeTermService) SetAddress(expr string) (wire.BufferView, error) {
+	_ = expr
+	return f.view, nil
+}
+
 func (f *fakeTermService) SetDot(start, end int) (wire.BufferView, error) {
 	f.setDotCalls++
 	f.lastDotStart = start

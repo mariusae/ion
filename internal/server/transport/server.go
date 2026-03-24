@@ -110,6 +110,12 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 			return writeError(conn, frame.RequestID, session.ID(), err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+	case *wire.AddressRequest:
+		view, err := session.SetAddress(msg.Expr)
+		if err != nil {
+			return writeError(conn, frame.RequestID, session.ID(), err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.SetDotRequest:
 		view, err := session.SetDot(msg.Start, msg.End)
 		if err != nil {

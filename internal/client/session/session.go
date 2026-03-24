@@ -130,6 +130,19 @@ func (c *Client) FocusFile(id int) (wire.BufferView, error) {
 	return resp.View, nil
 }
 
+// SetAddress resolves one sam address against the current file.
+func (c *Client) SetAddress(expr string) (wire.BufferView, error) {
+	_, msg, err := c.roundTrip(&wire.AddressRequest{Expr: expr})
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	resp, ok := msg.(*wire.BufferViewMessage)
+	if !ok {
+		return wire.BufferView{}, fmt.Errorf("address response type %T, want *wire.BufferViewMessage", msg)
+	}
+	return resp.View, nil
+}
+
 // SetDot updates the current selection range.
 func (c *Client) SetDot(start, end int) (wire.BufferView, error) {
 	_, msg, err := c.roundTrip(&wire.SetDotRequest{Start: start, End: end})

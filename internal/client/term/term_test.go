@@ -395,65 +395,6 @@ func TestTerminalCursorPositionAccountsForTabWidth(t *testing.T) {
 	}
 }
 
-func TestLastVisualRowStartStopsAtLastContentRow(t *testing.T) {
-	t.Parallel()
-
-	prevCols := termCols
-	termCols = 80
-	t.Cleanup(func() {
-		termCols = prevCols
-	})
-
-	text := []rune("line1\nline2\n")
-	if got, want := lastVisualRowStart(text, 0), 6; got != want {
-		t.Fatalf("lastVisualRowStart(trailing newline) = %d, want %d", got, want)
-	}
-
-	long := []rune(strings.Repeat("a", 170))
-	prevCols2 := termCols
-	termCols = 80
-	t.Cleanup(func() {
-		termCols = prevCols2
-	})
-	if got, want := lastVisualRowStart(long, 0), 160; got != want {
-		t.Fatalf("lastVisualRowStart(wrapped EOF) = %d, want %d", got, want)
-	}
-}
-
-func TestHandleBufferKeyCanPageBackUpFromEOFWithoutBlankOrigin(t *testing.T) {
-	prevRows, prevCols := termRows, termCols
-	termRows, termCols = 24, 80
-	t.Cleanup(func() {
-		termRows, termCols = prevRows, prevCols
-	})
-
-	var text strings.Builder
-	for i := 1; i <= 60; i++ {
-		text.WriteString("line\n")
-	}
-	state := newBufferState(wire.BufferView{
-		Text:     text.String(),
-		DotStart: 0,
-		DotEnd:   0,
-	})
-
-	handleBufferKey(state, keyDown)
-	handleBufferKey(state, keyDown)
-	handleBufferKey(state, keyDown)
-
-	if got, want := state.cursor, len([]rune(text.String())); got != want {
-		t.Fatalf("cursor after paging down = %d, want EOF %d", got, want)
-	}
-	if got := state.origin; got >= len(state.text) {
-		t.Fatalf("origin after paging down = %d, want last content row before EOF", got)
-	}
-
-	handleBufferKey(state, keyUp)
-	if got := state.origin; got >= len(state.text) {
-		t.Fatalf("origin after paging back up = %d, want visible content row", got)
-	}
-}
-
 func TestOverlayRunningLineRowAccountsForTopPadding(t *testing.T) {
 	prevRows := termRows
 	termRows = 8

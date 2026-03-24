@@ -1,6 +1,10 @@
 package term
 
-import "bufio"
+import (
+	"bufio"
+	"os"
+	"time"
+)
 
 type mouseEvent struct {
 	button  int
@@ -21,7 +25,15 @@ func bufferViewRows(overlay *overlayState) int {
 }
 
 func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
-	if reader.Buffered() == 0 {
+	return readBufferEscapeTTY(reader, nil)
+}
+
+func readBufferEscapeTTY(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, error) {
+	ok, err := ensureReaderBuffered(reader, stdin, 25*time.Millisecond)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !ok {
 		return keyEsc, nil, nil
 	}
 	b, err := reader.ReadByte()
@@ -30,7 +42,11 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 	}
 	switch b {
 	case '[':
-		if reader.Buffered() == 0 {
+		ok, err := ensureReaderBuffered(reader, stdin, 25*time.Millisecond)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !ok {
 			return keyEsc, nil, nil
 		}
 		b, err = reader.ReadByte()
@@ -63,7 +79,7 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 		default:
 			if b >= '0' && b <= '9' {
 				num := int(b - '0')
-				for reader.Buffered() > 0 {
+				for {
 					next, err := reader.ReadByte()
 					if err != nil {
 						return 0, nil, err
@@ -90,7 +106,11 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 			return keyEsc, nil, nil
 		}
 	case 'O':
-		if reader.Buffered() == 0 {
+		ok, err := ensureReaderBuffered(reader, stdin, 25*time.Millisecond)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !ok {
 			return keyEsc, nil, nil
 		}
 		b, err = reader.ReadByte()
@@ -120,6 +140,23 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 func readBufferKey(reader *bufio.Reader) (int, error) {
 	key, _, err := readBufferEscape(reader)
 	return key, err
+}
+
+func ensureReaderBuffered(reader *bufio.Reader, stdin *os.File, timeout time.Duration) (bool, error) {
+	if reader.Buffered() > 0 {
+		return true, nil
+	}
+	if stdin == nil {
+		return false, nil
+	}
+	ready, err := waitForTTYByte(stdin, timeout)
+	if err != nil || !ready {
+		return ready, err
+	}
+	if _, err := reader.Peek(1); err != nil {
+		return false, err
+	}
+	return reader.Buffered() > 0, nil
 }
 
 func readMouseEvent(reader *bufio.Reader) (mouseEvent, error) {

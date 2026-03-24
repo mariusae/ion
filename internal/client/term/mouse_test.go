@@ -2,8 +2,10 @@ package term
 
 import (
 	"bufio"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/proto/wire"
 )
@@ -67,6 +69,36 @@ func TestReadBufferEscapeFocusEvents(t *testing.T) {
 	}
 	if mouse != nil {
 		t.Fatalf("focus-out mouse = %#v, want nil", mouse)
+	}
+}
+
+func TestReadBufferEscapeTTYWaitsForFragmentedArrowSequence(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte{'['})
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte{'A'})
+	}()
+
+	key, mouse, err := readBufferEscapeTTY(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscapeTTY() error = %v", err)
+	}
+	if key != keyUp {
+		t.Fatalf("readBufferEscapeTTY() key = %d, want keyUp", key)
+	}
+	if mouse != nil {
+		t.Fatalf("readBufferEscapeTTY() mouse = %#v, want nil", mouse)
 	}
 }
 

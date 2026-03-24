@@ -2219,10 +2219,10 @@ func handleBufferKey(state *bufferState, key int) {
 		}
 	case keyUp, keyPgUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyDown, keyPgDn:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 16:
 		state.cursor = moveLineUp(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -2247,7 +2247,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case 22:
 		state.cursor = movePageDown(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyAltLeft:
 		state.cursor = prevWordStart(state.text, state.cursor)
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
@@ -2256,7 +2256,7 @@ func handleBufferKey(state *bufferState, key int) {
 		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	case keyAltPageUp:
 		state.cursor = movePageUp(state.text, state.cursor, rows)
-		state.origin = visualRowStartForPos(state.text, state.cursor)
+		state.origin = adjustOriginForCursor(state.text, state.origin, state.cursor, rows)
 	}
 	updateSelection(state)
 }
@@ -2289,18 +2289,27 @@ func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 	if cursorRow < origin {
 		return cursorRow
 	}
-	p := origin
-	for i := 0; i < rows; i++ {
-		if cursorRow == p {
-			return origin
-		}
+	visualRows := 0
+	for p := origin; p < cursorRow; {
 		next := nextVisualRowStart(text, p)
 		if next == p {
 			break
 		}
+		visualRows++
 		p = next
 	}
-	return cursorRow
+	if visualRows < rows {
+		return origin
+	}
+	centered := cursorRow
+	for i := 0; i < rows/2 && centered > 0; i++ {
+		prev := prevVisualRowStart(text, centered)
+		if prev == centered {
+			break
+		}
+		centered = prev
+	}
+	return centered
 }
 
 func moveLineUp(text []rune, pos int) int {
@@ -2384,10 +2393,11 @@ func prevVisualRowStart(text []rune, start int) int {
 
 func lastVisualRowStart(text []rune, start int) int {
 	start = clampIndex(start, len(text))
+	limit := nextLineStart(text, start)
 	last := start
 	for {
 		next := nextVisualRowStart(text, last)
-		if next == last || next >= len(text) {
+		if next == last || next >= limit {
 			return last
 		}
 		last = next

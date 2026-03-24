@@ -3,6 +3,7 @@ package term
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -475,6 +476,32 @@ func TestHandleBufferKeyCanPageBackUpFromEOFWithoutBlankOrigin(t *testing.T) {
 	handleBufferKey(state, keyUp)
 	if got := state.origin; got >= len(state.text) {
 		t.Fatalf("origin after paging back up = %d, want visible content row", got)
+	}
+}
+
+func TestAdjustOriginForCursorCentersPageNavigationLikeTermC(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 24, 80
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	var text strings.Builder
+	for i := 1; i <= 60; i++ {
+		text.WriteString(fmt.Sprintf("line%03d\n", i))
+	}
+	state := newBufferState(wire.BufferView{
+		Text:     text.String(),
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	if got, want := movePageDown(state.text, state.cursor, termRows), 192; got != want {
+		t.Fatalf("movePageDown() = %d, want %d", got, want)
+	}
+	handleBufferKey(state, keyDown)
+	if got, want := state.origin, 96; got != want {
+		t.Fatalf("after one page down cursor=%d origin=%d, want origin %d", state.cursor, got, want)
 	}
 }
 

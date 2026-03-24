@@ -9,6 +9,8 @@ import (
 	"unsafe"
 )
 
+const posixVDisable = 0xff
+
 type ttyState struct {
 	fd   int
 	orig syscall.Termios
@@ -51,10 +53,13 @@ func configureCBreakTermios(termios *syscall.Termios) {
 	if termios == nil {
 		return
 	}
-	// Disable canonical input, echo, CR translation, and software flow control
-	// so editor control keys like Ctrl-Q are delivered to the client.
-	termios.Iflag &^= syscall.ICRNL | syscall.IXON | syscall.IXOFF
+	// Disable canonical input, echo, and CR translation. Leave IXON/IXOFF
+	// alone, but disable VSTART/VSTOP so Ctrl-Q/Ctrl-S reach the editor
+	// without disturbing tmux/terminal mouse behavior.
+	termios.Iflag &^= syscall.ICRNL
 	termios.Lflag &^= syscall.ICANON | syscall.ECHO
+	termios.Cc[syscall.VSTART] = posixVDisable
+	termios.Cc[syscall.VSTOP] = posixVDisable
 	termios.Cc[syscall.VMIN] = 1
 	termios.Cc[syscall.VTIME] = 0
 }

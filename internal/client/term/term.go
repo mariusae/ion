@@ -60,6 +60,7 @@ type bufferState struct {
 	fileID         int
 	name           string
 	text           []rune
+	layout         *bufferLayout
 	cursor         int
 	origin         int
 	dotStart       int
@@ -1484,11 +1485,19 @@ func discardFailedCommand(pending []rune) []rune {
 }
 
 func newBufferState(view wire.BufferView) *bufferState {
-	text := []rune(view.Text)
+	return newBufferStateWithPrevious(view, nil)
+}
+
+func newBufferStateWithPrevious(view wire.BufferView, previous *bufferState) *bufferState {
+	reusePrevious := previous
+	if previous != nil && previous.fileID != 0 && previous.fileID != view.ID {
+		reusePrevious = nil
+	}
+	text, reused := bufferTextForView(view.Text, reusePrevious)
 	cursor := clampIndex(view.DotStart, len(text))
 	dotEnd := clampIndex(view.DotEnd, len(text))
 	origin := visualRowStartForPos(text, cursor)
-	return &bufferState{
+	state := &bufferState{
 		fileID:   view.ID,
 		name:     view.Name,
 		text:     text,
@@ -1497,6 +1506,10 @@ func newBufferState(view wire.BufferView) *bufferState {
 		dotStart: clampIndex(view.DotStart, len(text)),
 		dotEnd:   dotEnd,
 	}
+	if reused && reusePrevious != nil {
+		state.layout = reusePrevious.layout
+	}
+	return state
 }
 
 func rememberBufferOrigin(origins map[int]int, state *bufferState) {
@@ -1508,7 +1521,7 @@ func rememberBufferOrigin(origins map[int]int, state *bufferState) {
 
 func bufferStateFromView(view wire.BufferView, previous *bufferState, origins map[int]int) *bufferState {
 	rememberBufferOrigin(origins, previous)
-	next := newBufferState(view)
+	next := newBufferStateWithPrevious(view, previous)
 	if origin, ok := origins[next.fileID]; ok {
 		next.origin = restoreBufferOrigin(next, origin)
 	}
@@ -1618,7 +1631,7 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	if err != nil {
 		return nil, err
 	}
-	next := newBufferState(view)
+	next := newBufferStateWithPrevious(view, state)
 	next.cursor = clampIndex(state.cursor, len(next.text))
 	next.origin = adjustOriginForCursor(next.text, state.origin, next.cursor, termRows)
 	next.dotStart = clampIndex(view.DotStart, len(next.text))
@@ -1644,7 +1657,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	if err != nil {
 		return nil, err
 	}
-	next := newBufferState(view)
+	next := newBufferStateWithPrevious(view, state)
 	cursor := clampIndex(start+len([]rune(repl)), len(next.text))
 	next.cursor = cursor
 	next.dotStart = cursor
@@ -2221,14 +2234,14 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 	if state == nil {
 		return 0, 0
 	}
-	row := 0
-	p := visualRowStartForPos(state.text, state.origin)
+	layout := state.visibleLayout(overlay)
+	if layout == nil || len(layout.rows) == 0 {
+		return 0, 0
+	}
 	cursorRow := visualCursorRowStartForPos(state.text, state.cursor)
-	viewRows := bufferViewRows(overlay)
-	for row < viewRows {
-		next := nextVisualRowStart(state.text, p)
-		if p == cursorRow {
-			col := visualColumnForPos(state.text, p, state.cursor)
+	for row, layoutRow := range layout.rows {
+		if layoutRow.start == cursorRow {
+			col := layoutRow.columnForPos(state.cursor)
 			if col >= bufferWrapCols() {
 				col = bufferWrapCols() - 1
 			}
@@ -2237,14 +2250,8 @@ func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int
 			}
 			return row, col
 		}
-		if next != p {
-			p = next
-			row++
-			continue
-		}
-		break
 	}
-	return max(viewRows-1, 0), 0
+	return max(len(layout.rows)-1, 0), 0
 }
 
 func overlayRunningLineRow(overlay *overlayState, lines []overlayRenderLine) int {

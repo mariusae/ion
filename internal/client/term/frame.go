@@ -196,20 +196,11 @@ func buildBufferFrame(state *bufferState, overlay *overlayState, menu *menuState
 	frame := newTerminalFrame(termRows, termCols)
 	frame.title = state.name
 
-	viewRows := bufferViewRows(overlay)
-	p := visualRowStartForPos(state.text, state.origin)
+	layout := state.visibleLayout(overlay)
 	inactive := bufferInactive(overlay, menu, focused)
-	for row := 0; row < viewRows; row++ {
-		if p <= len(state.text) {
-			rowEnd := visualRowEnd(state.text, p)
-			renderBufferFrameRow(frame.rows[row].cells, state, p, rowEnd, inactive, theme)
-			next := nextVisualRowStart(state.text, p)
-			if next != p {
-				p = next
-				continue
-			}
-			p = len(state.text) + 1
-		}
+	for row := 0; layout != nil && row < len(layout.rows) && row < len(frame.rows); row++ {
+		layoutRow := layout.rows[row]
+		renderBufferFrameRow(frame.rows[row].cells, state, layoutRow.start, layoutRow.end, inactive, theme)
 	}
 
 	if overlay != nil && overlay.visible {

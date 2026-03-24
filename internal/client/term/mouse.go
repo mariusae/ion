@@ -293,13 +293,12 @@ func screenToPos(state *bufferState, overlay *overlayState, row, col int) (int, 
 	if col < 0 {
 		col = 0
 	}
-	p := visualRowStartForPos(state.text, state.origin)
-	for i := 0; i < row; i++ {
-		next := nextVisualRowStart(state.text, p)
-		if next == p {
-			break
-		}
-		p = next
+	layout := state.visibleLayout(overlay)
+	if layout == nil || len(layout.rows) == 0 {
+		return 0, true
 	}
-	return visualRowPosAtColumn(state.text, p, col), true
+	if row >= len(layout.rows) {
+		row = len(layout.rows) - 1
+	}
+	return layout.rows[row].posAtColumn(col), true
 }

@@ -222,7 +222,7 @@ func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	state.flashSelection = true
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 5, nil, nil); err != nil {
+	if err := drawBufferLine(&out, state, 0, 5, false, nil); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	if strings.Contains(out.String(), "\x1b[7m") {
@@ -246,7 +246,7 @@ func TestDrawBufferLineHighlightsExpandedTabSpaces(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 1, nil, nil); err != nil {
+	if err := drawBufferLine(&out, state, 0, 1, false, nil); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b[7m        \x1b[27m") {
@@ -268,7 +268,7 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -301,7 +301,7 @@ func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\x07") {
@@ -329,7 +329,7 @@ func TestPositionTerminalCursorHidesCursorWhileOverlayRuns(t *testing.T) {
 	overlay.running = true
 
 	var out bytes.Buffer
-	if err := positionTerminalCursor(&out, nil, overlay); err != nil {
+	if err := positionTerminalCursor(&out, nil, overlay, newMenuState(), true); err != nil {
 		t.Fatalf("positionTerminalCursor() error = %v", err)
 	}
 	if got, want := out.String(), "\x1b[?25l"; got != want {
@@ -353,11 +353,38 @@ func TestPositionTerminalCursorShowsCursorWhenNotRunning(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := positionTerminalCursor(&out, state, nil); err != nil {
+	if err := positionTerminalCursor(&out, state, nil, newMenuState(), true); err != nil {
 		t.Fatalf("positionTerminalCursor() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b[?25h\x1b[1;2H") {
 		t.Fatalf("positionTerminalCursor() = %q, want visible cursor positioning sequence", got)
+	}
+}
+
+func TestPositionTerminalCursorHidesCursorWhenMenuVisible(t *testing.T) {
+	t.Parallel()
+
+	menu := newMenuState()
+	menu.visible = true
+
+	var out bytes.Buffer
+	if err := positionTerminalCursor(&out, newBufferState(wire.BufferView{}), nil, menu, true); err != nil {
+		t.Fatalf("positionTerminalCursor() error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25l"; got != want {
+		t.Fatalf("positionTerminalCursor() = %q, want %q", got, want)
+	}
+}
+
+func TestPositionTerminalCursorHidesCursorWhenUnfocused(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := positionTerminalCursor(&out, newBufferState(wire.BufferView{}), nil, newMenuState(), false); err != nil {
+		t.Fatalf("positionTerminalCursor() error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25l"; got != want {
+		t.Fatalf("positionTerminalCursor() = %q, want %q", got, want)
 	}
 }
 
@@ -756,7 +783,7 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, state, overlay, newMenuState(), theme); err != nil {
+	if err := drawBufferMode(&out, state, overlay, newMenuState(), theme, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -765,6 +792,66 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 	}
 	if !strings.Contains(got, "\x1b[6;1H\x1b[2K"+theme.hudPrefix()) {
 		t.Fatalf("drawBufferMode() = %q, want tinted bottom HUD padding row", got)
+	}
+}
+
+func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Name:     "alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	menu := buildContextMenu(state, nil, 5, 2, menuStickyState{})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, menu, theme, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferMode() = %q, want painted collapsed cursor in buffer", got)
+	}
+	if !strings.Contains(got, "\x1b[?25l") {
+		t.Fatalf("drawBufferMode() = %q, want hidden terminal cursor while menu is visible", got)
+	}
+}
+
+func TestDrawBufferModeShowsSelectionWhenUnfocused(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   3,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, state, nil, newMenuState(), theme, false); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.selectionPrefix()+"lp") {
+		t.Fatalf("drawBufferMode() = %q, want painted selection while buffer is unfocused", got)
+	}
+	if !strings.Contains(got, "\x1b[?25l") {
+		t.Fatalf("drawBufferMode() = %q, want hidden terminal cursor while unfocused", got)
 	}
 }
 
@@ -787,7 +874,7 @@ func TestDrawBufferLineShowsDarkerCollapsedSelectionInOverlay(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+	if err := drawBufferLine(&out, state, 0, 5, true, theme); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	got := out.String()
@@ -818,7 +905,7 @@ func TestDrawBufferLineKeepsOneRuneSelectionDistinctFromCollapsedSelection(t *te
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+	if err := drawBufferLine(&out, state, 0, 5, true, theme); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	got := out.String()
@@ -849,7 +936,7 @@ func TestDrawBufferLineShowsCollapsedSelectionAtEndOfLine(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferLine(&out, state, 0, 5, overlay, theme); err != nil {
+	if err := drawBufferLine(&out, state, 0, 5, true, theme); err != nil {
 		t.Fatalf("drawBufferLine() error = %v", err)
 	}
 	got := out.String()
@@ -982,7 +1069,7 @@ func TestDrawBufferModeWrapsLongLines(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, state, nil, newMenuState(), nil); err != nil {
+	if err := drawBufferMode(&out, state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()

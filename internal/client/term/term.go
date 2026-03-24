@@ -171,6 +171,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var pending []rune
 	var linebuf []rune
 	inBufferMode := true
+	focused := true
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
@@ -180,7 +181,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuSticky := menuStickyState{itemIndex: -1}
-	buffer, err := enterBufferMode(stdout, svc, overlay, menu, theme)
+	buffer, err := enterBufferMode(stdout, svc, overlay, menu, theme, focused)
 	if err != nil {
 		return err
 	}
@@ -285,7 +286,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	redraw := func() error {
 		refreshTerminalSize()
-		return drawBufferMode(stdout, buffer, overlay, menu, theme)
+		return drawBufferMode(stdout, buffer, overlay, menu, theme, focused)
 	}
 
 	redrawRunningCommand := func() error {
@@ -301,7 +302,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err := drawOverlayHistoryLine(stdout, row, line, overlay, theme); err != nil {
 				return err
 			}
-			return positionTerminalCursor(stdout, buffer, overlay)
+			return positionTerminalCursor(stdout, buffer, overlay, menu, focused)
 		}
 		return nil
 	}
@@ -345,13 +346,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if len(prefetched) > 0 {
 			reader = bufio.NewReader(io.MultiReader(bytes.NewReader(prefetched), reader))
 		}
-		if sameTheme(theme, nextTheme) {
-			return nil
-		}
 		theme = nextTheme
-		if inBufferMode {
-			return redraw()
-		}
 		return nil
 	}
 
@@ -715,10 +710,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, redraw()
 		}
 		if key == keyFocusIn {
-			return false, refreshThemeOnFocus()
+			focused = true
+			if err := refreshThemeOnFocus(); err != nil {
+				return false, err
+			}
+			return false, redraw()
 		}
 		if key == keyFocusOut {
-			return false, nil
+			focused = false
+			return false, redraw()
 		}
 		if key == keyMouse {
 			if mouse == nil {
@@ -1092,11 +1092,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyDel:
 						overlay.deleteForward()
 					case keyFocusIn:
+						focused = true
 						if err := refreshThemeOnFocus(); err != nil {
+							return err
+						}
+						if err := redraw(); err != nil {
 							return err
 						}
 						continue
 					case keyFocusOut:
+						focused = false
+						if err := redraw(); err != nil {
+							return err
+						}
 						continue
 					default:
 						overlay.close()
@@ -1263,13 +1271,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState, theme *uiTheme) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
 	}
 	state := newBufferState(view)
-	if err := drawBufferMode(stdout, state, overlay, menu, theme); err != nil {
+	if err := drawBufferMode(stdout, state, overlay, menu, theme, focused); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -1567,7 +1575,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme) error {
+func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {
 	if state == nil {
 		return nil
 	}
@@ -1579,13 +1587,14 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	}
 	viewRows := bufferViewRows(overlay)
 	p := visualRowStartForPos(state.text, state.origin)
+	inactive := bufferInactive(overlay, menu, focused)
 	for row := 0; row < viewRows; row++ {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 			return err
 		}
 		if p <= len(state.text) {
 			rowEnd := visualRowEnd(state.text, p)
-			if err := drawBufferLine(stdout, state, p, rowEnd, overlay, theme); err != nil {
+			if err := drawBufferLine(stdout, state, p, rowEnd, inactive, theme); err != nil {
 				return err
 			}
 			next := nextVisualRowStart(state.text, p)
@@ -1634,7 +1643,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 		if err := drawMenu(stdout, menu, theme); err != nil {
 			return err
 		}
-		return positionTerminalCursor(stdout, state, overlay)
+		return positionTerminalCursor(stdout, state, overlay, menu, focused)
 	}
 	if state.status != "" {
 		status := []rune(state.status)
@@ -1648,7 +1657,7 @@ func drawBufferMode(stdout io.Writer, state *bufferState, overlay *overlayState,
 	if err := drawMenu(stdout, menu, theme); err != nil {
 		return err
 	}
-	return positionTerminalCursor(stdout, state, overlay)
+	return positionTerminalCursor(stdout, state, overlay, menu, focused)
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
@@ -1803,10 +1812,10 @@ const (
 	bufferHighlightCollapsed
 )
 
-func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, overlay *overlayState, theme *uiTheme) error {
+func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, inactive bool, theme *uiTheme) error {
 	current := bufferHighlightNone
 	col := 0
-	collapsedPos, collapsedCol, collapsedVisible := collapsedOverlaySelection(state, overlay, start)
+	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive, start)
 	collapsedPainted := false
 	switchHighlight := func(next bufferHighlightKind) error {
 		if next == current {
@@ -2169,8 +2178,12 @@ func blendColors(base, target rgbColor, alpha float64) rgbColor {
 	}
 }
 
-func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overlayState) error {
+func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overlayState, menu *menuState, focused bool) error {
 	if overlay != nil && overlay.visible && overlay.running {
+		_, err := io.WriteString(stdout, "\x1b[?25l")
+		return err
+	}
+	if !focused || (menu != nil && menu.visible) {
 		_, err := io.WriteString(stdout, "\x1b[?25l")
 		return err
 	}
@@ -2259,8 +2272,8 @@ func highlightReset(theme *uiTheme) string {
 	return styleReset()
 }
 
-func collapsedOverlaySelection(state *bufferState, overlay *overlayState, rowStart int) (int, int, bool) {
-	if state == nil || overlay == nil || !overlay.visible {
+func collapsedInactiveSelection(state *bufferState, inactive bool, rowStart int) (int, int, bool) {
+	if state == nil || !inactive {
 		return 0, 0, false
 	}
 	if state.dotStart != state.dotEnd {
@@ -2271,6 +2284,16 @@ func collapsedOverlaySelection(state *bufferState, overlay *overlayState, rowSta
 		return 0, 0, false
 	}
 	return pos, visualColumnForPos(state.text, rowStart, pos), true
+}
+
+func bufferInactive(overlay *overlayState, menu *menuState, focused bool) bool {
+	if !focused {
+		return true
+	}
+	if menu != nil && menu.visible {
+		return true
+	}
+	return overlay != nil && overlay.visible
 }
 
 func revealOverlaySelection(previous, next *bufferState, overlay *overlayState) *bufferState {

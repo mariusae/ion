@@ -1308,6 +1308,35 @@ func TestApplyBufferKeyPrintableReplacesSelection(t *testing.T) {
 	}
 }
 
+func TestApplyBufferKeyPrintableRefreshesDirtyState(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			ID:       7,
+			Name:     "alpha.txt",
+			Text:     "alpha\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "alpha.txt", Dirty: true, Current: true},
+		},
+	}
+	state := newBufferState(svc.view)
+	if state.dirty {
+		t.Fatalf("initial state.dirty = true, want false before refresh")
+	}
+
+	next, err := applyBufferKey(svc, state, int('Z'))
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if !next.dirty {
+		t.Fatalf("next.dirty = false, want true after replace")
+	}
+}
+
 func TestApplyBufferKeyMovementSyncsDotToService(t *testing.T) {
 	t.Parallel()
 

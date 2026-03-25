@@ -1637,7 +1637,9 @@ func applyBufferKeyWithOptions(svc wire.TermService, state *bufferState, key int
 		if err != nil {
 			return nil, err
 		}
-		return newBufferState(view), nil
+		next := newBufferState(view)
+		refreshCurrentBufferDirty(svc, next)
+		return next, nil
 	case 11:
 		if state.dotStart != state.dotEnd {
 			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
@@ -1701,6 +1703,7 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	next.markPos = clampIndex(state.markPos, len(next.text))
 	next.flashSelection = state.flashSelection
 	next.status = state.status
+	refreshCurrentBufferDirty(svc, next)
 	return next, nil
 }
 
@@ -1728,6 +1731,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 		next.origin = adjustOriginForCursor(next.text, state.origin, cursor, termRows)
 		next.status = state.status
 	}
+	refreshCurrentBufferDirty(svc, next)
 	return next, nil
 }
 

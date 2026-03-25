@@ -20,8 +20,9 @@ import (
 )
 
 type tmuxContext struct {
-	WindowID string
-	PaneID   string
+	WindowID     string
+	PaneID       string
+	TargetPaneID string
 }
 
 func (c tmuxContext) Key() string {
@@ -103,7 +104,7 @@ func runBMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bModeRuntime) error {
-	ctx, ok, err := detectTmuxContext(rt, cfg.windowID)
+	ctx, ok, err := detectTmuxContext(rt, cfg.paneID)
 	if err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		return err
 	}
 	cmd := buildBServeCommand(exe, effectiveCfg)
-	paneID, err := rt.tmux("split-window", "-c", wd, "-P", "-F", "#{pane_id}", cmd)
+	paneID, err := rt.tmux("split-window", "-t", ctx.TargetPaneID, "-c", wd, "-P", "-F", "#{pane_id}", cmd)
 	if err != nil {
 		return err
 	}
@@ -210,7 +211,7 @@ func formatResolvedNumericAddress(addr string) (line int, colPlusOne int, ok boo
 
 func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	rt := defaultBModeRuntime()
-	ctx, ok, err := detectTmuxContext(rt, cfg.windowID)
+	ctx, ok, err := detectTmuxContext(rt, cfg.paneID)
 	if err != nil {
 		return err
 	}
@@ -251,25 +252,26 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	})
 }
 
-func detectTmuxContext(rt bModeRuntime, windowOverride string) (tmuxContext, bool, error) {
+func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool, error) {
 	if rt.getenv("TMUX") == "" {
 		return tmuxContext{}, false, nil
 	}
 	paneID := strings.TrimSpace(rt.getenv("TMUX_PANE"))
-	if paneID == "" {
+	targetPaneID := strings.TrimSpace(paneOverride)
+	if targetPaneID == "" {
+		targetPaneID = paneID
+	}
+	if targetPaneID == "" {
 		return tmuxContext{}, false, fmt.Errorf("TMUX_PANE not set")
 	}
-	windowID := strings.TrimSpace(windowOverride)
-	if windowID == "" {
-		var err error
-		windowID, err = tmuxDisplay(rt.tmux, paneID, "#{window_id}")
-		if err != nil {
-			return tmuxContext{}, false, err
-		}
+	windowID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{window_id}")
+	if err != nil {
+		return tmuxContext{}, false, err
 	}
 	return tmuxContext{
-		WindowID: windowID,
-		PaneID:   paneID,
+		WindowID:     windowID,
+		PaneID:       paneID,
+		TargetPaneID: targetPaneID,
 	}, true, nil
 }
 
@@ -368,8 +370,8 @@ func buildBServeCommand(exe string, cfg config) string {
 	if !cfg.autoindent {
 		args = append(args, "-A")
 	}
-	if cfg.windowID != "" {
-		args = append(args, "-w", shellQuote(cfg.windowID))
+	if cfg.paneID != "" {
+		args = append(args, "-p", shellQuote(cfg.paneID))
 	}
 	args = append(args, "-b-serve", "--")
 	for _, file := range cfg.files {

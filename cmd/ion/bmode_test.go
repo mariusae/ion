@@ -82,20 +82,33 @@ func (c *fakeBModeClient) SetAddress(expr string) (wire.BufferView, error) {
 func (c *fakeBModeClient) Close() error { return nil }
 
 type fakeTmux struct {
-	sessionID string
-	windowID  string
-	splitPane string
-	calls     [][]string
+	sessionID   string
+	windowID    string
+	paneWindows map[string]string
+	splitPane   string
+	calls       [][]string
 }
 
 func (t *fakeTmux) run(args ...string) (string, error) {
 	t.calls = append(t.calls, append([]string(nil), args...))
 	switch args[0] {
 	case "display-message":
+		target := ""
+		for i := 1; i+1 < len(args); i++ {
+			if args[i] == "-t" {
+				target = args[i+1]
+				break
+			}
+		}
 		switch args[len(args)-1] {
 		case "#{session_id}":
 			return t.sessionID + "\n", nil
 		case "#{window_id}":
+			if target != "" && t.paneWindows != nil {
+				if windowID, ok := t.paneWindows[target]; ok {
+					return windowID + "\n", nil
+				}
+			}
 			return t.windowID + "\n", nil
 		}
 	case "split-window":
@@ -189,11 +202,19 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 	}
 }
 
-func TestRunBModeUsesWindowOverrideForResidentLookup(t *testing.T) {
+func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	tmux := &fakeTmux{
+		sessionID: "$1",
+		windowID:  "@2",
+		paneWindows: map[string]string{
+			"%4":  "@2",
+			"%54": "@54",
+		},
+		splitPane: "%9",
+	}
 	client := &fakeBModeClient{}
 	rt := bModeRuntime{
 		getenv: func(key string) string {
@@ -225,7 +246,7 @@ func TestRunBModeUsesWindowOverrideForResidentLookup(t *testing.T) {
 		t.Fatalf("writeResidentPaneID() error = %v", err)
 	}
 
-	if err := runBModeWith(config{bmode: true, autoindent: true, windowID: "@54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, autoindent: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	if got, want := client.bootstrapCalls, [][]string{{"a.txt"}}; !reflect.DeepEqual(got, want) {
@@ -364,14 +385,14 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 	}
 	foundSplit := false
 	for _, call := range tmux.calls {
-		if len(call) < 7 || call[0] != "split-window" {
+		if len(call) < 9 || call[0] != "split-window" {
 			continue
 		}
 		foundSplit = true
-		if got, want := call[1:6], []string{"-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
+		if got, want := call[1:8], []string{"-t", "%4", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("split-window args = %#v, want %#v", got, want)
 		}
-		if got := call[6]; !strings.Contains(got, "exec '/tmp/bin/ion' -b-serve -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
+		if got := call[8]; !strings.Contains(got, "exec '/tmp/bin/ion' -b-serve -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
 			t.Fatalf("split-window command = %q, want hidden b-serve exec", got)
 		}
 	}
@@ -409,9 +430,9 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	for _, call := range tmux.calls {
-		if len(call) >= 7 && call[0] == "split-window" {
-			if !strings.Contains(call[6], "exec '/tmp/bin/ion' -A -b-serve -- '/tmp/work/a.txt'") {
-				t.Fatalf("split-window command = %q, want -A propagated to b-serve", call[6])
+		if len(call) >= 9 && call[0] == "split-window" {
+			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -A -b-serve -- '/tmp/work/a.txt'") {
+				t.Fatalf("split-window command = %q, want -A propagated to b-serve", call[8])
 			}
 			return
 		}
@@ -419,10 +440,18 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 }
 
-func TestRunBModeSplitPassesWindowOverride(t *testing.T) {
+func TestRunBModeSplitPassesPaneOverride(t *testing.T) {
 	t.Parallel()
 
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	tmux := &fakeTmux{
+		sessionID: "$1",
+		windowID:  "@2",
+		paneWindows: map[string]string{
+			"%4":  "@2",
+			"%54": "@54",
+		},
+		splitPane: "%9",
+	}
 	rt := bModeRuntime{
 		getenv: func(key string) string {
 			switch key {
@@ -444,18 +473,70 @@ func TestRunBModeSplitPassesWindowOverride(t *testing.T) {
 		runTerm: runTermWithTargets,
 	}
 
-	if err := runBModeWith(config{bmode: true, autoindent: true, windowID: "@54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, autoindent: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	for _, call := range tmux.calls {
-		if len(call) >= 7 && call[0] == "split-window" {
-			if !strings.Contains(call[6], "exec '/tmp/bin/ion' -w '@54' -b-serve -- '/tmp/work/a.txt'") {
-				t.Fatalf("split-window command = %q, want -w propagated to b-serve", call[6])
+		if len(call) >= 9 && call[0] == "split-window" {
+			if got, want := call[1:8], []string{"-t", "%54", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("split-window args = %#v, want %#v", got, want)
+			}
+			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -p '%54' -b-serve -- '/tmp/work/a.txt'") {
+				t.Fatalf("split-window command = %q, want -p propagated to b-serve", call[8])
 			}
 			return
 		}
 	}
 	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
+}
+
+func TestRunBModeUsesPaneOverrideWithoutTMUXPANE(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	tmux := &fakeTmux{
+		sessionID: "$1",
+		windowID:  "@2",
+		paneWindows: map[string]string{
+			"%54": "@54",
+		},
+		splitPane: "%9",
+	}
+	client := &fakeBModeClient{}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			default:
+				return ""
+			}
+		},
+		tempDir: func() string { return tempDir },
+		dial: func(path string) (bModeClient, error) {
+			want := tmuxWindowPaths(tempDir, "@54").socketPath
+			if path != want {
+				t.Fatalf("dial path = %q, want %q", path, want)
+			}
+			return client, nil
+		},
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "@54")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if got, want := client.bootstrapCalls, [][]string{{"a.txt"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
 }
 
 func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
@@ -607,15 +688,15 @@ func TestParseArgsDisablesAutoIndentWithAFlag(t *testing.T) {
 	}
 }
 
-func TestParseArgsRecognizesWindowOverride(t *testing.T) {
+func TestParseArgsRecognizesPaneOverride(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := parseArgs([]string{"-w", "@54", "-B", "alpha"})
+	cfg, err := parseArgs([]string{"-p", "%54", "-B", "alpha"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if got, want := cfg.windowID, "@54"; got != want {
-		t.Fatalf("config.windowID = %q, want %q", got, want)
+	if got, want := cfg.paneID, "%54"; got != want {
+		t.Fatalf("config.paneID = %q, want %q", got, want)
 	}
 	if !cfg.bmode {
 		t.Fatalf("config.bmode = false, want true")

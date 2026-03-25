@@ -22,6 +22,7 @@ type config struct {
 	bserve     bool
 	rage       bool
 	autoindent bool
+	windowID   string
 	files      []string
 }
 
@@ -84,6 +85,7 @@ func parseArgs(args []string) (config, error) {
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
 	fs.BoolVar(&disableAutoIndent, "A", false, "turn off autoindent mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
+	fs.StringVar(&cfg.windowID, "w", "", "override the tmux window id used for -B lookup")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
 	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
 	if err := fs.Parse(args); err != nil {

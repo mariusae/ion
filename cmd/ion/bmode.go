@@ -103,7 +103,7 @@ func runBMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bModeRuntime) error {
-	ctx, ok, err := detectTmuxContext(rt)
+	ctx, ok, err := detectTmuxContext(rt, cfg.windowID)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func formatResolvedNumericAddress(addr string) (line int, colPlusOne int, ok boo
 
 func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	rt := defaultBModeRuntime()
-	ctx, ok, err := detectTmuxContext(rt)
+	ctx, ok, err := detectTmuxContext(rt, cfg.windowID)
 	if err != nil {
 		return err
 	}
@@ -251,7 +251,7 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	})
 }
 
-func detectTmuxContext(rt bModeRuntime) (tmuxContext, bool, error) {
+func detectTmuxContext(rt bModeRuntime, windowOverride string) (tmuxContext, bool, error) {
 	if rt.getenv("TMUX") == "" {
 		return tmuxContext{}, false, nil
 	}
@@ -259,9 +259,13 @@ func detectTmuxContext(rt bModeRuntime) (tmuxContext, bool, error) {
 	if paneID == "" {
 		return tmuxContext{}, false, fmt.Errorf("TMUX_PANE not set")
 	}
-	windowID, err := tmuxDisplay(rt.tmux, paneID, "#{window_id}")
-	if err != nil {
-		return tmuxContext{}, false, err
+	windowID := strings.TrimSpace(windowOverride)
+	if windowID == "" {
+		var err error
+		windowID, err = tmuxDisplay(rt.tmux, paneID, "#{window_id}")
+		if err != nil {
+			return tmuxContext{}, false, err
+		}
 	}
 	return tmuxContext{
 		WindowID: windowID,
@@ -363,6 +367,9 @@ func buildBServeCommand(exe string, cfg config) string {
 	args := []string{shellQuote(exe)}
 	if !cfg.autoindent {
 		args = append(args, "-A")
+	}
+	if cfg.windowID != "" {
+		args = append(args, "-w", shellQuote(cfg.windowID))
 	}
 	args = append(args, "-b-serve", "--")
 	for _, file := range cfg.files {

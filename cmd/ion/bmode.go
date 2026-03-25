@@ -19,13 +19,12 @@ import (
 )
 
 type tmuxContext struct {
-	SessionID string
-	WindowID  string
-	PaneID    string
+	WindowID string
+	PaneID   string
 }
 
 func (c tmuxContext) Key() string {
-	return c.SessionID + "." + c.WindowID
+	return c.WindowID
 }
 
 type bModePaths struct {
@@ -201,18 +200,13 @@ func detectTmuxContext(rt bModeRuntime) (tmuxContext, bool, error) {
 	if paneID == "" {
 		return tmuxContext{}, false, fmt.Errorf("TMUX_PANE not set")
 	}
-	sessionID, err := tmuxDisplay(rt.tmux, paneID, "#{session_id}")
-	if err != nil {
-		return tmuxContext{}, false, err
-	}
 	windowID, err := tmuxDisplay(rt.tmux, paneID, "#{window_id}")
 	if err != nil {
 		return tmuxContext{}, false, err
 	}
 	return tmuxContext{
-		SessionID: sessionID,
-		WindowID:  windowID,
-		PaneID:    paneID,
+		WindowID: windowID,
+		PaneID:   paneID,
 	}, true, nil
 }
 

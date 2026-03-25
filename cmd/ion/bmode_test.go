@@ -149,7 +149,7 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 		},
 		tempDir: func() string { return tempDir },
 		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "$1.@2").socketPath
+			want := tmuxWindowPaths(tempDir, "@2").socketPath
 			if path != want {
 				t.Fatalf("dial path = %q, want %q", path, want)
 			}
@@ -160,7 +160,7 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 		},
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	paths := tmuxWindowPaths(tempDir, "@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -211,7 +211,7 @@ func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	paths := tmuxWindowPaths(tempDir, "@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	paths := tmuxWindowPaths(tempDir, "@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -402,7 +402,7 @@ func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "$1.@2")
+	paths := tmuxWindowPaths(tempDir, "@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

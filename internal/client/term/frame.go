@@ -36,13 +36,22 @@ type frameRenderer struct {
 type redrawClass string
 
 const (
-	redrawInitial redrawClass = "initial"
-	redrawBuffer  redrawClass = "buffer"
-	redrawOverlay redrawClass = "overlay"
-	redrawMenu    redrawClass = "menu"
-	redrawTheme   redrawClass = "theme"
-	redrawRefresh redrawClass = "refresh"
-	redrawResize  redrawClass = "resize"
+	redrawInitial         redrawClass = "initial"
+	redrawBufferCursor    redrawClass = "buffer_cursor"
+	redrawBufferSelection redrawClass = "buffer_selection"
+	redrawBufferViewport  redrawClass = "buffer_viewport"
+	redrawBufferContent   redrawClass = "buffer_content"
+	redrawBufferStatus    redrawClass = "buffer_status"
+	redrawOverlayInput    redrawClass = "overlay_input"
+	redrawOverlayHistory  redrawClass = "overlay_history"
+	redrawOverlayOpen     redrawClass = "overlay_open"
+	redrawOverlayClose    redrawClass = "overlay_close"
+	redrawMenuHover       redrawClass = "menu_hover"
+	redrawMenuOpen        redrawClass = "menu_open"
+	redrawMenuClose       redrawClass = "menu_close"
+	redrawTheme           redrawClass = "theme"
+	redrawRefresh         redrawClass = "refresh"
+	redrawResize          redrawClass = "resize"
 )
 
 type frameRenderStats struct {
@@ -128,9 +137,18 @@ func (s *frameRenderStats) Report() error {
 		redrawInitial,
 		redrawResize,
 		redrawRefresh,
-		redrawBuffer,
-		redrawOverlay,
-		redrawMenu,
+		redrawBufferCursor,
+		redrawBufferSelection,
+		redrawBufferViewport,
+		redrawBufferContent,
+		redrawBufferStatus,
+		redrawOverlayOpen,
+		redrawOverlayInput,
+		redrawOverlayHistory,
+		redrawOverlayClose,
+		redrawMenuOpen,
+		redrawMenuHover,
+		redrawMenuClose,
 		redrawTheme,
 	}
 	if _, err := io.WriteString(s.out, "ion: render stats\n"); err != nil {

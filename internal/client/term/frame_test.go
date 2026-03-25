@@ -218,10 +218,10 @@ func TestFrameRendererRecordsStatsByClass(t *testing.T) {
 	out.Reset()
 	next := cloneTerminalFrame(initial)
 	next.cursor = frameCursor{visible: true, row: 0, col: 1}
-	if err := renderer.Render(&out, next, redrawBuffer, false, stats); err != nil {
+	if err := renderer.Render(&out, next, redrawBufferCursor, false, stats); err != nil {
 		t.Fatalf("Render(buffer) error = %v", err)
 	}
-	if got := stats.counts[redrawBuffer]; got == nil || got.diff != 1 || got.renders != 1 || got.bytes == 0 {
+	if got := stats.counts[redrawBufferCursor]; got == nil || got.diff != 1 || got.renders != 1 || got.bytes == 0 {
 		t.Fatalf("buffer stats = %#v, want one diff render with nonzero bytes", got)
 	}
 }

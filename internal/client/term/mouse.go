@@ -244,7 +244,7 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 	}
 	if event.button >= 32 && event.button < 64 {
 		if !*selecting {
-			return true
+			return false
 		}
 		state.cursor = pos
 		state.markMode = false

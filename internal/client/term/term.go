@@ -679,15 +679,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		btn := event.button & 3
-		if event.button >= 32 && event.button < 64 {
-			item := menu.itemAt(event.x, event.y)
-			if menu.hover != item {
-				menu.hover = item
-				return false, redraw(redrawMenuHover)
-			}
-			return false, nil
-		}
-		if btn == 2 && !event.pressed {
+		if !event.pressed && (btn == 2 || btn == 3) {
 			if menu.hover >= 0 && menu.hover < len(menu.items) {
 				done, err := executeMenuItem(menu.items[menu.hover])
 				if err != nil {
@@ -700,6 +692,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				menu.dismiss()
 			}
 			return false, redraw(redrawMenuClose)
+		}
+		if event.button >= 32 && event.button < 64 {
+			item := menu.itemAt(event.x, event.y)
+			if menu.hover != item {
+				menu.hover = item
+				return false, fullRedraw(redrawMenuHover)
+			}
+			return false, nil
 		}
 		if event.pressed || event.button == 64 || event.button == 65 {
 			menu.dismiss()
@@ -802,6 +802,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if mouse == nil {
 				return false, nil
 			}
+			menuWasVisible := menu.visible
 			done, err := handleMenuMouse(*mouse)
 			if err != nil {
 				return false, err
@@ -811,6 +812,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 				return true, nil
+			}
+			if menuWasVisible {
+				return false, nil
 			}
 			if menu.visible {
 				return false, nil

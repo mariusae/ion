@@ -60,6 +60,7 @@ const (
 type bufferState struct {
 	fileID         int
 	name           string
+	dirty          bool
 	text           []rune
 	layout         *bufferLayout
 	cursor         int
@@ -209,6 +210,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	applyBufferView := func(view wire.BufferView) {
 		previous := buffer
 		buffer = bufferStateFromView(view, buffer, scrollOrigins)
+		refreshCurrentBufferDirty(svc, buffer)
 		buffer = revealOverlaySelection(previous, buffer, overlay)
 	}
 
@@ -1375,6 +1377,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *frameRend
 		return nil, err
 	}
 	state := newBufferState(view)
+	refreshCurrentBufferDirty(svc, state)
 	if err := drawBufferMode(stdout, renderer, stats, redrawInitial, state, overlay, menu, theme, focused, true); err != nil {
 		return nil, err
 	}
@@ -2653,7 +2656,25 @@ func hasDirtyFiles(svc wire.TermService) (bool, error) {
 	return false, nil
 }
 
-func bufferWindowTitleSequence(name string) string {
+func refreshCurrentBufferDirty(svc wire.TermService, state *bufferState) {
+	if svc == nil || state == nil {
+		return
+	}
+	files, err := svc.MenuFiles()
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		if !file.Current {
+			continue
+		}
+		state.dirty = file.Dirty
+		return
+	}
+	state.dirty = false
+}
+
+func bufferWindowTitleSequence(name string, dirty bool) string {
 	title := filepath.Base(strings.TrimSpace(name))
 	if title == "." || title == string(filepath.Separator) {
 		title = ""
@@ -2667,6 +2688,9 @@ func bufferWindowTitleSequence(name string) string {
 	}, title)
 	if title == "" {
 		title = "ion"
+	}
+	if dirty {
+		title += "'"
 	}
 	return "\x1b]2;" + title + "\x07"
 }

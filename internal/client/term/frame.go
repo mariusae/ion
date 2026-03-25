@@ -8,10 +8,11 @@ import (
 )
 
 type terminalFrame struct {
-	title    string
-	rows     []frameRow
-	cursor   frameCursor
-	terminal frameTerminalState
+	title      string
+	titleDirty bool
+	rows       []frameRow
+	cursor     frameCursor
+	terminal   frameTerminalState
 }
 
 type frameRow struct {
@@ -292,6 +293,7 @@ func buildBufferFrame(state *bufferState, overlay *overlayState, menu *menuState
 	}
 	frame := newTerminalFrame(termRows, termCols)
 	frame.title = state.name
+	frame.titleDirty = state.dirty
 
 	layout := state.visibleLayout(overlay)
 	inactive := bufferInactive(overlay, menu, focused)
@@ -414,7 +416,7 @@ func writeFullFrame(stdout io.Writer, frame *terminalFrame) error {
 	if frame == nil {
 		return nil
 	}
-	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(frame.title)); err != nil {
+	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(frame.title, frame.titleDirty)); err != nil {
 		return err
 	}
 	prevTerminal := frameTerminalState{}
@@ -452,8 +454,8 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 		return writeFullFrame(stdout, next)
 	}
 
-	if prev.title != next.title {
-		if _, err := io.WriteString(stdout, bufferWindowTitleSequence(next.title)); err != nil {
+	if prev.title != next.title || prev.titleDirty != next.titleDirty {
+		if _, err := io.WriteString(stdout, bufferWindowTitleSequence(next.title, next.titleDirty)); err != nil {
 			return err
 		}
 	}
@@ -480,7 +482,7 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 
 	cursorChanged := prev.cursor != next.cursor
 	terminalChanged := prev.terminal != next.terminal
-	if len(changedRows) == 0 && !cursorChanged && !terminalChanged && prev.title == next.title {
+	if len(changedRows) == 0 && !cursorChanged && !terminalChanged && prev.title == next.title && prev.titleDirty == next.titleDirty {
 		return nil
 	}
 
@@ -547,10 +549,11 @@ func cloneTerminalFrame(frame *terminalFrame) *terminalFrame {
 		return nil
 	}
 	clone := &terminalFrame{
-		title:    frame.title,
-		rows:     make([]frameRow, len(frame.rows)),
-		cursor:   frame.cursor,
-		terminal: frame.terminal,
+		title:      frame.title,
+		titleDirty: frame.titleDirty,
+		rows:       make([]frameRow, len(frame.rows)),
+		cursor:     frame.cursor,
+		terminal:   frame.terminal,
 	}
 	for i, row := range frame.rows {
 		clone.rows[i].id = row.id

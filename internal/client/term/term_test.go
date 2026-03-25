@@ -323,6 +323,30 @@ func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
 	}
 }
 
+func TestDrawBufferModeMarksDirtyWindowTitle(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/work/alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	state.dirty = true
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), nil, true, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt'\x07") {
+		t.Fatalf("drawBufferMode() = %q, want dirty window title marker", got)
+	}
+}
+
 func TestExitBufferModeRestoresDefaultCursorShape(t *testing.T) {
 	t.Parallel()
 

@@ -117,6 +117,22 @@ func TestWriteFullFrameUsesFrameCursorAndTitle(t *testing.T) {
 	}
 }
 
+func TestWriteFullFrameUsesDirtyTitleMarker(t *testing.T) {
+	t.Parallel()
+
+	frame := newTerminalFrame(2, 4)
+	frame.title = "/tmp/alpha.txt"
+	frame.titleDirty = true
+
+	var out bytes.Buffer
+	if err := writeFullFrame(&out, frame); err != nil {
+		t.Fatalf("writeFullFrame() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt'\x07") {
+		t.Fatalf("writeFullFrame() = %q, want dirty title sequence", got)
+	}
+}
+
 func TestWriteFrameDiffUnchangedEmitsNothing(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +148,26 @@ func TestWriteFrameDiffUnchangedEmitsNothing(t *testing.T) {
 	}
 	if got := out.String(); got != "" {
 		t.Fatalf("writeFrameDiff() = %q, want empty output for unchanged frame", got)
+	}
+}
+
+func TestWriteFrameDiffUpdatesDirtyTitleOnly(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(2, 4)
+	prev.title = "/tmp/alpha.txt"
+	prev.rows[0].cells[0] = frameCell{r: 'a', style: "\x1b[1m"}
+	prev.cursor = frameCursor{visible: true, row: 0, col: 1}
+	next := cloneTerminalFrame(prev)
+	next.titleDirty = true
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if got != "\x1b]2;alpha.txt'\x07" {
+		t.Fatalf("writeFrameDiff() = %q, want dirty title-only update", got)
 	}
 }
 

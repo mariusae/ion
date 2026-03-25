@@ -277,3 +277,63 @@ func TestFrameRendererRecoverForcesFullRender(t *testing.T) {
 		t.Fatalf("recover stats = %#v, want one full recover render", stats.counts[redrawRecover])
 	}
 }
+
+func TestDetectViewportRowShiftDownAndUp(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(4, 4)
+	nextDown := newTerminalFrame(4, 4)
+	nextUp := newTerminalFrame(4, 4)
+	for i := 0; i < 4; i++ {
+		prev.rows[i].id = frameRowID{kind: frameRowKindBuffer, anchor: i}
+		prev.rows[i].cells[0] = frameCell{r: rune('a' + i)}
+		nextDown.rows[i].id = frameRowID{kind: frameRowKindBuffer, anchor: i + 1}
+		nextUp.rows[i].id = frameRowID{kind: frameRowKindBuffer, anchor: i - 1}
+	}
+	for i, r := range []rune{'b', 'c', 'd', 'e'} {
+		nextDown.rows[i].cells[0] = frameCell{r: r}
+	}
+	for i, r := range []rune{'x', 'a', 'b', 'c'} {
+		nextUp.rows[i].cells[0] = frameCell{r: r}
+	}
+
+	shift, exposed, ok := detectViewportRowShift(prev, nextDown)
+	if !ok || shift != 1 || len(exposed) != 1 || exposed[0] != 3 {
+		t.Fatalf("detectViewportRowShift(down) = (%d, %v, %v), want (1, [3], true)", shift, exposed, ok)
+	}
+	shift, exposed, ok = detectViewportRowShift(prev, nextUp)
+	if !ok || shift != -1 || len(exposed) != 1 || exposed[0] != 0 {
+		t.Fatalf("detectViewportRowShift(up) = (%d, %v, %v), want (-1, [0], true)", shift, exposed, ok)
+	}
+}
+
+func TestWriteFrameDiffViewportShiftUsesLineMotion(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(4, 4)
+	next := newTerminalFrame(4, 4)
+	for i, r := range []rune{'a', 'b', 'c', 'd'} {
+		prev.rows[i].id = frameRowID{kind: frameRowKindBuffer, anchor: i}
+		prev.rows[i].cells[0] = frameCell{r: r}
+	}
+	for i, r := range []rune{'b', 'c', 'd', 'e'} {
+		next.rows[i].id = frameRowID{kind: frameRowKindBuffer, anchor: i + 1}
+		next.rows[i].cells[0] = frameCell{r: r}
+	}
+	next.cursor = frameCursor{visible: true, row: 0, col: 0}
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[1;1H\x1b[1M") {
+		t.Fatalf("writeFrameDiff() = %q, want delete-line viewport shift", got)
+	}
+	if !strings.Contains(got, "\x1b[4;1H\x1b[2Ke") {
+		t.Fatalf("writeFrameDiff() = %q, want repaint only newly exposed bottom row", got)
+	}
+	if strings.Contains(got, "\x1b[1;1H\x1b[2Ka") || strings.Contains(got, "\x1b[2;1H\x1b[2Kb") {
+		t.Fatalf("writeFrameDiff() = %q, want no full row-by-row repaint of shifted content", got)
+	}
+}

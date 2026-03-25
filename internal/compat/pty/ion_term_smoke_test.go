@@ -1533,6 +1533,79 @@ func TestIonTermBufferModeAltVPagesUp(t *testing.T) {
 	}
 }
 
+func TestIonTermRenderTraceMarksWheelScrollIncremental(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	bin := buildIonBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "in.txt")
+	var text strings.Builder
+	for i := 1; i <= 60; i++ {
+		text.WriteString(fmt.Sprintf("line%03d\n", i))
+	}
+	if err := os.WriteFile(path, []byte(text.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "in.txt")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "ION_RENDER_TRACE=1")
+
+	sess, err := Start(ctx, cmd, 24, 80)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("line001", 2*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for initial buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1b[<65;1;1M"); err != nil {
+		t.Fatalf("send mouse wheel down: %v", err)
+	}
+	if _, err := sess.WaitFor("line004", 2*time.Second); err != nil {
+		t.Fatalf("wait for scrolled buffer contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\x1bq\n"); err != nil {
+		t.Fatalf("exit buffer mode and quit: %v", err)
+	}
+	if err := sess.WaitExit(2 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		got := sess.Snapshot()
+		if strings.Contains(got, "ion: render stats") {
+			if !strings.Contains(got, "buffer_viewport: renders=1 full=0 diff=1 rows=3") {
+				t.Fatalf("render trace missing incremental viewport diff line:\n%s", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("wait for render stats output:\n%s", sess.Snapshot())
+}
+
 func TestIonTermBufferModeArrowUpAfterArrowDownRedrawsBuffer(t *testing.T) {
 	t.Parallel()
 

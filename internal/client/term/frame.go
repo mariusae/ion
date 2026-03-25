@@ -15,6 +15,7 @@ type terminalFrame struct {
 }
 
 type frameRow struct {
+	id    frameRowID
 	cells []frameCell
 }
 
@@ -33,6 +34,21 @@ type frameRenderer struct {
 	last        *terminalFrame
 	initialized bool
 }
+
+type frameRowID struct {
+	kind   frameRowKind
+	anchor int
+}
+
+type frameRowKind uint8
+
+const (
+	frameRowKindNone frameRowKind = iota
+	frameRowKindBuffer
+	frameRowKindOverlay
+	frameRowKindStatus
+	frameRowKindMenu
+)
 
 type frameTerminalState struct {
 	altScreen      bool
@@ -237,10 +253,16 @@ func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class red
 		return nil
 	}
 	changedRows := changedFrameRows(r.last, frame)
+	scrollRows := changedRows
+	if class == redrawBufferViewport {
+		if _, exposed, ok := detectViewportRowShift(r.last, frame); ok {
+			scrollRows = exposed
+		}
+	}
 	if err := writeFrameDiff(counted, r.last, frame); err != nil {
 		return err
 	}
-	result = frameRenderResult{rows: len(changedRows), bytes: counted.count}
+	result = frameRenderResult{rows: len(scrollRows), bytes: counted.count}
 	r.last = cloneTerminalFrame(frame)
 	if stats != nil {
 		stats.Record(class, result)
@@ -259,6 +281,7 @@ func buildBufferFrame(state *bufferState, overlay *overlayState, menu *menuState
 	inactive := bufferInactive(overlay, menu, focused)
 	for row := 0; layout != nil && row < len(layout.rows) && row < len(frame.rows); row++ {
 		layoutRow := layout.rows[row]
+		frame.rows[row].id = frameRowID{kind: frameRowKindBuffer, anchor: layoutRow.start}
 		renderBufferFrameRow(frame.rows[row].cells, state, layoutRow.start, layoutRow.end, inactive, theme)
 	}
 
@@ -282,6 +305,7 @@ func renderOverlayFrame(frame *terminalFrame, overlay *overlayState, theme *uiTh
 	lines := overlay.renderLines(historyRows)
 
 	for row := 0; row < overlayTopPadRows(overlay); row++ {
+		frame.rows[topRow+row].id = frameRowID{kind: frameRowKindOverlay, anchor: topRow + row}
 		renderFilledFrameRow(frame.rows[topRow+row].cells, theme.hudPrefix())
 	}
 
@@ -291,16 +315,19 @@ func renderOverlayFrame(frame *terminalFrame, overlay *overlayState, theme *uiTh
 		if row < len(lines) {
 			line = lines[row]
 		}
+		frame.rows[startRow+row].id = frameRowID{kind: frameRowKindOverlay, anchor: startRow + row}
 		renderOverlayFrameLine(frame.rows[startRow+row].cells, line, overlay, theme)
 	}
 
 	if overlayPromptRows(overlay) > 0 {
 		promptRow := termRows - 1 - overlayBottomPadRows(overlay)
+		frame.rows[promptRow].id = frameRowID{kind: frameRowKindOverlay, anchor: promptRow}
 		renderOverlayPromptFrameRow(frame.rows[promptRow].cells, overlay, theme)
 	}
 
 	bottomStart := topRow + overlayTopPadRows(overlay) + historyRows + overlayPromptRows(overlay)
 	for row := 0; row < overlayBottomPadRows(overlay); row++ {
+		frame.rows[bottomStart+row].id = frameRowID{kind: frameRowKindOverlay, anchor: bottomStart + row}
 		renderFilledFrameRow(frame.rows[bottomStart+row].cells, theme.hudPrefix())
 	}
 }
@@ -309,6 +336,7 @@ func renderInlineStatusFrame(frame *terminalFrame, status string, theme *uiTheme
 	if frame == nil || status == "" || len(frame.rows) == 0 {
 		return
 	}
+	frame.rows[len(frame.rows)-1].id = frameRowID{kind: frameRowKindStatus, anchor: len(frame.rows) - 1}
 	runes := []rune(status)
 	if len(runes) > termCols {
 		runes = runes[:termCols]
@@ -322,16 +350,20 @@ func renderMenuFrame(frame *terminalFrame, menu *menuState, theme *uiTheme) {
 	}
 	inner := menu.width - 2
 	row := menu.y
+	frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 	renderFrameRowText(frame, row, menu.x, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), frameMenuBorderStyle(theme), 0)
 	row++
 	for i, item := range menu.items {
+		frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 		renderFrameRowText(frame, row, menu.x, formatMenuItemLine(item, inner), frameMenuItemStyle(theme, item.current, menu.hover == i), 0)
 		row++
 		if item.sepAfter && i < len(menu.items)-1 {
+			frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 			renderFrameRowText(frame, row, menu.x, formatMenuBorder("", inner, '├', '┤', '─'), frameMenuBorderStyle(theme), 0)
 			row++
 		}
 	}
+	frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 	renderFrameRowText(frame, row, menu.x, formatMenuBorder("", inner, '╰', '╯', '─'), frameMenuBorderStyle(theme), 0)
 }
 
@@ -414,6 +446,12 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 	}
 
 	changedRows := changedFrameRows(prev, next)
+	if shift, exposed, ok := detectViewportRowShift(prev, next); ok {
+		if err := writeViewportShift(stdout, next, shift, exposed); err != nil {
+			return err
+		}
+		return writeFrameCursor(stdout, next.cursor)
+	}
 
 	cursorChanged := prev.cursor != next.cursor
 	terminalChanged := prev.terminal != next.terminal
@@ -533,6 +571,82 @@ func changedFrameRows(prev, next *terminalFrame) []int {
 		}
 	}
 	return changed
+}
+
+func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
+	if !sameFrameGeometry(prev, next) || len(prev.rows) == 0 {
+		return 0, nil, false
+	}
+	for i := range prev.rows {
+		if prev.rows[i].id.kind != frameRowKindBuffer || next.rows[i].id.kind != frameRowKindBuffer {
+			return 0, nil, false
+		}
+	}
+
+	rows := len(prev.rows)
+	for shift := 1; shift < rows; shift++ {
+		match := true
+		for row := 0; row < rows-shift; row++ {
+			if prev.rows[row+shift].id != next.rows[row].id || !sameFrameRow(prev.rows[row+shift], next.rows[row]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			exposed := make([]int, 0, shift)
+			for row := rows - shift; row < rows; row++ {
+				exposed = append(exposed, row)
+			}
+			return shift, exposed, true
+		}
+	}
+	for shift := 1; shift < rows; shift++ {
+		match := true
+		for row := 0; row < rows-shift; row++ {
+			if prev.rows[row].id != next.rows[row+shift].id || !sameFrameRow(prev.rows[row], next.rows[row+shift]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			exposed := make([]int, 0, shift)
+			for row := 0; row < shift; row++ {
+				exposed = append(exposed, row)
+			}
+			return -shift, exposed, true
+		}
+	}
+	return 0, nil, false
+}
+
+func writeViewportShift(stdout io.Writer, next *terminalFrame, shift int, exposedRows []int) error {
+	if shift == 0 || len(exposedRows) == 0 {
+		return nil
+	}
+	if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "\x1b[1;1H"); err != nil {
+		return err
+	}
+	op := 'L'
+	count := -shift
+	if shift > 0 {
+		op = 'M'
+		count = shift
+	}
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d%c", count, op); err != nil {
+		return err
+	}
+	for _, row := range exposedRows {
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+			return err
+		}
+		if err := writeFrameRow(stdout, next.rows[row]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeFrameTerminalState(stdout io.Writer, prev, next frameTerminalState) error {

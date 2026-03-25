@@ -158,12 +158,6 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 		tmux: func(args ...string) (string, error) {
 			return tmux.run(args...)
 		},
-		notify: func(paths bModePaths) error {
-			if got, want := paths.pidPath, tmuxWindowPaths(tempDir, "$1.@2").pidPath; got != want {
-				t.Fatalf("notify pid path = %q, want %q", got, want)
-			}
-			return nil
-		},
 		runTerm: runTermWithTargets,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")
@@ -215,7 +209,6 @@ func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
 		tempDir: func() string { return tempDir },
 		dial:    func(string) (bModeClient, error) { return client, nil },
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTermWithTargets,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")
@@ -268,7 +261,6 @@ func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.
 		tempDir: func() string { return tempDir },
 		dial:    func(string) (bModeClient, error) { return client, nil },
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTermWithTargets,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")
@@ -320,7 +312,6 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 		tmux: func(args ...string) (string, error) {
 			return tmux.run(args...)
 		},
-		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTermWithTargets,
 	}
 
@@ -367,7 +358,6 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 			return nil, errors.New("dial unix: connect: no such file or directory")
 		},
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTermWithTargets,
 	}
 
@@ -410,7 +400,6 @@ func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
 		tempDir: func() string { return tempDir },
 		dial:    func(string) (bModeClient, error) { return client, nil },
 		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		notify:  func(paths bModePaths) error { return nil },
 		runTerm: runTermWithTargets,
 	}
 	paths := tmuxWindowPaths(tempDir, "$1.@2")

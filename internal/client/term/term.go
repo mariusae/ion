@@ -78,6 +78,7 @@ type diagnosticReporter interface {
 
 type Options struct {
 	AutoIndent bool
+	Refresh    <-chan struct{}
 }
 
 type overlayOutputQueue struct {
@@ -163,12 +164,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	refreshTerminalSize()
 	winchCh := make(chan os.Signal, 1)
 	signal.Notify(winchCh, syscall.SIGWINCH)
-	refreshCh := make(chan os.Signal, 1)
-	signal.Notify(refreshCh, syscall.SIGUSR1)
 	contCh := make(chan os.Signal, 1)
 	signal.Notify(contCh, syscall.SIGCONT)
 	defer signal.Stop(winchCh)
-	defer signal.Stop(refreshCh)
 	defer signal.Stop(contCh)
 	wakeR, wakeW, err := os.Pipe()
 	if err != nil {
@@ -178,7 +176,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	defer wakeW.Close()
 	signalDone := make(chan struct{})
 	defer close(signalDone)
-	go forwardWakeSignals(signalDone, wakeW, winchCh, refreshCh, contCh)
+	go forwardWakeSignals(signalDone, wakeW, winchCh, contCh)
+	if options.Refresh != nil {
+		go forwardWakeRequests(signalDone, wakeW, options.Refresh, wakeRefresh)
+	}
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -1444,17 +1445,29 @@ func isTTY(f *os.File) bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
-func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, refreshCh, contCh <-chan os.Signal) {
+func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, contCh <-chan os.Signal) {
 	for {
 		select {
 		case <-done:
 			return
 		case <-winchCh:
 			_, _ = wake.Write([]byte{wakeWinch})
-		case <-refreshCh:
-			_, _ = wake.Write([]byte{wakeRefresh})
 		case <-contCh:
 			_, _ = wake.Write([]byte{wakeRecover})
+		}
+	}
+}
+
+func forwardWakeRequests(done <-chan struct{}, wake io.Writer, ch <-chan struct{}, tag byte) {
+	for {
+		select {
+		case <-done:
+			return
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+			_, _ = wake.Write([]byte{tag})
 		}
 	}
 }

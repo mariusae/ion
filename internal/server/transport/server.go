@@ -13,7 +13,8 @@ import (
 
 // Server serves ion wire requests over one listener.
 type Server struct {
-	ws *workspace.Workspace
+	ws           *workspace.Workspace
+	changeNotify func()
 }
 
 type diagnosticReporter interface {
@@ -22,7 +23,13 @@ type diagnosticReporter interface {
 
 // New constructs a transport server over one shared workspace.
 func New(ws *workspace.Workspace) *Server {
-	return &Server{ws: ws}
+	return NewWithNotifier(ws, nil)
+}
+
+// NewWithNotifier constructs a transport server over one shared workspace and
+// runs notify after successful state-changing requests.
+func NewWithNotifier(ws *workspace.Workspace, notify func()) *Server {
+	return &Server{ws: ws, changeNotify: notify}
 }
 
 // Serve accepts connections until the listener is closed.
@@ -74,75 +81,99 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 	stdout.requestID = frame.RequestID
 	stderr.requestID = frame.RequestID
 
+	notify := false
+	var responseErr error
 	switch msg := msg.(type) {
 	case *wire.BootstrapRequest:
 		if err := session.Bootstrap(msg.Files); err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.OKResponse{})
+		notify = len(msg.Files) > 0
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.OKResponse{})
 	case *wire.OpenFilesRequest:
 		view, err := session.OpenFiles(msg.Files)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		notify = true
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.CommandRequest:
 		cont, err := session.Execute(msg.Script)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.CommandResponse{Continue: cont})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.CommandResponse{Continue: cont})
 	case *wire.CurrentViewRequest:
 		view, err := session.CurrentView()
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.MenuFilesRequest:
 		files, err := session.MenuFiles()
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.MenuFilesMessage{Files: files})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.MenuFilesMessage{Files: files})
 	case *wire.FocusRequest:
 		view, err := session.FocusFile(msg.ID)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		notify = true
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.AddressRequest:
 		view, err := session.SetAddress(msg.Expr)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		notify = true
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.SetDotRequest:
 		view, err := session.SetDot(msg.Start, msg.End)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.ReplaceRequest:
 		view, err := session.Replace(msg.Start, msg.End, msg.Text)
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.UndoRequest:
 		view, err := session.Undo()
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.SaveRequest:
 		status, err := session.Save()
 		if err != nil {
-			return writeError(conn, frame.RequestID, session.ID(), err)
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
 		}
-		return wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.SaveResponse{Status: status})
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.SaveResponse{Status: status})
 	default:
 		return writeError(conn, frame.RequestID, session.ID(), fmt.Errorf("unsupported request kind %d", frame.Kind))
 	}
+	if responseErr != nil {
+		return responseErr
+	}
+	if notify && s.changeNotify != nil {
+		s.changeNotify()
+	}
+	return nil
 }
 
 type eventWriter struct {

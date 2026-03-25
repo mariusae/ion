@@ -77,3 +77,80 @@ func TestServeAcceptsConcurrentConnections(t *testing.T) {
 		t.Fatal("client2.Bootstrap() blocked while client1 stayed connected")
 	}
 }
+
+func TestServerNotifierSkipsCurrentViewButFiresOnStateChanges(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	notified := make(chan struct{}, 8)
+	server := NewWithNotifier(workspace.New(), func() {
+		select {
+		case notified <- struct{}{}:
+		default:
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	client, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix() error = %v", err)
+	}
+	defer client.Close()
+
+	if err := client.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap(nil) error = %v", err)
+	}
+	select {
+	case <-notified:
+		t.Fatal("Bootstrap(nil) triggered notifier, want no wake for no-op bootstrap")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if _, err := client.CurrentView(); err != nil {
+		t.Fatalf("CurrentView() error = %v", err)
+	}
+	select {
+	case <-notified:
+		t.Fatal("CurrentView() triggered notifier, want no wake for resident refresh reads")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := client.Bootstrap([]string{"alpha.txt"}); err != nil {
+		t.Fatalf("Bootstrap(alpha.txt) error = %v", err)
+	}
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Bootstrap(alpha.txt) did not trigger notifier")
+	}
+}

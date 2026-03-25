@@ -109,6 +109,22 @@ type frameRenderResult struct {
 	bytes int
 }
 
+type frameRowEditKind uint8
+
+const (
+	frameRowEditNone frameRowEditKind = iota
+	frameRowEditReplace
+	frameRowEditInsert
+	frameRowEditDelete
+)
+
+type frameRowEdit struct {
+	kind  frameRowEditKind
+	start int
+	end   int
+	count int
+}
+
 type countingWriter struct {
 	w     io.Writer
 	count int
@@ -452,6 +468,15 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 		}
 		return writeFrameCursor(stdout, next.cursor)
 	}
+	if len(changedRows) == 1 {
+		row := changedRows[0]
+		if edit, ok := detectFrameRowEdit(prev.rows[row], next.rows[row]); ok {
+			if err := writeFrameRowEdit(stdout, row, next.rows[row], edit); err != nil {
+				return err
+			}
+			return writeFrameCursor(stdout, next.cursor)
+		}
+	}
 
 	cursorChanged := prev.cursor != next.cursor
 	terminalChanged := prev.terminal != next.terminal
@@ -528,6 +553,7 @@ func cloneTerminalFrame(frame *terminalFrame) *terminalFrame {
 		terminal: frame.terminal,
 	}
 	for i, row := range frame.rows {
+		clone.rows[i].id = row.id
 		clone.rows[i].cells = append([]frameCell(nil), row.cells...)
 	}
 	return clone
@@ -643,6 +669,130 @@ func writeViewportShift(stdout io.Writer, next *terminalFrame, shift int, expose
 			return err
 		}
 		if err := writeFrameRow(stdout, next.rows[row]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func detectFrameRowEdit(prev, next frameRow) (frameRowEdit, bool) {
+	if prev.id != next.id || prev.id.kind != frameRowKindBuffer || len(prev.cells) != len(next.cells) {
+		return frameRowEdit{}, false
+	}
+	start := 0
+	for start < len(prev.cells) && prev.cells[start] == next.cells[start] {
+		start++
+	}
+	if start == len(prev.cells) {
+		return frameRowEdit{}, false
+	}
+	end := len(prev.cells)
+	for end > start && prev.cells[end-1] == next.cells[end-1] {
+		end--
+	}
+	maxCount := end - start
+	if count, ok := detectFrameRowInsert(prev.cells, next.cells, start, maxCount); ok {
+		return frameRowEdit{kind: frameRowEditInsert, start: start, count: count}, true
+	}
+	if count, ok := detectFrameRowDelete(prev.cells, next.cells, start, maxCount); ok {
+		return frameRowEdit{kind: frameRowEditDelete, start: start, count: count}, true
+	}
+	return frameRowEdit{kind: frameRowEditReplace, start: start, end: end}, true
+}
+
+func detectFrameRowInsert(prev, next []frameCell, start, maxCount int) (int, bool) {
+	for count := 1; count <= maxCount && start+count <= len(prev); count++ {
+		if sameFrameCellSlice(prev[start:len(prev)-count], next[start+count:]) {
+			return count, true
+		}
+	}
+	return 0, false
+}
+
+func detectFrameRowDelete(prev, next []frameCell, start, maxCount int) (int, bool) {
+	for count := 1; count <= maxCount && start+count <= len(prev); count++ {
+		if sameFrameCellSlice(prev[start+count:], next[start:len(next)-count]) {
+			return count, true
+		}
+	}
+	return 0, false
+}
+
+func sameFrameCellSlice(a, b []frameCell) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeFrameRowEdit(stdout io.Writer, rowIndex int, row frameRow, edit frameRowEdit) error {
+	if edit.kind == frameRowEditNone {
+		return nil
+	}
+	if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
+		return err
+	}
+	switch edit.kind {
+	case frameRowEditInsert:
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dH\x1b[%d@", rowIndex+1, edit.start+1, edit.count); err != nil {
+			return err
+		}
+		return writeFrameRowRange(stdout, row, edit.start, edit.start+edit.count)
+	case frameRowEditDelete:
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dH\x1b[%dP", rowIndex+1, edit.start+1, edit.count); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dH", rowIndex+1, len(row.cells)-edit.count+1); err != nil {
+			return err
+		}
+		return writeFrameRowRange(stdout, row, len(row.cells)-edit.count, len(row.cells))
+	default:
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dH", rowIndex+1, edit.start+1); err != nil {
+			return err
+		}
+		return writeFrameRowRange(stdout, row, edit.start, edit.end)
+	}
+}
+
+func writeFrameRowRange(stdout io.Writer, row frameRow, start, end int) error {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(row.cells) {
+		end = len(row.cells)
+	}
+	if start >= end {
+		return nil
+	}
+	if _, err := io.WriteString(stdout, styleReset()); err != nil {
+		return err
+	}
+	currentStyle := ""
+	for i := start; i < end; i++ {
+		cell := row.cells[i]
+		if cell.style != currentStyle {
+			if cell.style == "" {
+				if _, err := io.WriteString(stdout, styleReset()); err != nil {
+					return err
+				}
+			} else {
+				if _, err := io.WriteString(stdout, cell.style); err != nil {
+					return err
+				}
+			}
+			currentStyle = cell.style
+		}
+		if _, err := io.WriteString(stdout, string(cell.r)); err != nil {
+			return err
+		}
+	}
+	if currentStyle != "" {
+		if _, err := io.WriteString(stdout, styleReset()); err != nil {
 			return err
 		}
 	}

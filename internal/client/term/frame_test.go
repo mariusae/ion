@@ -139,6 +139,7 @@ func TestWriteFrameDiffSingleRowChangeRewritesOnlyChangedRow(t *testing.T) {
 	t.Parallel()
 
 	prev := newTerminalFrame(2, 4)
+	prev.rows[1].id = frameRowID{kind: frameRowKindBuffer, anchor: 1}
 	prev.rows[0].cells[0] = frameCell{r: 'a'}
 	prev.rows[1].cells[0] = frameCell{r: 'b'}
 	prev.cursor = frameCursor{visible: true, row: 1, col: 0}
@@ -150,11 +151,11 @@ func TestWriteFrameDiffSingleRowChangeRewritesOnlyChangedRow(t *testing.T) {
 		t.Fatalf("writeFrameDiff() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[2;1H\x1b[2Kz") {
-		t.Fatalf("writeFrameDiff() = %q, want row-2 repaint for changed row", got)
+	if !strings.Contains(got, "\x1b[2;1H"+styleReset()+"z") {
+		t.Fatalf("writeFrameDiff() = %q, want row-local rewrite for changed cell", got)
 	}
-	if strings.Contains(got, "\x1b[1;1H\x1b[2K") {
-		t.Fatalf("writeFrameDiff() = %q, want row 1 left untouched", got)
+	if strings.Contains(got, "\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want no full-row clears for single-row edit", got)
 	}
 }
 
@@ -278,6 +279,18 @@ func TestFrameRendererRecoverForcesFullRender(t *testing.T) {
 	}
 }
 
+func TestCloneTerminalFramePreservesRowIDs(t *testing.T) {
+	t.Parallel()
+
+	frame := newTerminalFrame(2, 4)
+	frame.rows[0].id = frameRowID{kind: frameRowKindBuffer, anchor: 17}
+
+	clone := cloneTerminalFrame(frame)
+	if got, want := clone.rows[0].id, frame.rows[0].id; got != want {
+		t.Fatalf("clone row id = %#v, want %#v", got, want)
+	}
+}
+
 func TestDetectViewportRowShiftDownAndUp(t *testing.T) {
 	t.Parallel()
 
@@ -335,5 +348,65 @@ func TestWriteFrameDiffViewportShiftUsesLineMotion(t *testing.T) {
 	}
 	if strings.Contains(got, "\x1b[1;1H\x1b[2Ka") || strings.Contains(got, "\x1b[2;1H\x1b[2Kb") {
 		t.Fatalf("writeFrameDiff() = %q, want no full row-by-row repaint of shifted content", got)
+	}
+}
+
+func TestWriteFrameDiffSingleRowInsertUsesCharacterInsertion(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(1, 5)
+	next := newTerminalFrame(1, 5)
+	prev.rows[0].id = frameRowID{kind: frameRowKindBuffer, anchor: 0}
+	next.rows[0].id = prev.rows[0].id
+	for i, r := range []rune{'a', 'b', 'c'} {
+		prev.rows[0].cells[i] = frameCell{r: r}
+	}
+	for i, r := range []rune{'a', 'x', 'b', 'c'} {
+		next.rows[0].cells[i] = frameCell{r: r}
+	}
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[1;2H\x1b[1@") {
+		t.Fatalf("writeFrameDiff() = %q, want character-insert sequence", got)
+	}
+	if !strings.Contains(got, styleReset()+"x") {
+		t.Fatalf("writeFrameDiff() = %q, want inserted cell content only", got)
+	}
+	if strings.Contains(got, "\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want no full-row clear", got)
+	}
+}
+
+func TestWriteFrameDiffSingleRowDeleteUsesCharacterDeletion(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(1, 5)
+	next := newTerminalFrame(1, 5)
+	prev.rows[0].id = frameRowID{kind: frameRowKindBuffer, anchor: 0}
+	next.rows[0].id = prev.rows[0].id
+	for i, r := range []rune{'a', 'x', 'b', 'c'} {
+		prev.rows[0].cells[i] = frameCell{r: r}
+	}
+	for i, r := range []rune{'a', 'b', 'c'} {
+		next.rows[0].cells[i] = frameCell{r: r}
+	}
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[1;2H\x1b[1P") {
+		t.Fatalf("writeFrameDiff() = %q, want character-delete sequence", got)
+	}
+	if !strings.Contains(got, "\x1b[1;5H"+styleReset()+" ") {
+		t.Fatalf("writeFrameDiff() = %q, want rewritten tail cell after delete", got)
+	}
+	if strings.Contains(got, "\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want no full-row clear", got)
 	}
 }

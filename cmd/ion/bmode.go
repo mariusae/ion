@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	clientsession "ion/internal/client/session"
@@ -109,17 +110,25 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	if !ok {
 		return rt.runTerm(cfg, stdin, stdout, stderr)
 	}
+	effectiveCfg := cfg
+	if rt.getwd != nil {
+		wd, err := rt.getwd()
+		if err != nil {
+			return err
+		}
+		effectiveCfg.files = resolveBModeTargets(cfg.files, wd)
+	}
 	paths := tmuxWindowPaths(rt.tempDir(), ctx.Key())
 
 	client, err := rt.dial(paths.socketPath)
 	if err == nil {
 		defer client.Close()
-		if len(cfg.files) > 0 {
-			targets := clienttarget.ParseAll(cfg.files)
+		if len(effectiveCfg.files) > 0 {
+			targets := clienttarget.ParseAll(effectiveCfg.files)
 			if err := bootstrapMissingTargets(client, targets); err != nil {
 				return err
 			}
-			if _, err := clienttarget.Open(client, cfg.files); err != nil {
+			if _, err := clienttarget.Open(client, effectiveCfg.files); err != nil {
 				return err
 			}
 		}
@@ -135,7 +144,7 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	if err != nil {
 		return err
 	}
-	cmd := buildBServeCommand(exe, cfg)
+	cmd := buildBServeCommand(exe, effectiveCfg)
 	paneID, err := rt.tmux("split-window", "-c", wd, "-P", "-F", "#{pane_id}", cmd)
 	if err != nil {
 		return err
@@ -147,6 +156,56 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		}
 	}
 	return nil
+}
+
+func resolveBModeTargets(args []string, cwd string) []string {
+	targets := clienttarget.ParseAll(args)
+	resolved := make([]string, 0, len(targets))
+	for _, target := range targets {
+		path := target.Path
+		if path != "" && !filepath.IsAbs(path) {
+			path = filepath.Clean(filepath.Join(cwd, path))
+		}
+		resolved = append(resolved, formatResolvedTargetArg(clienttarget.Target{
+			Path:    path,
+			Address: target.Address,
+		}))
+	}
+	return resolved
+}
+
+func formatResolvedTargetArg(target clienttarget.Target) string {
+	if target.Address == "" {
+		return target.Path
+	}
+	switch target.Address[0] {
+	case '/', '?':
+		return target.Path + ":" + target.Address
+	}
+	line, colPlusOne, ok := formatResolvedNumericAddress(target.Address)
+	if ok {
+		if colPlusOne > 0 {
+			return fmt.Sprintf("%s:%d:%d", target.Path, line, colPlusOne)
+		}
+		return fmt.Sprintf("%s:%d", target.Path, line)
+	}
+	return target.Path + ":" + target.Address
+}
+
+func formatResolvedNumericAddress(addr string) (line int, colPlusOne int, ok bool) {
+	lineText, colText, hasCol := strings.Cut(addr, "+#")
+	line, err := strconv.Atoi(lineText)
+	if err != nil {
+		return 0, 0, false
+	}
+	if !hasCol {
+		return line, 0, true
+	}
+	colOffset, err := strconv.Atoi(colText)
+	if err != nil {
+		return 0, 0, false
+	}
+	return line, colOffset + 1, true
 }
 
 func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {

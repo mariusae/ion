@@ -327,7 +327,7 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 		if got, want := call[1:6], []string{"-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("split-window args = %#v, want %#v", got, want)
 		}
-		if got := call[6]; !strings.Contains(got, "exec '/tmp/bin/ion' -b-serve -- 'a.txt' 'b b.txt'") {
+		if got := call[6]; !strings.Contains(got, "exec '/tmp/bin/ion' -b-serve -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
 			t.Fatalf("split-window command = %q, want hidden b-serve exec", got)
 		}
 	}
@@ -366,7 +366,7 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 	}
 	for _, call := range tmux.calls {
 		if len(call) >= 7 && call[0] == "split-window" {
-			if !strings.Contains(call[6], "exec '/tmp/bin/ion' -A -b-serve -- 'a.txt'") {
+			if !strings.Contains(call[6], "exec '/tmp/bin/ion' -A -b-serve -- '/tmp/work/a.txt'") {
 				t.Fatalf("split-window command = %q, want -A propagated to b-serve", call[6])
 			}
 			return
@@ -421,6 +421,53 @@ func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
 	}
 	if len(client.openCalls) != 0 {
 		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
+	}
+}
+
+func TestRunBModeResolvesRelativeTargetsAgainstCallerCWDForResidentPane(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	callerWD := filepath.Join(tempDir, "dir2")
+	if err := os.MkdirAll(callerWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	client := &fakeBModeClient{}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		getwd:   func() (string, error) { return callerWD, nil },
+		tempDir: func() string { return tempDir },
+		dial:    func(string) (bModeClient, error) { return client, nil },
+		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "@2")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true, files: []string{"other.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	wantPath := filepath.Join(callerWD, "other.txt")
+	if got, want := client.bootstrapCalls, [][]string{{wantPath}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
 	}
 }
 

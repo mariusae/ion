@@ -283,6 +283,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return nil
 	}
 
+	var refreshBuffer func() error
+
 	executePending := func(final bool) (bool, error) {
 		for {
 			parser.ResetRunes(pending)
@@ -321,6 +323,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if !ok {
 				return true, nil
 			}
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
 		}
 	}
 
@@ -352,7 +357,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return executePending(false)
 	}
 
-	refreshBuffer := func() error {
+	refreshBuffer = func() error {
 		view, err := svc.CurrentView()
 		if err != nil {
 			if overlay.visible {

@@ -225,3 +225,55 @@ func TestFrameRendererRecordsStatsByClass(t *testing.T) {
 		t.Fatalf("buffer stats = %#v, want one diff render with nonzero bytes", got)
 	}
 }
+
+func TestWriteFrameDiffTerminalStateOnlyEmitsModeTransitions(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(1, 4)
+	next := cloneTerminalFrame(prev)
+	next.terminal.bracketedPaste = false
+	next.terminal.cursorShape = frameCursorShapeBlock
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[2 q") {
+		t.Fatalf("writeFrameDiff() = %q, want block cursor transition", got)
+	}
+	if !strings.Contains(got, "\x1b[?2004l") {
+		t.Fatalf("writeFrameDiff() = %q, want bracketed-paste disable", got)
+	}
+	if strings.Contains(got, "\x1b[2K") {
+		t.Fatalf("writeFrameDiff() = %q, want no row clears for terminal-state-only change", got)
+	}
+}
+
+func TestFrameRendererRecoverForcesFullRender(t *testing.T) {
+	t.Parallel()
+
+	renderer := newFrameRenderer()
+	stats := &frameRenderStats{
+		enabled: true,
+		counts:  make(map[redrawClass]*frameRenderAggregate),
+	}
+	frame := newTerminalFrame(1, 4)
+
+	var out bytes.Buffer
+	if err := renderer.Render(&out, frame, redrawInitial, true, stats); err != nil {
+		t.Fatalf("Render(initial) error = %v", err)
+	}
+
+	out.Reset()
+	if err := renderer.Recover(&out, frame, redrawRecover, stats); err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("Recover() = %q, want full-screen clear", got)
+	}
+	if stats.counts[redrawRecover] == nil || stats.counts[redrawRecover].full != 1 {
+		t.Fatalf("recover stats = %#v, want one full recover render", stats.counts[redrawRecover])
+	}
+}

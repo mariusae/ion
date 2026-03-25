@@ -54,6 +54,7 @@ var (
 const (
 	wakeWinch   = byte('w')
 	wakeRefresh = byte('r')
+	wakeRecover = byte('c')
 )
 
 type bufferState struct {
@@ -164,8 +165,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	signal.Notify(winchCh, syscall.SIGWINCH)
 	refreshCh := make(chan os.Signal, 1)
 	signal.Notify(refreshCh, syscall.SIGUSR1)
+	contCh := make(chan os.Signal, 1)
+	signal.Notify(contCh, syscall.SIGCONT)
 	defer signal.Stop(winchCh)
 	defer signal.Stop(refreshCh)
+	defer signal.Stop(contCh)
 	wakeR, wakeW, err := os.Pipe()
 	if err != nil {
 		return err
@@ -174,7 +178,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	defer wakeW.Close()
 	signalDone := make(chan struct{})
 	defer close(signalDone)
-	go forwardWakeSignals(signalDone, wakeW, winchCh, refreshCh)
+	go forwardWakeSignals(signalDone, wakeW, winchCh, refreshCh, contCh)
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -374,7 +378,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	fullRedraw := func(class redrawClass) error {
 		refreshTerminalSize()
-		return drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, true)
+		frame := buildBufferFrame(buffer, overlay, menu, theme, focused)
+		return renderer.Recover(stdout, frame, class, renderStats)
 	}
 
 	redrawRunningCommand := func() error {
@@ -1058,6 +1063,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 						}
+					case wakeRecover:
+						if inBufferMode {
+							if err := fullRedraw(redrawRecover); err != nil {
+								return err
+							}
+						}
 					}
 				}
 				continue
@@ -1433,7 +1444,7 @@ func isTTY(f *os.File) bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
-func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, refreshCh <-chan os.Signal) {
+func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, refreshCh, contCh <-chan os.Signal) {
 	for {
 		select {
 		case <-done:
@@ -1442,6 +1453,8 @@ func forwardWakeSignals(done <-chan struct{}, wake io.Writer, winchCh, refreshCh
 			_, _ = wake.Write([]byte{wakeWinch})
 		case <-refreshCh:
 			_, _ = wake.Write([]byte{wakeRefresh})
+		case <-contCh:
+			_, _ = wake.Write([]byte{wakeRecover})
 		}
 	}
 }

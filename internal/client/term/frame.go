@@ -8,9 +8,10 @@ import (
 )
 
 type terminalFrame struct {
-	title  string
-	rows   []frameRow
-	cursor frameCursor
+	title    string
+	rows     []frameRow
+	cursor   frameCursor
+	terminal frameTerminalState
 }
 
 type frameRow struct {
@@ -33,6 +34,23 @@ type frameRenderer struct {
 	initialized bool
 }
 
+type frameTerminalState struct {
+	altScreen      bool
+	mousePress     bool
+	mouseMotion    bool
+	focusReporting bool
+	mouseSGR       bool
+	bracketedPaste bool
+	cursorShape    frameCursorShape
+}
+
+type frameCursorShape int
+
+const (
+	frameCursorShapeBlock frameCursorShape = iota
+	frameCursorShapeBar
+)
+
 type redrawClass string
 
 const (
@@ -52,6 +70,7 @@ const (
 	redrawTheme           redrawClass = "theme"
 	redrawRefresh         redrawClass = "refresh"
 	redrawResize          redrawClass = "resize"
+	redrawRecover         redrawClass = "recover"
 )
 
 type frameRenderStats struct {
@@ -81,7 +100,8 @@ type countingWriter struct {
 
 func newTerminalFrame(rows, cols int) *terminalFrame {
 	frame := &terminalFrame{
-		rows: make([]frameRow, rows),
+		rows:     make([]frameRow, rows),
+		terminal: defaultFrameTerminalState(),
 	}
 	for row := range frame.rows {
 		frame.rows[row].cells = make([]frameCell, cols)
@@ -94,6 +114,18 @@ func newTerminalFrame(rows, cols int) *terminalFrame {
 
 func newFrameRenderer() *frameRenderer {
 	return &frameRenderer{}
+}
+
+func defaultFrameTerminalState() frameTerminalState {
+	return frameTerminalState{
+		altScreen:      true,
+		mousePress:     true,
+		mouseMotion:    true,
+		focusReporting: true,
+		mouseSGR:       true,
+		bracketedPaste: true,
+		cursorShape:    frameCursorShapeBar,
+	}
 }
 
 func newFrameRenderStats(out io.Writer) *frameRenderStats {
@@ -135,6 +167,7 @@ func (s *frameRenderStats) Report() error {
 	}
 	order := []redrawClass{
 		redrawInitial,
+		redrawRecover,
 		redrawResize,
 		redrawRefresh,
 		redrawBufferCursor,
@@ -172,6 +205,14 @@ func (r *frameRenderer) Reset() {
 	}
 	r.last = nil
 	r.initialized = false
+}
+
+func (r *frameRenderer) Recover(stdout io.Writer, frame *terminalFrame, class redrawClass, stats *frameRenderStats) error {
+	if r == nil {
+		return writeFullFrame(stdout, frame)
+	}
+	r.Reset()
+	return r.Render(stdout, frame, class, true, stats)
 }
 
 func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class redrawClass, forceFull bool, stats *frameRenderStats) error {
@@ -328,7 +369,20 @@ func writeFullFrame(stdout io.Writer, frame *terminalFrame) error {
 	if _, err := io.WriteString(stdout, bufferWindowTitleSequence(frame.title)); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdout, "\x1b[?1049h\x1b[?25l\x1b[6 q\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h\x1b[?2004h\x1b[2J"); err != nil {
+	prevTerminal := frameTerminalState{}
+	if frame.terminal.altScreen {
+		if _, err := io.WriteString(stdout, "\x1b[?1049h"); err != nil {
+			return err
+		}
+		prevTerminal.altScreen = true
+	}
+	if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
+		return err
+	}
+	if err := writeFrameTerminalState(stdout, prevTerminal, frame.terminal); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(stdout, "\x1b[2J"); err != nil {
 		return err
 	}
 	for row := range frame.rows {
@@ -355,11 +409,15 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 			return err
 		}
 	}
+	if err := writeFrameTerminalState(stdout, prev.terminal, next.terminal); err != nil {
+		return err
+	}
 
 	changedRows := changedFrameRows(prev, next)
 
 	cursorChanged := prev.cursor != next.cursor
-	if len(changedRows) == 0 && !cursorChanged && prev.title == next.title {
+	terminalChanged := prev.terminal != next.terminal
+	if len(changedRows) == 0 && !cursorChanged && !terminalChanged && prev.title == next.title {
 		return nil
 	}
 
@@ -426,9 +484,10 @@ func cloneTerminalFrame(frame *terminalFrame) *terminalFrame {
 		return nil
 	}
 	clone := &terminalFrame{
-		title:  frame.title,
-		rows:   make([]frameRow, len(frame.rows)),
-		cursor: frame.cursor,
+		title:    frame.title,
+		rows:     make([]frameRow, len(frame.rows)),
+		cursor:   frame.cursor,
+		terminal: frame.terminal,
 	}
 	for i, row := range frame.rows {
 		clone.rows[i].cells = append([]frameCell(nil), row.cells...)
@@ -474,6 +533,51 @@ func changedFrameRows(prev, next *terminalFrame) []int {
 		}
 	}
 	return changed
+}
+
+func writeFrameTerminalState(stdout io.Writer, prev, next frameTerminalState) error {
+	if prev.altScreen != next.altScreen {
+		seq := "\x1b[?1049l"
+		if next.altScreen {
+			seq = "\x1b[?1049h"
+		}
+		if _, err := io.WriteString(stdout, seq); err != nil {
+			return err
+		}
+	}
+	if prev.cursorShape != next.cursorShape {
+		shape := "2"
+		if next.cursorShape == frameCursorShapeBar {
+			shape = "6"
+		}
+		if _, err := fmt.Fprintf(stdout, "\x1b[%s q", shape); err != nil {
+			return err
+		}
+	}
+	for _, mode := range []struct {
+		prev bool
+		next bool
+		on   string
+		off  string
+	}{
+		{prev.mousePress, next.mousePress, "\x1b[?1000h", "\x1b[?1000l"},
+		{prev.mouseMotion, next.mouseMotion, "\x1b[?1002h", "\x1b[?1002l"},
+		{prev.focusReporting, next.focusReporting, "\x1b[?1004h", "\x1b[?1004l"},
+		{prev.mouseSGR, next.mouseSGR, "\x1b[?1006h", "\x1b[?1006l"},
+		{prev.bracketedPaste, next.bracketedPaste, "\x1b[?2004h", "\x1b[?2004l"},
+	} {
+		if mode.prev == mode.next {
+			continue
+		}
+		seq := mode.off
+		if mode.next {
+			seq = mode.on
+		}
+		if _, err := io.WriteString(stdout, seq); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeFrameCursor(stdout io.Writer, cursor frameCursor) error {

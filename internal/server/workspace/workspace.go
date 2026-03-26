@@ -198,6 +198,17 @@ func (w *Workspace) Save() (string, error) {
 	return w.session.SaveCurrent()
 }
 
+// PrintCurrentStatus writes the current file status line through the bound
+// command/session diagnostics stream.
+func (w *Workspace) PrintCurrentStatus(stdout, stderr io.Writer) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	restore := w.bindIO(stdout, stderr)
+	defer restore()
+	return w.session.PrintCurrentStatus()
+}
+
 func (w *Workspace) bindIO(stdout, stderr io.Writer) func() {
 	if stdout == nil {
 		stdout = io.Discard

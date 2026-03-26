@@ -13,21 +13,23 @@ var nextID atomic.Uint64
 
 // DownloadSession binds one client's I/O streams to the shared workspace.
 type DownloadSession struct {
-	id     uint64
-	ws     *workspace.Workspace
-	stdout io.Writer
-	stderr io.Writer
-	parser *cmdlang.Parser
+	id      uint64
+	ws      *workspace.Workspace
+	stdout  io.Writer
+	stderr  io.Writer
+	parser  *cmdlang.Parser
+	history navigationStack
 }
 
 // NewDownload constructs a server-side download session over one workspace.
 func NewDownload(ws *workspace.Workspace, stdout, stderr io.Writer) *DownloadSession {
 	return &DownloadSession{
-		id:     nextID.Add(1),
-		ws:     ws,
-		stdout: stdout,
-		stderr: stderr,
-		parser: cmdlang.NewParserRunes(nil),
+		id:      nextID.Add(1),
+		ws:      ws,
+		stdout:  stdout,
+		stderr:  stderr,
+		parser:  cmdlang.NewParserRunes(nil),
+		history: navigationStack{index: -1},
 	}
 }
 
@@ -41,7 +43,10 @@ func (s *DownloadSession) ID() uint64 {
 
 // Bootstrap loads the initial file set for this client.
 func (s *DownloadSession) Bootstrap(files []string) error {
-	return s.ws.Bootstrap(files, s.stdout, s.stderr)
+	if err := s.ws.Bootstrap(files, s.stdout, s.stderr); err != nil {
+		return err
+	}
+	return s.recordCurrentView()
 }
 
 // Execute parses and forwards one command script for this client.
@@ -58,7 +63,24 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 	if cmd == nil {
 		return true, nil
 	}
-	return s.ws.Execute(cmd, s.stdout, s.stderr)
+	switch cmd.Cmdc {
+	case 'N':
+		return s.navigate(1)
+	case 'P':
+		return s.navigate(-1)
+	case 'S':
+		return s.showNavigationStack()
+	}
+	ok, err := s.ws.Execute(cmd, s.stdout, s.stderr)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if shouldRecordCommandNavigation(cmd) {
+		if recErr := s.recordCurrentView(); recErr != nil {
+			return false, recErr
+		}
+	}
+	return ok, nil
 }
 
 // TermSession extends a download session with terminal-oriented server methods.
@@ -83,7 +105,12 @@ func (s *TermSession) CurrentView() (wire.BufferView, error) {
 
 // OpenFiles opens one explicit file list in the shared workspace.
 func (s *TermSession) OpenFiles(files []string) (wire.BufferView, error) {
-	return s.ws.OpenFiles(files, s.stdout, s.stderr)
+	view, err := s.ws.OpenFiles(files, s.stdout, s.stderr)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	s.recordView(view)
+	return view, nil
 }
 
 // MenuFiles returns the current workspace menu snapshot.
@@ -93,12 +120,22 @@ func (s *TermSession) MenuFiles() ([]wire.MenuFile, error) {
 
 // FocusFile changes this client's current file selection.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
-	return s.ws.FocusFile(id)
+	view, err := s.ws.FocusFile(id)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	s.recordView(view)
+	return view, nil
 }
 
 // SetAddress resolves one sam address against the current file.
 func (s *TermSession) SetAddress(expr string) (wire.BufferView, error) {
-	return s.ws.SetAddress(expr)
+	view, err := s.ws.SetAddress(expr)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	s.recordView(view)
+	return view, nil
 }
 
 // SetDot updates the current selection.

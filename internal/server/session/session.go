@@ -121,8 +121,6 @@ func (s *TermSession) NavigationStack() (wire.NavigationStack, error) {
 }
 
 // FocusFile changes this client's current file selection.
-// Records tentatively so a following SetAddress for the same file replaces
-// this entry rather than creating a duplicate.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
 	before, _ := s.ws.CurrentView()
 	view, err := s.ws.FocusFile(id)
@@ -130,7 +128,7 @@ func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
 		return wire.BufferView{}, err
 	}
 	if before.ID != view.ID {
-		s.recordViewTentative(view)
+		s.recordView(view)
 	}
 	return view, nil
 }

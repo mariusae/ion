@@ -17,9 +17,8 @@ type navigationPoint struct {
 }
 
 type navigationStack struct {
-	points    []navigationPoint
-	index     int
-	tentative bool // current entry can be replaced by same-file recording
+	points []navigationPoint
+	index  int
 }
 
 func navigationPointFromView(view wire.BufferView) (navigationPoint, bool) {
@@ -53,7 +52,6 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if len(s.points) == 0 {
 		s.points = []navigationPoint{point}
 		s.index = 0
-		s.tentative = false
 		return
 	}
 	if s.index < 0 {
@@ -65,25 +63,8 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if sameNavigationPoint(s.points[s.index], point) {
 		return
 	}
-	if s.tentative && sameNavigationFile(s.points[s.index], point) {
-		s.points[s.index] = point
-		s.tentative = false
-		return
-	}
-	s.tentative = false
 	s.points = append(s.points[:s.index+1], point)
 	s.index = len(s.points) - 1
-}
-
-// RecordTentative records a navigation point that may be replaced by a
-// subsequent Record for the same file. This is used by FocusFile so that
-// a FocusFile+SetAddress compound operation produces a single stack entry.
-func (s *navigationStack) RecordTentative(point navigationPoint) {
-	if s == nil {
-		return
-	}
-	s.Record(point)
-	s.tentative = true
 }
 
 func (s *navigationStack) Target(delta int) (navigationPoint, int, bool) {
@@ -127,15 +108,6 @@ func (s *DownloadSession) recordView(view wire.BufferView) {
 	}
 	if point, ok := navigationPointFromView(view); ok {
 		s.history.Record(point)
-	}
-}
-
-func (s *DownloadSession) recordViewTentative(view wire.BufferView) {
-	if s == nil {
-		return
-	}
-	if point, ok := navigationPointFromView(view); ok {
-		s.history.RecordTentative(point)
 	}
 }
 

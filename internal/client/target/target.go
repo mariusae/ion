@@ -2,6 +2,7 @@ package target
 
 import (
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -87,6 +88,9 @@ func Open(svc Service, args []string) (wire.BufferView, error) {
 			return wire.BufferView{}, err
 		}
 	}
+	if view, ok, err := openAddressedTarget(svc, targets, view); ok || err != nil {
+		return view, err
+	}
 	if id, ok := findMenuFileID(menu, targets[len(targets)-1].Path); ok {
 		view, err = svc.FocusFile(id)
 		if err != nil {
@@ -94,6 +98,18 @@ func Open(svc Service, args []string) (wire.BufferView, error) {
 		}
 	}
 	return ApplyLastAddress(svc, targets, view)
+}
+
+func openAddressedTarget(svc AddressService, targets []Target, current wire.BufferView) (wire.BufferView, bool, error) {
+	if len(targets) == 0 {
+		return current, false, nil
+	}
+	last := targets[len(targets)-1]
+	if last.Path == "" || last.Address == "" {
+		return current, false, nil
+	}
+	view, err := svc.SetAddress(quotedFileAddress(last.Path, last.Address))
+	return view, true, err
 }
 
 // ApplyLastAddress updates the current file selection to the final target address.
@@ -106,6 +122,12 @@ func ApplyLastAddress(svc AddressService, targets []Target, current wire.BufferV
 		return current, nil
 	}
 	return svc.SetAddress(last.Address)
+}
+
+func quotedFileAddress(path, address string) string {
+	escaped := regexp.QuoteMeta(path)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"` + address
 }
 
 func splitSearchSuffix(arg string) (string, string, bool) {

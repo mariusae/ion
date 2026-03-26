@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	clienttarget "ion/internal/client/target"
 	"ion/internal/proto/wire"
 	"ion/internal/server/workspace"
 )
@@ -252,7 +253,7 @@ func TestTermSessionShowNavigationStack(t *testing.T) {
 	}
 }
 
-func TestTermSessionFocusThenAddressProducesSingleNavEntry(t *testing.T) {
+func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -272,26 +273,9 @@ func TestTermSessionFocusThenAddressProducesSingleNavEntry(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
 
-	// Open file B via OpenFiles + FocusFile + SetAddress, simulating
-	// right-click-to-B on a token like "b.txt:2".
-	if _, err := sess.OpenFiles([]string{fileB}); err != nil {
-		t.Fatalf("OpenFiles() error = %v", err)
-	}
-	menu, err := sess.MenuFiles()
-	if err != nil {
-		t.Fatalf("MenuFiles() error = %v", err)
-	}
-	var bID int
-	for _, f := range menu {
-		if f.Name == fileB {
-			bID = f.ID
-		}
-	}
-	if _, err := sess.FocusFile(bID); err != nil {
-		t.Fatalf("FocusFile() error = %v", err)
-	}
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+	// Simulate right-click-to-B on a token like "b.txt:2".
+	if _, err := clienttarget.Open(sess, []string{fileB + ":2"}); err != nil {
+		t.Fatalf("target.Open() error = %v", err)
 	}
 	stderr.Reset()
 

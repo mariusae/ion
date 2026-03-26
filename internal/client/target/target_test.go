@@ -108,10 +108,10 @@ func TestOpenAppliesLastAddress(t *testing.T) {
 	if got, want := svc.openCalls, [][]string{{"one.txt", "two.txt"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() = %#v, want %#v", got, want)
 	}
-	if got, want := svc.focusCalls, []int{102}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() = %#v, want %#v", got, want)
+	if len(svc.focusCalls) != 0 {
+		t.Fatalf("FocusFile() = %#v, want none", svc.focusCalls)
 	}
-	if got, want := svc.addresses, []string{"/^func"}; !reflect.DeepEqual(got, want) {
+	if got, want := svc.addresses, []string{`"two\.txt"/^func`}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
 	}
 	if got, want := view.Name, "addressed"; got != want {
@@ -134,13 +134,34 @@ func TestOpenFocusesExistingFileInsteadOfReopeningIt(t *testing.T) {
 	if len(svc.openCalls) != 0 {
 		t.Fatalf("OpenFiles() calls = %#v, want none", svc.openCalls)
 	}
-	if got, want := svc.focusCalls, []int{7}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() = %#v, want %#v", got, want)
+	if len(svc.focusCalls) != 0 {
+		t.Fatalf("FocusFile() = %#v, want none", svc.focusCalls)
 	}
-	if got, want := svc.addresses, []string{"/unicode"}; !reflect.DeepEqual(got, want) {
+	if got, want := svc.addresses, []string{`"todo\.txt"/unicode`}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
 	}
 	if got, want := view.Name, "addressed"; got != want {
 		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+}
+
+func TestOpenWithoutAddressStillFocusesExistingFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "todo.txt", Current: false},
+			{ID: 8, Name: "other.txt", Current: true},
+		},
+	}
+	_, err := Open(svc, []string{"todo.txt"})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if got, want := svc.focusCalls, []int{7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusFile() = %#v, want %#v", got, want)
+	}
+	if len(svc.addresses) != 0 {
+		t.Fatalf("SetAddress() = %#v, want none", svc.addresses)
 	}
 }

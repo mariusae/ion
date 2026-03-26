@@ -63,6 +63,12 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if sameNavigationPoint(s.points[s.index], point) {
 		return
 	}
+	for i, existing := range s.points {
+		if sameNavigationPoint(existing, point) {
+			s.index = i
+			return
+		}
+	}
 	s.points = append(s.points[:s.index+1], point)
 	s.index = len(s.points) - 1
 }

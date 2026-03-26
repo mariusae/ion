@@ -235,6 +235,12 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	capture := term.NewOutputCapture(stdout, stderr)
 	ws := workspace.NewWithAutoIndent(cfg.autoindent)
+	targets := clienttarget.ParseAll(cfg.files)
+	if shouldPreloadAddressedStartup(targets) {
+		if err := preloadTargetWorkspace(ws, targets, capture.Stdout(), capture.Stderr()); err != nil {
+			return err
+		}
+	}
 	refresh := make(chan struct{}, 1)
 	server := transport.NewWithNotifier(ws, func() {
 		select {
@@ -243,9 +249,10 @@ func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	})
 	return withServerSocket(server, paths.socketPath, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
-		targets := clienttarget.ParseAll(cfg.files)
-		if err := bootstrapTargetSession(client, targets); err != nil {
-			return err
+		if !shouldPreloadAddressedStartup(targets) {
+			if err := bootstrapTargetSession(client, targets); err != nil {
+				return err
+			}
 		}
 		if _, err := clienttarget.Open(client, cfg.files); err != nil {
 			return err
@@ -389,9 +396,16 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 	targets := clienttarget.ParseAll(cfg.files)
 	capture := term.NewOutputCapture(stdout, stderr)
 	ws := workspace.NewWithAutoIndent(cfg.autoindent)
-	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
-		if err := bootstrapTargetSession(client, targets); err != nil {
+	if shouldPreloadAddressedStartup(targets) {
+		if err := preloadTargetWorkspace(ws, targets, capture.Stdout(), capture.Stderr()); err != nil {
 			return err
+		}
+	}
+	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
+		if !shouldPreloadAddressedStartup(targets) {
+			if err := bootstrapTargetSession(client, targets); err != nil {
+				return err
+			}
 		}
 		if _, err := clienttarget.Open(client, cfg.files); err != nil {
 			return err
@@ -406,6 +420,20 @@ func bootstrapTargetSession(client bModeClient, targets []clienttarget.Target) e
 		return client.Bootstrap(nil)
 	}
 	return client.Bootstrap(paths)
+}
+
+func shouldPreloadAddressedStartup(targets []clienttarget.Target) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	return targets[len(targets)-1].Address != ""
+}
+
+func preloadTargetWorkspace(ws *workspace.Workspace, targets []clienttarget.Target, stdout, stderr io.Writer) error {
+	if ws == nil {
+		return nil
+	}
+	return ws.Bootstrap(uniqueTargetPaths(targets), stdout, stderr)
 }
 
 func bootstrapMissingTargets(client bModeClient, targets []clienttarget.Target) error {

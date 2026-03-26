@@ -670,6 +670,23 @@ func TestBootstrapTargetSessionKeepsMissingTargetsFocusable(t *testing.T) {
 	}
 }
 
+func TestShouldPreloadAddressedStartup(t *testing.T) {
+	t.Parallel()
+
+	if shouldPreloadAddressedStartup(nil) {
+		t.Fatal("shouldPreloadAddressedStartup(nil) = true, want false")
+	}
+	if shouldPreloadAddressedStartup(clienttarget.ParseAll([]string{"README.md"})) {
+		t.Fatal("shouldPreloadAddressedStartup(non-addressed) = true, want false")
+	}
+	if !shouldPreloadAddressedStartup(clienttarget.ParseAll([]string{"README.md:/one"})) {
+		t.Fatal("shouldPreloadAddressedStartup(addressed final target) = false, want true")
+	}
+	if shouldPreloadAddressedStartup(clienttarget.ParseAll([]string{"README.md:/one", "go.mod"})) {
+		t.Fatal("shouldPreloadAddressedStartup(non-addressed final target) = true, want false")
+	}
+}
+
 func TestParseArgsRecognizesBMode(t *testing.T) {
 	t.Parallel()
 

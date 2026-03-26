@@ -698,6 +698,65 @@ func TestEditCommandWithoutArgumentReloadsCurrentFile(t *testing.T) {
 	}
 }
 
+func TestEditCommandWithoutArgumentReloadsLargeCurrentFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	large := strings.Repeat("x", text.MaxStringRunes+64) + "\n"
+	if err := os.WriteFile(path, []byte(large), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	name := text.NewStringFromUTF8(path)
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+	if err := loadUnreadFile(f); err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+	if err := resetFileContents(f); err != nil {
+		t.Fatalf("reset buffer locally: %v", err)
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader("stale\n")); err != nil {
+		t.Fatalf("replace buffer locally: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	sess.AddFile(f)
+	sess.Current = f
+
+	cmd, err := cmdlang.NewParser("e\n").Parse()
+	if err != nil {
+		t.Fatalf("parse edit: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute edit: %v", err)
+	}
+	if !ok {
+		t.Fatal("edit requested stop")
+	}
+
+	var out bytes.Buffer
+	if _, err := f.WriteTo(&out); err != nil {
+		t.Fatalf("write buffer: %v", err)
+	}
+	if got, want := out.String(), large; got != want {
+		t.Fatalf("buffer contents length = %d, want %d", len(got), len(want))
+	}
+}
+
 func TestSaveCurrentTrimsTrailingWhitespaceWhenAutoIndentEnabled(t *testing.T) {
 	t.Parallel()
 

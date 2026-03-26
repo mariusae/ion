@@ -1400,25 +1400,16 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	if err != nil {
 		return openFileError(name, err)
 	}
-	txt, _, err := textStringFromBytes(data)
-	if err != nil {
+	if err := resetFileContents(f); err != nil {
 		return err
 	}
-	if err := s.mutate(f, func(seq uint32) error {
-		end := text.Posn(f.B.Len())
-		if explicitName != "" {
-			sname := text.NewStringFromUTF8(name)
-			if err := f.LogSetName(&sname, seq); err != nil {
-				return err
-			}
-		}
-		if err := s.replaceLogged(f, txt, 0, end, seq); err != nil {
+	if explicitName != "" {
+		sname := text.NewStringFromUTF8(name)
+		if err := f.Name.DupString(&sname); err != nil {
 			return err
 		}
-		f.NDot = text.Range{}
-		f.Mark = text.Range{}
-		return nil
-	}); err != nil {
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
 	}
 	if meta, ok, err := statFile(name); err != nil {

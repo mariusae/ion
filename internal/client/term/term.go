@@ -55,6 +55,7 @@ const (
 	wakeWinch   = byte('w')
 	wakeRefresh = byte('r')
 	wakeRecover = byte('c')
+	wakeMenu    = byte('m')
 )
 
 type bufferState struct {
@@ -198,6 +199,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuSticky := menuStickyState{itemIndex: -1}
+	menuSawHover := false
+	menuLostReleaseSuspect := false
+	var menuLostReleaseTimer *time.Timer
 	renderer := newFrameRenderer()
 	renderStats := newFrameRenderStats(stderr)
 	defer renderStats.Report()
@@ -234,7 +238,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if token == "" {
 			return nil
 		}
-		view, err := clienttarget.Open(svc, []string{token})
+		view, err := clienttarget.OpenToken(svc, token)
 		if err != nil {
 			showOverlayDiagnostic(diagnosticText(err))
 			return nil
@@ -388,6 +392,29 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		refreshTerminalSize()
 		frame := buildBufferFrame(buffer, overlay, menu, theme, focused)
 		return renderer.Recover(stdout, frame, class, renderStats)
+	}
+
+	stopMenuLostReleaseTimer := func() {
+		if menuLostReleaseTimer == nil {
+			return
+		}
+		menuLostReleaseTimer.Stop()
+		menuLostReleaseTimer = nil
+	}
+
+	clearMenuLostRelease := func() {
+		stopMenuLostReleaseTimer()
+		menuLostReleaseSuspect = false
+	}
+
+	scheduleMenuLostRelease := func() {
+		if !menuLostReleaseSuspect {
+			return
+		}
+		stopMenuLostReleaseTimer()
+		menuLostReleaseTimer = time.AfterFunc(350*time.Millisecond, func() {
+			_, _ = wakeW.Write([]byte{wakeMenu})
+		})
 	}
 
 	redrawRunningCommand := func() error {
@@ -600,12 +627,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		menu = buildContextMenu(buffer, files, nav, clickX, clickY, menuSticky)
+		clearMenuLostRelease()
+		menuSawHover = menu.hover >= 0
 		return redraw(redrawMenuOpen)
 	}
 
 	executeMenuItem := func(item menuItem) (bool, error) {
 		menuSticky = nextMenuStickyState(menu, menu.hover, item)
 		menu.dismiss()
+		clearMenuLostRelease()
+		menuSawHover = false
 		switch item.kind {
 		case menuWrite:
 			msg, lines, err := saveWithCapture()
@@ -707,6 +738,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		btn := event.button & 3
 		if !event.pressed && (btn == 2 || btn == 3) {
+			clearMenuLostRelease()
+			menuSawHover = false
 			if menu.hover >= 0 && menu.hover < len(menu.items) {
 				done, err := executeMenuItem(menu.items[menu.hover])
 				if err != nil {
@@ -718,10 +751,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				menu.dismiss()
 			}
-			return false, redraw(redrawMenuClose)
+			return false, fullRedraw(redrawMenuClose)
 		}
 		if event.button >= 32 && event.button < 64 {
 			item := menu.itemAt(event.x, event.y)
+			if item >= 0 {
+				menuSawHover = true
+			}
+			if item < 0 && menuSawHover && (btn == 2 || btn == 3) && menu.outsideDistance(event.x, event.y) >= 2 {
+				menuLostReleaseSuspect = true
+			}
+			if menuLostReleaseSuspect && (btn == 2 || btn == 3) {
+				scheduleMenuLostRelease()
+			} else if btn != 2 && btn != 3 {
+				clearMenuLostRelease()
+			}
 			if menu.hover != item {
 				menu.hover = item
 				return false, fullRedraw(redrawMenuHover)
@@ -730,7 +774,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		if event.pressed || event.button == 64 || event.button == 65 {
 			menu.dismiss()
-			return false, redraw(redrawMenuClose)
+			clearMenuLostRelease()
+			menuSawHover = false
+			return false, fullRedraw(redrawMenuClose)
 		}
 		return false, nil
 	}
@@ -801,7 +847,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
-				return false, redraw(redrawMenuClose)
+				return false, fullRedraw(redrawMenuClose)
 			}
 			previous := snapshotBufferState(buffer)
 			buffer.markMode = false
@@ -1103,6 +1149,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 						}
+					case wakeMenu:
+						if inBufferMode && menu.visible && menuLostReleaseSuspect {
+							menu.dismiss()
+							clearMenuLostRelease()
+							menuSawHover = false
+							if err := fullRedraw(redrawMenuClose); err != nil {
+								return err
+							}
+						}
 					}
 				}
 				continue
@@ -1123,7 +1178,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if inBufferMode {
 			if overlay.visible {
 				if r == 0x1b {
-					key, mouse, err := readBufferEscape(reader)
+					key, mouse, err := readBufferEscape(reader, stdin)
 					if err != nil {
 						return err
 					}
@@ -1134,7 +1189,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyEsc:
 						if menu.visible {
 							menu.dismiss()
-							if err := redraw(redrawMenuClose); err != nil {
+							if err := fullRedraw(redrawMenuClose); err != nil {
 								return err
 							}
 							continue
@@ -1314,7 +1369,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				continue
 			}
 			if r == 0x1b {
-				key, mouse, err := readBufferEscape(reader)
+				key, mouse, err := readBufferEscape(reader, stdin)
 				if err != nil {
 					return err
 				}

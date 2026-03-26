@@ -2,8 +2,10 @@ package term
 
 import (
 	"bufio"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/proto/wire"
 )
@@ -15,7 +17,7 @@ func TestReadBufferEscapeMouse(t *testing.T) {
 	if _, _, err := reader.ReadRune(); err != nil {
 		t.Fatalf("prime reader with ESC: %v", err)
 	}
-	key, mouse, err := readBufferEscape(reader)
+	key, mouse, err := readBufferEscape(reader, nil)
 	if err != nil {
 		t.Fatalf("readBufferEscape() error = %v", err)
 	}
@@ -44,7 +46,7 @@ func TestReadBufferEscapeFocusEvents(t *testing.T) {
 	if _, _, err := reader.ReadRune(); err != nil {
 		t.Fatalf("prime reader with first ESC: %v", err)
 	}
-	key, mouse, err := readBufferEscape(reader)
+	key, mouse, err := readBufferEscape(reader, nil)
 	if err != nil {
 		t.Fatalf("readBufferEscape(focus-in) error = %v", err)
 	}
@@ -58,7 +60,7 @@ func TestReadBufferEscapeFocusEvents(t *testing.T) {
 	if _, _, err := reader.ReadRune(); err != nil {
 		t.Fatalf("prime reader with second ESC: %v", err)
 	}
-	key, mouse, err = readBufferEscape(reader)
+	key, mouse, err = readBufferEscape(reader, nil)
 	if err != nil {
 		t.Fatalf("readBufferEscape(focus-out) error = %v", err)
 	}
@@ -88,7 +90,7 @@ func TestReadBufferEscapeApplicationCursorArrows(t *testing.T) {
 		if _, _, err := reader.ReadRune(); err != nil {
 			t.Fatalf("%s prime reader with ESC: %v", tt.name, err)
 		}
-		key, mouse, err := readBufferEscape(reader)
+		key, mouse, err := readBufferEscape(reader, nil)
 		if err != nil {
 			t.Fatalf("%s readBufferEscape() error = %v", tt.name, err)
 		}
@@ -108,7 +110,7 @@ func TestReadBufferEscapeCSIArrowWithModifier(t *testing.T) {
 	if _, _, err := reader.ReadRune(); err != nil {
 		t.Fatalf("prime reader with ESC: %v", err)
 	}
-	key, mouse, err := readBufferEscape(reader)
+	key, mouse, err := readBufferEscape(reader, nil)
 	if err != nil {
 		t.Fatalf("readBufferEscape() error = %v", err)
 	}
@@ -146,6 +148,45 @@ func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	}
 	if got, want := state.dotEnd, 2; got != want {
 		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestReadBufferEscapeMouseWithFragmentedSequence(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		_, _ = w.Write([]byte("["))
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte("<0;3;1M"))
+		_ = w.Close()
+	}()
+
+	key, mouse, err := readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(fragmented) error = %v", err)
+	}
+	if key != keyMouse {
+		t.Fatalf("readBufferEscape(fragmented) key = %d, want keyMouse", key)
+	}
+	if mouse == nil {
+		t.Fatalf("fragmented mouse event = nil, want value")
+	}
+	if got, want := mouse.x, 2; got != want {
+		t.Fatalf("mouse.x = %d, want %d", got, want)
+	}
+	if got, want := mouse.y, 0; got != want {
+		t.Fatalf("mouse.y = %d, want %d", got, want)
+	}
+	if !mouse.pressed {
+		t.Fatalf("mouse.pressed = false, want true")
 	}
 }
 

@@ -304,6 +304,34 @@ func (m *menuState) itemAt(x, y int) int {
 	return -1
 }
 
+func (m *menuState) outsideDistance(x, y int) int {
+	if m == nil || !m.visible {
+		return 0
+	}
+	left := m.x
+	right := m.x + m.width - 1
+	top := m.y
+	bottom := m.y + m.height - 1
+	dx := 0
+	switch {
+	case x < left:
+		dx = left - x
+	case x > right:
+		dx = x - right
+	}
+	dy := 0
+	switch {
+	case y < top:
+		dy = top - y
+	case y > bottom:
+		dy = y - bottom
+	}
+	if dx > dy {
+		return dx
+	}
+	return dy
+}
+
 func dirtyMark(dirty bool) rune {
 	if dirty {
 		return '\''

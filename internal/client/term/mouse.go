@@ -1,6 +1,11 @@
 package term
 
-import "bufio"
+import (
+	"bufio"
+	"errors"
+	"os"
+	"syscall"
+)
 
 type mouseEvent struct {
 	button  int
@@ -20,8 +25,10 @@ func bufferViewRows(overlay *overlayState) int {
 	return rows
 }
 
-func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
-	if reader.Buffered() == 0 {
+func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, error) {
+	if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+		return 0, nil, err
+	} else if !ok {
 		return keyEsc, nil, nil
 	}
 	b, err := reader.ReadByte()
@@ -30,7 +37,9 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 	}
 	switch b {
 	case '[':
-		if reader.Buffered() == 0 {
+		if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+			return 0, nil, err
+		} else if !ok {
 			return keyEsc, nil, nil
 		}
 		b, err = reader.ReadByte()
@@ -77,7 +86,9 @@ func readBufferEscape(reader *bufio.Reader) (int, *mouseEvent, error) {
 			return keyEsc, nil, nil
 		}
 	case 'O':
-		if reader.Buffered() == 0 {
+		if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+			return 0, nil, err
+		} else if !ok {
 			return keyEsc, nil, nil
 		}
 		b, err = reader.ReadByte()
@@ -157,8 +168,41 @@ func decodeCSIKey(seq []byte) int {
 }
 
 func readBufferKey(reader *bufio.Reader) (int, error) {
-	key, _, err := readBufferEscape(reader)
+	key, _, err := readBufferEscape(reader, nil)
 	return key, err
+}
+
+func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
+	if reader.Buffered() > 0 {
+		return true, nil
+	}
+	if stdin == nil {
+		return false, nil
+	}
+	return waitForInputByte(stdin, escSequenceWait)
+}
+
+const escSequenceWait = 20_000 // 20ms in microseconds
+
+func waitForInputByte(stdin *os.File, timeoutUsec int64) (bool, error) {
+	if stdin == nil {
+		return false, nil
+	}
+	fd := int(stdin.Fd())
+	var readfds syscall.FdSet
+	fdSetAdd(&readfds, fd)
+	tv := syscall.Timeval{
+		Sec:  timeoutUsec / 1_000_000,
+		Usec: timeoutUsec % 1_000_000,
+	}
+	ready, err := syscall.Select(fd+1, &readfds, nil, nil, &tv)
+	if err != nil {
+		if errors.Is(err, syscall.EINTR) {
+			return false, nil
+		}
+		return false, err
+	}
+	return ready > 0 && fdSetHas(&readfds, fd), nil
 }
 
 func readMouseEvent(reader *bufio.Reader) (mouseEvent, error) {

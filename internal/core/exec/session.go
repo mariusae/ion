@@ -1472,7 +1472,7 @@ func (s *Session) openFiles(nameToken *text.String) error {
 		}
 		return s.openNamelessFile()
 	}
-	return s.openFileFields(list.fields)
+	return s.openFileFields(list.fields, true)
 }
 
 // OpenFilesPaths opens one explicit file list without reparsing a command token.
@@ -1480,7 +1480,16 @@ func (s *Session) OpenFilesPaths(files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
-	return s.openFileFields(files)
+	return s.openFileFields(files, true)
+}
+
+// OpenFilesPathsNoNameless opens one explicit file list without the plain `B`
+// special case that turns `B current-file` into a nameless buffer.
+func (s *Session) OpenFilesPathsNoNameless(files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	return s.openFileFields(files, false)
 }
 
 type openFilesSnapshot struct {
@@ -1496,6 +1505,17 @@ type openFilesSnapshot struct {
 func (s *Session) OpenFilesPathsAtomic(files []string) error {
 	snapshot := s.snapshotOpenFiles()
 	if err := s.OpenFilesPaths(files); err != nil {
+		s.restoreOpenFiles(snapshot)
+		return err
+	}
+	return nil
+}
+
+// OpenFilesPathsAtomicNoNameless opens one explicit file list atomically while
+// suppressing the plain `B current-file` nameless-buffer shortcut.
+func (s *Session) OpenFilesPathsAtomicNoNameless(files []string) error {
+	snapshot := s.snapshotOpenFiles()
+	if err := s.OpenFilesPathsNoNameless(files); err != nil {
 		s.restoreOpenFiles(snapshot)
 		return err
 	}
@@ -1543,8 +1563,8 @@ func (s *Session) restoreOpenFiles(snapshot openFilesSnapshot) {
 	s.nextFileID = snapshot.nextFileID
 }
 
-func (s *Session) openFileFields(fields []string) error {
-	if len(fields) == 1 {
+func (s *Session) openFileFields(fields []string, allowNamelessCurrent bool) error {
+	if allowNamelessCurrent && len(fields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
 			if shouldOpenNamelessForCurrent(current) {
 				return s.openNamelessFile()

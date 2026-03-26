@@ -117,7 +117,7 @@ func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 		return false, nil
 	}
 	paths := clienttarget.Paths(targets)
-	if err := s.ws.OpenFilesPaths(paths, s.stdout, s.stderr); err != nil {
+	if err := s.ws.OpenFilesPathsNoNameless(paths, s.stdout, s.stderr); err != nil {
 		return true, err
 	}
 	last := targets[len(targets)-1]
@@ -160,9 +160,19 @@ func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) 
 	if path == "" {
 		return wire.BufferView{}, fmt.Errorf("no target path")
 	}
-	view, err := s.ws.OpenFiles([]string{path}, s.stdout, s.stderr)
-	if err != nil {
-		return wire.BufferView{}, err
+	var view wire.BufferView
+	var err error
+	current, curErr := s.ws.CurrentView()
+	if curErr == nil && current.Name == path {
+		view = current
+	} else {
+		if err := s.ws.OpenFilesPathsNoNameless([]string{path}, s.stdout, s.stderr); err != nil {
+			return wire.BufferView{}, err
+		}
+		view, err = s.ws.CurrentView()
+		if err != nil {
+			return wire.BufferView{}, err
+		}
 	}
 	if address != "" {
 		view, err = s.ws.SetAddress(address)

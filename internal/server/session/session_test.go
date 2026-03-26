@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -324,6 +325,78 @@ func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
 		"*  " + fileB + ":#6,#11\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestExecuteAddressedBOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	sess := NewTerm(ws, nil, io.Discard)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := sess.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() before Execute error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file before Execute = %q, want %q", view.Name, file)
+	}
+
+	if _, err := sess.Execute("B " + file + ":2\n"); err != nil {
+		t.Fatalf("Execute(B current-file:2) error = %v", err)
+	}
+
+	view, err = sess.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() after Execute error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file after Execute = %q, want %q", view.Name, file)
+	}
+	if got, want := view.DotStart, 4; got != want {
+		t.Fatalf("DotStart = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 8; got != want {
+		t.Fatalf("DotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestOpenTargetOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	sess := NewTerm(ws, nil, io.Discard)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := sess.OpenTarget(file, "2")
+	if err != nil {
+		t.Fatalf("OpenTarget(current-file, 2) error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file after OpenTarget = %q, want %q", view.Name, file)
+	}
+	if got, want := view.DotStart, 4; got != want {
+		t.Fatalf("DotStart = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 8; got != want {
+		t.Fatalf("DotEnd = %d, want %d", got, want)
 	}
 }
 

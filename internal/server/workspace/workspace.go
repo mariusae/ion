@@ -128,6 +128,17 @@ func (w *Workspace) OpenFilesPaths(files []string, stdout, stderr io.Writer) err
 	return w.session.OpenFilesPathsAtomic(files)
 }
 
+// OpenFilesPathsNoNameless opens one explicit file list while suppressing the
+// plain `B current-file` shortcut that creates a nameless buffer.
+func (w *Workspace) OpenFilesPathsNoNameless(files []string, stdout, stderr io.Writer) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	restore := w.bindIO(stdout, stderr)
+	defer restore()
+	return w.session.OpenFilesPathsAtomicNoNameless(files)
+}
+
 // MenuFiles returns the current file-menu snapshot for the terminal client.
 func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
 	w.mu.Lock()

@@ -3,8 +3,10 @@ package session
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
+	clienttarget "ion/internal/client/target"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 	"ion/internal/server/workspace"
@@ -72,6 +74,15 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 	case 'S':
 		return s.showNavigationStack()
 	}
+	if handled, err := s.executeAddressedB(cmd); handled || err != nil {
+		if err != nil {
+			return false, err
+		}
+		if recErr := s.recordCurrentView(); recErr != nil {
+			return false, recErr
+		}
+		return true, nil
+	}
 	ok, err := s.ws.Execute(cmd, s.stdout, s.stderr)
 	if err != nil || !ok {
 		return ok, err
@@ -82,6 +93,39 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		}
 	}
 	return ok, nil
+}
+
+func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
+	if s == nil || cmd == nil || cmd.Cmdc != 'B' || cmd.Text == nil {
+		return false, nil
+	}
+	raw := strings.TrimRight(cmd.Text.UTF8(), "\x00")
+	rest := strings.TrimLeft(raw, " \t")
+	if rest == "" || rest[0] == '<' {
+		return false, nil
+	}
+	fields := strings.Fields(rest)
+	targets := clienttarget.ParseAll(fields)
+	hasAddress := false
+	for _, target := range targets {
+		if target.Address != "" {
+			hasAddress = true
+			break
+		}
+	}
+	if !hasAddress || len(targets) == 0 {
+		return false, nil
+	}
+	paths := clienttarget.Paths(targets)
+	if err := s.ws.OpenFilesPaths(paths, s.stdout, s.stderr); err != nil {
+		return true, err
+	}
+	last := targets[len(targets)-1]
+	if last.Address == "" {
+		return true, nil
+	}
+	_, err := s.ws.SetAddress(last.Address)
+	return true, err
 }
 
 // TermSession extends a download session with terminal-oriented server methods.

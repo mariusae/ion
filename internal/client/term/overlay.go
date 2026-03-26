@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	clienttarget "ion/internal/client/target"
 )
 
 const minOverlayRows = 1
@@ -560,22 +562,7 @@ func (o *overlayState) tokenAt(pos overlaySelectionPos) string {
 	for right > left && text[right-1] == ':' {
 		right--
 	}
-	lastNumEnd := -1
-	for i := left; i < right; i++ {
-		if text[i] != ':' || i+1 >= right || text[i+1] < '0' || text[i+1] > '9' {
-			continue
-		}
-		i++
-		for i < right && text[i] >= '0' && text[i] <= '9' {
-			i++
-		}
-		lastNumEnd = i
-		i--
-	}
-	if lastNumEnd > 0 && lastNumEnd < right {
-		right = lastNumEnd
-	}
-	return string(text[left:right])
+	return clienttarget.TrimToken(string(text[left:right]))
 }
 
 func tokenRune(r rune) bool {

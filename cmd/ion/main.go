@@ -121,11 +121,7 @@ func runDownload(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func runTerm(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.NewWithAutoIndent(cfg.autoindent)
-	return withLocalServer(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client) error {
-		return term.Run(cfg.files, stdin, stdout, stderr, client, capture, term.Options{AutoIndent: cfg.autoindent})
-	})
+	return runTermWithTargets(cfg, stdin, stdout, stderr)
 }
 
 func runRage(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {

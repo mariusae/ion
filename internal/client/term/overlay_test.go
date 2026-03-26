@@ -293,6 +293,17 @@ func TestOverlayTokenAtTrimsSuffixGarbage(t *testing.T) {
 	}
 }
 
+func TestOverlayTokenAtKeepsGenericAddressSuffix(t *testing.T) {
+	overlay := newOverlayState()
+	overlay.history = []overlayEntry{
+		{text: "foo.py:#56,#81"},
+	}
+
+	if got, want := overlay.tokenAt(overlaySelectionPos{line: 0, col: 10}), "foo.py:#56,#81"; got != want {
+		t.Fatalf("tokenAt() = %q, want %q", got, want)
+	}
+}
+
 func TestTrimOverlaySelection(t *testing.T) {
 	if got, want := trimOverlaySelection([]rune("  alpha beta \n")), "alpha beta"; got != want {
 		t.Fatalf("trimOverlaySelection() = %q, want %q", got, want)

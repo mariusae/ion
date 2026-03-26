@@ -317,3 +317,18 @@ func TestPlumbTokenTrimsFileLineGarbage(t *testing.T) {
 		t.Fatalf("plumbToken() = %q, want %q", got, want)
 	}
 }
+
+func TestPlumbTokenKeepsGenericAddressSuffix(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "foo.py:#56,#81\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	state.cursor = strings.Index("foo.py:#56,#81\n", "#56")
+
+	if got, want := plumbToken(state), "foo.py:#56,#81"; got != want {
+		t.Fatalf("plumbToken() = %q, want %q", got, want)
+	}
+}

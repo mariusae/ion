@@ -87,6 +87,40 @@ func TestParseSearchSuffix(t *testing.T) {
 	}
 }
 
+func TestParseGenericAddressSuffix(t *testing.T) {
+	t.Parallel()
+
+	got := Parse("foo.py:#56,#81")
+	want := Target{Path: "foo.py", Address: "#56,#81"}
+	if got != want {
+		t.Fatalf("Parse() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseGenericRegexpAddressSuffix(t *testing.T) {
+	t.Parallel()
+
+	got := Parse("foo.rs:/func.bar")
+	want := Target{Path: "foo.rs", Address: "/func.bar"}
+	if got != want {
+		t.Fatalf("Parse() = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrimTokenUsesLongestValidAddressedPrefix(t *testing.T) {
+	t.Parallel()
+
+	if got, want := TrimToken("src/main.go:29:21:use"), "src/main.go:29:21"; got != want {
+		t.Fatalf("TrimToken() = %q, want %q", got, want)
+	}
+	if got, want := TrimToken("foo.py:#56,#81"), "foo.py:#56,#81"; got != want {
+		t.Fatalf("TrimToken() = %q, want %q", got, want)
+	}
+	if got, want := TrimToken("foo.rs:/func.bar)"), "foo.rs:/func.bar"; got != want {
+		t.Fatalf("TrimToken() = %q, want %q", got, want)
+	}
+}
+
 func TestParsePrefersExistingLiteralPath(t *testing.T) {
 	t.Parallel()
 

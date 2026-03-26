@@ -118,6 +118,16 @@ func (w *Workspace) OpenFiles(files []string, stdout, stderr io.Writer) (wire.Bu
 	return w.currentView()
 }
 
+// OpenFilesPaths opens one explicit file list and returns the refreshed current view.
+func (w *Workspace) OpenFilesPaths(files []string, stdout, stderr io.Writer) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	restore := w.bindIO(stdout, stderr)
+	defer restore()
+	return w.session.OpenFilesPathsAtomic(files)
+}
+
 // MenuFiles returns the current file-menu snapshot for the terminal client.
 func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
 	w.mu.Lock()

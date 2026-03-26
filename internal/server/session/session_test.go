@@ -292,6 +292,41 @@ func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
 	}
 }
 
+func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(fileA, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.txt) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{fileA}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := sess.Execute("B " + fileB + ":2\n"); err != nil {
+		t.Fatalf("Execute(B file:2) error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+	want := "" +
+		"-  " + fileA + ":#0\n" +
+		"*  " + fileB + ":#6,#11\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func sameBufferView(a, b wire.BufferView) bool {
 	return a.ID == b.ID &&
 		a.Name == b.Name &&

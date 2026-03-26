@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	clienttarget "ion/internal/client/target"
 	"ion/internal/proto/wire"
 )
 
@@ -451,20 +452,5 @@ func plumbToken(state *bufferState) string {
 	for right > left && state.text[right-1] == ':' {
 		right--
 	}
-	lastNumEnd := -1
-	for i := left; i < right; i++ {
-		if state.text[i] != ':' || i+1 >= right || state.text[i+1] < '0' || state.text[i+1] > '9' {
-			continue
-		}
-		i++
-		for i < right && state.text[i] >= '0' && state.text[i] <= '9' {
-			i++
-		}
-		lastNumEnd = i
-		i--
-	}
-	if lastNumEnd > 0 && lastNumEnd < right {
-		right = lastNumEnd
-	}
-	return strings.TrimSpace(string(state.text[left:right]))
+	return clienttarget.TrimToken(strings.TrimSpace(string(state.text[left:right])))
 }

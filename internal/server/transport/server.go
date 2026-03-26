@@ -120,6 +120,13 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 			break
 		}
 		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.MenuFilesMessage{Files: files})
+	case *wire.NavigationStackRequest:
+		stack, err := session.NavigationStack()
+		if err != nil {
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
+		}
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.NavigationStackMessage{Stack: stack})
 	case *wire.FocusRequest:
 		view, err := session.FocusFile(msg.ID)
 		if err != nil {

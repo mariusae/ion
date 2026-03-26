@@ -29,6 +29,8 @@ const (
 	KindCurrentViewResponse
 	KindMenuFilesRequest
 	KindMenuFilesResponse
+	KindNavigationStackRequest
+	KindNavigationStackResponse
 	KindFocusRequest
 	KindAddressRequest
 	KindSetDotRequest
@@ -168,6 +170,11 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &MenuFilesRequest{}, nil
 	case KindMenuFilesResponse, KindMenuUpdateEvent:
 		var msg MenuFilesMessage
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindNavigationStackRequest:
+		return &NavigationStackRequest{}, nil
+	case KindNavigationStackResponse:
+		var msg NavigationStackMessage
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindFocusRequest:
 		var msg FocusRequest

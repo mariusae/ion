@@ -84,7 +84,7 @@ func TestBuildBufferFrameOverlaysMenuCells(t *testing.T) {
 		DotStart: 0,
 		DotEnd:   0,
 	})
-	menu := buildContextMenu(state, nil, 6, 3, menuStickyState{})
+	menu := buildContextMenu(state, nil, wire.NavigationStack{}, 6, 3, menuStickyState{})
 
 	frame := buildBufferFrame(state, nil, menu, theme, true)
 	border := frame.rows[menu.y].cells[menu.x]

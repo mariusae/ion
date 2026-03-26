@@ -595,7 +595,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		menu = buildContextMenu(buffer, files, clickX, clickY, menuSticky)
+		nav, err := svc.NavigationStack()
+		if err != nil {
+			return err
+		}
+		menu = buildContextMenu(buffer, files, nav, clickX, clickY, menuSticky)
 		return redraw(redrawMenuOpen)
 	}
 
@@ -645,6 +649,24 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, nil
 			}
 			done, _, err := executeDirect("/"+escapeSearchPattern(pattern)+"/\n", false)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, nil
+			}
+			if done {
+				return true, nil
+			}
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
+			buffer.status = ""
+			return false, nil
+		case menuHistoryPrev, menuHistoryNext:
+			line := "P\n"
+			if item.kind == menuHistoryNext {
+				line = "N\n"
+			}
+			done, _, err := executeDirect(line, true)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil

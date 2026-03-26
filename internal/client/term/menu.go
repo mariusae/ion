@@ -19,6 +19,8 @@ const (
 	menuLook
 	menuRegexp
 	menuPlumb
+	menuHistoryPrev
+	menuHistoryNext
 )
 
 type menuItem struct {
@@ -43,6 +45,8 @@ type menuState struct {
 
 type menuStickyState struct {
 	itemIndex          int
+	preferHistory      bool
+	historyKind        menuItemKind
 	preferPreviousFile bool
 	previousFileID     int
 }
@@ -58,7 +62,7 @@ func (m *menuState) dismiss() {
 	m.hover = -1
 }
 
-func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY int, sticky menuStickyState) *menuState {
+func buildContextMenu(buffer *bufferState, files []wire.MenuFile, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
 	menu := newMenuState()
 	if buffer == nil {
 		return menu
@@ -80,6 +84,14 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, clickX, clickY
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
 		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp, sepAfter: true},
 	)
+	if prev, ok := previousNavigationMenuItem(nav); ok {
+		menu.items = append(menu.items, prev)
+	}
+	if next, ok := nextNavigationMenuItem(nav, len(files) == 0); ok {
+		menu.items = append(menu.items, next)
+	} else if len(menu.items) > 0 && len(files) > 0 {
+		menu.items[len(menu.items)-1].sepAfter = true
+	}
 	for _, f := range files {
 		name := f.Name
 		if name == "" {
@@ -305,7 +317,36 @@ func currentMark(current bool) rune {
 	return ' '
 }
 
+func previousNavigationMenuItem(nav wire.NavigationStack) (menuItem, bool) {
+	if nav.Current <= 0 || nav.Current > len(nav.Entries)-1 {
+		return menuItem{}, false
+	}
+	return menuItem{
+		label:    " -  " + nav.Entries[nav.Current-1].Label,
+		shortcut: "(P)",
+		kind:     menuHistoryPrev,
+		sepAfter: nav.Current >= len(nav.Entries)-1,
+	}, true
+}
+
+func nextNavigationMenuItem(nav wire.NavigationStack, lastSection bool) (menuItem, bool) {
+	if nav.Current < 0 || nav.Current >= len(nav.Entries)-1 {
+		return menuItem{}, false
+	}
+	return menuItem{
+		label:    " -  " + nav.Entries[nav.Current+1].Label,
+		shortcut: "(N)",
+		kind:     menuHistoryNext,
+		sepAfter: !lastSection,
+	}, true
+}
+
 func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
+	if sticky.preferHistory {
+		if idx := menuItemIndexByKind(items, sticky.historyKind); idx >= 0 {
+			return idx
+		}
+	}
 	if sticky.preferPreviousFile {
 		if idx := menuItemIndexByFileID(items, sticky.previousFileID); idx >= 0 {
 			return idx
@@ -319,14 +360,20 @@ func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
 
 func nextMenuStickyState(menu *menuState, itemIndex int, item menuItem) menuStickyState {
 	next := menuStickyState{itemIndex: itemIndex}
-	if item.kind != menuFile {
+	switch item.kind {
+	case menuHistoryPrev, menuHistoryNext:
+		next.preferHistory = true
+		next.historyKind = item.kind
+		return next
+	case menuFile:
+		if currentID, ok := currentMenuFileID(menu); ok {
+			next.preferPreviousFile = true
+			next.previousFileID = currentID
+		}
+		return next
+	default:
 		return next
 	}
-	if currentID, ok := currentMenuFileID(menu); ok {
-		next.preferPreviousFile = true
-		next.previousFileID = currentID
-	}
-	return next
 }
 
 func currentMenuFileID(menu *menuState) (int, bool) {
@@ -344,6 +391,15 @@ func currentMenuFileID(menu *menuState) (int, bool) {
 func menuItemIndexByFileID(items []menuItem, fileID int) int {
 	for i, item := range items {
 		if item.kind == menuFile && item.fileID == fileID {
+			return i
+		}
+	}
+	return -1
+}
+
+func menuItemIndexByKind(items []menuItem, kind menuItemKind) int {
+	for i, item := range items {
+		if item.kind == kind {
 			return i
 		}
 	}

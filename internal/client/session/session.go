@@ -117,6 +117,19 @@ func (c *Client) MenuFiles() ([]wire.MenuFile, error) {
 	return append([]wire.MenuFile(nil), resp.Files...), nil
 }
 
+// NavigationStack returns the current per-client navigation history.
+func (c *Client) NavigationStack() (wire.NavigationStack, error) {
+	_, msg, err := c.roundTrip(&wire.NavigationStackRequest{})
+	if err != nil {
+		return wire.NavigationStack{}, err
+	}
+	resp, ok := msg.(*wire.NavigationStackMessage)
+	if !ok {
+		return wire.NavigationStack{}, fmt.Errorf("navigation-stack response type %T, want *wire.NavigationStackMessage", msg)
+	}
+	return resp.Stack, nil
+}
+
 // FocusFile changes the current file selection.
 func (c *Client) FocusFile(id int) (wire.BufferView, error) {
 	_, msg, err := c.roundTrip(&wire.FocusRequest{ID: id})

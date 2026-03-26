@@ -149,11 +149,15 @@ func (s *navigationStack) WriteTo(w io.Writer) error {
 		if i == s.index {
 			marker = '*'
 		}
-		if _, err := fmt.Fprintf(w, "%c  %s:%s\n", marker, point.name, point.addressString()); err != nil {
+		if _, err := fmt.Fprintf(w, "%c  %s\n", marker, point.displayLabel()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p navigationPoint) displayLabel() string {
+	return p.name + ":" + p.addressString()
 }
 
 func (p navigationPoint) addressString() string {
@@ -161,6 +165,20 @@ func (p navigationPoint) addressString() string {
 		return fmt.Sprintf("#%d", p.dotStart)
 	}
 	return fmt.Sprintf("#%d,#%d", p.dotStart, p.dotEnd)
+}
+
+func (s *DownloadSession) navigationStack() wire.NavigationStack {
+	if s == nil {
+		return wire.NavigationStack{Current: -1}
+	}
+	entries := make([]wire.NavigationEntry, 0, len(s.history.points))
+	for _, point := range s.history.points {
+		entries = append(entries, wire.NavigationEntry{Label: point.displayLabel()})
+	}
+	return wire.NavigationStack{
+		Entries: entries,
+		Current: s.history.index,
+	}
 }
 
 func restoreNavigationPoint(s *DownloadSession, point navigationPoint) (wire.BufferView, error) {

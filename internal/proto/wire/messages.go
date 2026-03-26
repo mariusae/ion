@@ -358,6 +358,64 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// NavigationStackRequest asks for the current per-client navigation stack.
+type NavigationStackRequest struct{}
+
+func (m *NavigationStackRequest) Kind() Kind { return KindNavigationStackRequest }
+
+func (m *NavigationStackRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+// NavigationStackMessage transports the formatted per-client navigation stack.
+type NavigationStackMessage struct {
+	Stack NavigationStack
+}
+
+func (m *NavigationStackMessage) Kind() Kind { return KindNavigationStackResponse }
+
+func (m *NavigationStackMessage) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := binary.Write(&b, binary.LittleEndian, int32(m.Stack.Current)); err != nil {
+		return nil, err
+	}
+	if err := writeUint32(&b, uint32(len(m.Stack.Entries))); err != nil {
+		return nil, err
+	}
+	for _, entry := range m.Stack.Entries {
+		if err := writeString(&b, entry.Label); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
+}
+
+func (m *NavigationStackMessage) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	var current int32
+	if err := binary.Read(r, binary.LittleEndian, &current); err != nil {
+		return err
+	}
+	n, err := readUint32(r)
+	if err != nil {
+		return err
+	}
+	entries := make([]NavigationEntry, 0, n)
+	for i := uint32(0); i < n; i++ {
+		label, err := readString(r)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, NavigationEntry{Label: label})
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("navigation stack has trailing data")
+	}
+	m.Stack = NavigationStack{
+		Entries: entries,
+		Current: int(current),
+	}
+	return nil
+}
+
 // FocusRequest changes one client's current file by menu index.
 type FocusRequest struct {
 	ID int

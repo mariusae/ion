@@ -20,7 +20,7 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	menu := buildContextMenu(state, []wire.MenuFile{
 		{ID: 0, Name: "in.txt", Dirty: true, Current: true},
 		{ID: 1, Name: "", Dirty: false, Current: false},
-	}, 10, 10, menuStickyState{itemIndex: -1})
+	}, wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
 
 	if !menu.visible {
 		t.Fatalf("menu.visible = false, want true")
@@ -131,9 +131,48 @@ func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 		previousFileID:     1,
 	}
 
-	menu := buildContextMenu(state, files, 10, 10, sticky)
+	menu := buildContextMenu(state, files, wire.NavigationStack{}, 10, 10, sticky)
 	if got, want := menu.hover, menuItemIndexByFileID(menu.items, 1); got != want {
 		t.Fatalf("menu.hover = %d, want previous file index %d", got, want)
+	}
+}
+
+func TestBuildContextMenuIncludesPreviousAndNextNavigationItems(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "b.txt",
+	})
+
+	nav := wire.NavigationStack{
+		Entries: []wire.NavigationEntry{
+			{Label: "a.txt:#0"},
+			{Label: "b.txt:#6,#10"},
+			{Label: "c.txt:#0"},
+		},
+		Current: 1,
+	}
+
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nav, 10, 10, menuStickyState{itemIndex: -1})
+	foundPrev := false
+	foundNext := false
+	for _, item := range menu.items {
+		if item.kind == menuHistoryPrev {
+			foundPrev = true
+			if got, want := item.label, " -  a.txt:#0"; got != want {
+				t.Fatalf("prev item label = %q, want %q", got, want)
+			}
+		}
+		if item.kind == menuHistoryNext {
+			foundNext = true
+			if got, want := item.label, " -  c.txt:#0"; got != want {
+				t.Fatalf("next item label = %q, want %q", got, want)
+			}
+		}
+	}
+	if !foundPrev || !foundNext {
+		t.Fatalf("foundPrev=%v foundNext=%v, want both true", foundPrev, foundNext)
 	}
 }
 
@@ -157,6 +196,56 @@ func TestNextMenuStickyStateForFileNavigationTargetsPreviousFile(t *testing.T) {
 		t.Fatalf("previousFileID = %d, want %d", got, want)
 	}
 	if got, want := sticky.itemIndex, 3; got != want {
+		t.Fatalf("itemIndex = %d, want %d", got, want)
+	}
+}
+
+func TestBuildContextMenuStickyHistoryHoverPrefersPreviousCommandKind(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "b.txt",
+	})
+
+	nav := wire.NavigationStack{
+		Entries: []wire.NavigationEntry{
+			{Label: "a.txt:#0"},
+			{Label: "b.txt:#6,#10"},
+		},
+		Current: 1,
+	}
+	sticky := menuStickyState{
+		itemIndex:     7,
+		preferHistory: true,
+		historyKind:   menuHistoryPrev,
+	}
+
+	menu := buildContextMenu(state, nil, nav, 10, 10, sticky)
+	if got, want := menu.hover, menuItemIndexByKind(menu.items, menuHistoryPrev); got != want {
+		t.Fatalf("menu.hover = %d, want previous history index %d", got, want)
+	}
+}
+
+func TestNextMenuStickyStateForHistoryNavigationTargetsCommandKind(t *testing.T) {
+	t.Parallel()
+
+	menu := &menuState{
+		items: []menuItem{
+			{kind: menuCut},
+			{kind: menuHistoryPrev},
+			{kind: menuFile, fileID: 2, current: true},
+		},
+	}
+
+	sticky := nextMenuStickyState(menu, 1, menu.items[1])
+	if !sticky.preferHistory {
+		t.Fatalf("preferHistory = false, want true")
+	}
+	if got, want := sticky.historyKind, menuHistoryPrev; got != want {
+		t.Fatalf("historyKind = %v, want %v", got, want)
+	}
+	if got, want := sticky.itemIndex, 1; got != want {
 		t.Fatalf("itemIndex = %d, want %d", got, want)
 	}
 }

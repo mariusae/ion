@@ -118,6 +118,11 @@ func (s *TermSession) MenuFiles() ([]wire.MenuFile, error) {
 	return s.ws.MenuFiles()
 }
 
+// NavigationStack returns this client's navigation stack snapshot.
+func (s *TermSession) NavigationStack() (wire.NavigationStack, error) {
+	return s.navigationStack(), nil
+}
+
 // FocusFile changes this client's current file selection.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
 	view, err := s.ws.FocusFile(id)

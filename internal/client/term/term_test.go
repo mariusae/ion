@@ -15,6 +15,7 @@ import (
 type fakeTermService struct {
 	view         wire.BufferView
 	menuFiles    []wire.MenuFile
+	navStack     wire.NavigationStack
 	focusID      int
 	setDotCalls  int
 	lastDotStart int
@@ -44,6 +45,10 @@ func (f *fakeTermService) OpenFiles(files []string) (wire.BufferView, error) {
 
 func (f *fakeTermService) MenuFiles() ([]wire.MenuFile, error) {
 	return append([]wire.MenuFile(nil), f.menuFiles...), nil
+}
+
+func (f *fakeTermService) NavigationStack() (wire.NavigationStack, error) {
+	return f.navStack, nil
 }
 
 func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
@@ -869,7 +874,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 		DotStart: 1,
 		DotEnd:   1,
 	})
-	menu := buildContextMenu(state, nil, 5, 8, menuStickyState{})
+	menu := buildContextMenu(state, nil, wire.NavigationStack{}, 5, 8, menuStickyState{})
 
 	var out bytes.Buffer
 	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, menu, theme, true, true); err != nil {

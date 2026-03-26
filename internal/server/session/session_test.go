@@ -252,6 +252,62 @@ func TestTermSessionShowNavigationStack(t *testing.T) {
 	}
 }
 
+func TestTermSessionFocusThenAddressProducesSingleNavEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(fileA, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.txt) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{fileA}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	// Open file B via OpenFiles + FocusFile + SetAddress, simulating
+	// right-click-to-B on a token like "b.txt:2".
+	if _, err := sess.OpenFiles([]string{fileB}); err != nil {
+		t.Fatalf("OpenFiles() error = %v", err)
+	}
+	menu, err := sess.MenuFiles()
+	if err != nil {
+		t.Fatalf("MenuFiles() error = %v", err)
+	}
+	var bID int
+	for _, f := range menu {
+		if f.Name == fileB {
+			bID = f.ID
+		}
+	}
+	if _, err := sess.FocusFile(bID); err != nil {
+		t.Fatalf("FocusFile() error = %v", err)
+	}
+	if _, err := sess.SetAddress("2"); err != nil {
+		t.Fatalf("SetAddress(2) error = %v", err)
+	}
+	stderr.Reset()
+
+	// The navigation stack should have exactly two entries:
+	// a.txt at bootstrap position, and b.txt at line 2 — not b.txt:#0.
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+	want := "" +
+		"-  " + fileA + ":#0\n" +
+		"*  " + fileB + ":#6,#11\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func sameBufferView(a, b wire.BufferView) bool {
 	return a.ID == b.ID &&
 		a.Name == b.Name &&

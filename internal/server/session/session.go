@@ -104,13 +104,10 @@ func (s *TermSession) CurrentView() (wire.BufferView, error) {
 }
 
 // OpenFiles opens one explicit file list in the shared workspace.
+// Navigation is not recorded here; the caller is expected to follow up
+// with FocusFile and/or SetAddress which handle recording.
 func (s *TermSession) OpenFiles(files []string) (wire.BufferView, error) {
-	view, err := s.ws.OpenFiles(files, s.stdout, s.stderr)
-	if err != nil {
-		return wire.BufferView{}, err
-	}
-	s.recordView(view)
-	return view, nil
+	return s.ws.OpenFiles(files, s.stdout, s.stderr)
 }
 
 // MenuFiles returns the current workspace menu snapshot.
@@ -124,12 +121,17 @@ func (s *TermSession) NavigationStack() (wire.NavigationStack, error) {
 }
 
 // FocusFile changes this client's current file selection.
+// Records tentatively so a following SetAddress for the same file replaces
+// this entry rather than creating a duplicate.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
+	before, _ := s.ws.CurrentView()
 	view, err := s.ws.FocusFile(id)
 	if err != nil {
 		return wire.BufferView{}, err
 	}
-	s.recordView(view)
+	if before.ID != view.ID {
+		s.recordViewTentative(view)
+	}
 	return view, nil
 }
 

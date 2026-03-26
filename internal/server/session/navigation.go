@@ -17,8 +17,9 @@ type navigationPoint struct {
 }
 
 type navigationStack struct {
-	points []navigationPoint
-	index  int
+	points    []navigationPoint
+	index     int
+	tentative bool // current entry can be replaced by same-file recording
 }
 
 func navigationPointFromView(view wire.BufferView) (navigationPoint, bool) {
@@ -34,15 +35,15 @@ func navigationPointFromView(view wire.BufferView) (navigationPoint, bool) {
 	}, true
 }
 
-func sameNavigationPoint(a, b navigationPoint) bool {
+func sameNavigationFile(a, b navigationPoint) bool {
 	if a.fileID != 0 && b.fileID != 0 {
-		if a.fileID != b.fileID {
-			return false
-		}
-	} else if a.name != b.name {
-		return false
+		return a.fileID == b.fileID
 	}
-	return a.dotStart == b.dotStart && a.dotEnd == b.dotEnd
+	return a.name == b.name
+}
+
+func sameNavigationPoint(a, b navigationPoint) bool {
+	return sameNavigationFile(a, b) && a.dotStart == b.dotStart && a.dotEnd == b.dotEnd
 }
 
 func (s *navigationStack) Record(point navigationPoint) {
@@ -52,6 +53,7 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if len(s.points) == 0 {
 		s.points = []navigationPoint{point}
 		s.index = 0
+		s.tentative = false
 		return
 	}
 	if s.index < 0 {
@@ -63,8 +65,25 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if sameNavigationPoint(s.points[s.index], point) {
 		return
 	}
+	if s.tentative && sameNavigationFile(s.points[s.index], point) {
+		s.points[s.index] = point
+		s.tentative = false
+		return
+	}
+	s.tentative = false
 	s.points = append(s.points[:s.index+1], point)
 	s.index = len(s.points) - 1
+}
+
+// RecordTentative records a navigation point that may be replaced by a
+// subsequent Record for the same file. This is used by FocusFile so that
+// a FocusFile+SetAddress compound operation produces a single stack entry.
+func (s *navigationStack) RecordTentative(point navigationPoint) {
+	if s == nil {
+		return
+	}
+	s.Record(point)
+	s.tentative = true
 }
 
 func (s *navigationStack) Target(delta int) (navigationPoint, int, bool) {
@@ -108,6 +127,15 @@ func (s *DownloadSession) recordView(view wire.BufferView) {
 	}
 	if point, ok := navigationPointFromView(view); ok {
 		s.history.Record(point)
+	}
+}
+
+func (s *DownloadSession) recordViewTentative(view wire.BufferView) {
+	if s == nil {
+		return
+	}
+	if point, ok := navigationPointFromView(view); ok {
+		s.history.RecordTentative(point)
 	}
 }
 

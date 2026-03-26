@@ -99,6 +99,14 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 		}
 		notify = true
 		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
+	case *wire.OpenTargetRequest:
+		view, err := session.OpenTarget(msg.Path, msg.Address)
+		if err != nil {
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
+		}
+		notify = true
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.BufferViewMessage{View: view})
 	case *wire.CommandRequest:
 		cont, err := session.Execute(msg.Script)
 		if err != nil {

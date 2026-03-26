@@ -39,6 +39,7 @@ type bModeClient interface {
 	MenuFiles() ([]wire.MenuFile, error)
 	FocusFile(id int) (wire.BufferView, error)
 	OpenFiles(files []string) (wire.BufferView, error)
+	OpenTarget(path, address string) (wire.BufferView, error)
 	SetAddress(expr string) (wire.BufferView, error)
 	Close() error
 }
@@ -53,6 +54,10 @@ func (c *wireBModeClient) Bootstrap(files []string) error {
 
 func (c *wireBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 	return c.client.OpenFiles(files)
+}
+
+func (c *wireBModeClient) OpenTarget(path, address string) (wire.BufferView, error) {
+	return c.client.OpenTarget(path, address)
 }
 
 func (c *wireBModeClient) MenuFiles() ([]wire.MenuFile, error) {

@@ -17,6 +17,7 @@ type fakeBModeClient struct {
 	bootstrapCalls [][]string
 	menuFiles      []wire.MenuFile
 	openCalls      [][]string
+	openTargets    []clienttarget.Target
 	focusCalls     []int
 	addresses      []string
 	nextID         int
@@ -71,6 +72,11 @@ func (c *fakeBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 		}
 		c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Name: name, Current: true})
 	}
+	return wire.BufferView{}, nil
+}
+
+func (c *fakeBModeClient) OpenTarget(path, address string) (wire.BufferView, error) {
+	c.openTargets = append(c.openTargets, clienttarget.Target{Path: path, Address: address})
 	return wire.BufferView{}, nil
 }
 
@@ -293,11 +299,14 @@ func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
 	if got, want := client.openCalls, [][]string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
 	}
-	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	if got, want := client.openTargets, []clienttarget.Target{{Path: "README.md", Address: "12+#3"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() calls = %#v, want %#v", got, want)
 	}
-	if got, want := client.addresses, []string{"12+#3"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
+	if len(client.focusCalls) != 0 {
+		t.Fatalf("FocusFile() calls = %#v, want none", client.focusCalls)
+	}
+	if len(client.addresses) != 0 {
+		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
 	}
 }
 
@@ -345,11 +354,14 @@ func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.
 	if len(client.openCalls) != 0 {
 		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
 	}
-	if got, want := client.focusCalls, []int{7}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	if got, want := client.openTargets, []clienttarget.Target{{Path: "todo.txt", Address: "/unicode"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() calls = %#v, want %#v", got, want)
 	}
-	if got, want := client.addresses, []string{"/unicode"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SetAddress() calls = %#v, want %#v", got, want)
+	if len(client.focusCalls) != 0 {
+		t.Fatalf("FocusFile() calls = %#v, want none", client.focusCalls)
+	}
+	if len(client.addresses) != 0 {
+		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
 	}
 }
 

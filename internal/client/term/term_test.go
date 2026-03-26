@@ -43,6 +43,12 @@ func (f *fakeTermService) OpenFiles(files []string) (wire.BufferView, error) {
 	return f.view, nil
 }
 
+func (f *fakeTermService) OpenTarget(path, address string) (wire.BufferView, error) {
+	f.view.Name = path
+	_ = address
+	return f.view, nil
+}
+
 func (f *fakeTermService) MenuFiles() ([]wire.MenuFile, error) {
 	return append([]wire.MenuFile(nil), f.menuFiles...), nil
 }

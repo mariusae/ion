@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"io"
 	"sync/atomic"
 
@@ -108,6 +109,25 @@ func (s *TermSession) CurrentView() (wire.BufferView, error) {
 // with FocusFile and/or SetAddress which handle recording.
 func (s *TermSession) OpenFiles(files []string) (wire.BufferView, error) {
 	return s.ws.OpenFiles(files, s.stdout, s.stderr)
+}
+
+// OpenTarget opens one file target and applies its address as one logical navigation.
+func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) {
+	if path == "" {
+		return wire.BufferView{}, fmt.Errorf("no target path")
+	}
+	view, err := s.ws.OpenFiles([]string{path}, s.stdout, s.stderr)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	if address != "" {
+		view, err = s.ws.SetAddress(address)
+		if err != nil {
+			return wire.BufferView{}, err
+		}
+	}
+	s.recordView(view)
+	return view, nil
 }
 
 // MenuFiles returns the current workspace menu snapshot.

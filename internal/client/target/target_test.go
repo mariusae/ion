@@ -12,6 +12,7 @@ import (
 type fakeService struct {
 	menuFiles   []wire.MenuFile
 	openCalls   [][]string
+	openTargets []Target
 	focusCalls  []int
 	addresses   []string
 	nextViewSeq int
@@ -45,6 +46,11 @@ func (f *fakeService) OpenFiles(files []string) (wire.BufferView, error) {
 		f.menuFiles = append(f.menuFiles, wire.MenuFile{ID: 100 + f.nextViewSeq, Name: file, Current: true})
 	}
 	return wire.BufferView{Name: name}, nil
+}
+
+func (f *fakeService) OpenTarget(path, address string) (wire.BufferView, error) {
+	f.openTargets = append(f.openTargets, Target{Path: path, Address: address})
+	return wire.BufferView{Name: "addressed", DotStart: 7, DotEnd: 7}, nil
 }
 
 func (f *fakeService) SetAddress(expr string) (wire.BufferView, error) {
@@ -105,14 +111,17 @@ func TestOpenAppliesLastAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if got, want := svc.openCalls, [][]string{{"one.txt", "two.txt"}}; !reflect.DeepEqual(got, want) {
+	if got, want := svc.openCalls, [][]string{{"one.txt"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OpenFiles() = %#v, want %#v", got, want)
+	}
+	if got, want := svc.openTargets, []Target{{Path: "two.txt", Address: "/^func"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() = %#v, want %#v", got, want)
 	}
 	if len(svc.focusCalls) != 0 {
 		t.Fatalf("FocusFile() = %#v, want none", svc.focusCalls)
 	}
-	if got, want := svc.addresses, []string{`"two\.txt"/^func`}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
+	if len(svc.addresses) != 0 {
+		t.Fatalf("SetAddress() = %#v, want none", svc.addresses)
 	}
 	if got, want := view.Name, "addressed"; got != want {
 		t.Fatalf("view.Name = %q, want %q", got, want)
@@ -134,11 +143,14 @@ func TestOpenFocusesExistingFileInsteadOfReopeningIt(t *testing.T) {
 	if len(svc.openCalls) != 0 {
 		t.Fatalf("OpenFiles() calls = %#v, want none", svc.openCalls)
 	}
+	if got, want := svc.openTargets, []Target{{Path: "todo.txt", Address: "/unicode"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() = %#v, want %#v", got, want)
+	}
 	if len(svc.focusCalls) != 0 {
 		t.Fatalf("FocusFile() = %#v, want none", svc.focusCalls)
 	}
-	if got, want := svc.addresses, []string{`"todo\.txt"/unicode`}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
+	if len(svc.addresses) != 0 {
+		t.Fatalf("SetAddress() = %#v, want none", svc.addresses)
 	}
 	if got, want := view.Name, "addressed"; got != want {
 		t.Fatalf("view.Name = %q, want %q", got, want)

@@ -64,6 +64,44 @@ func (m *OpenFilesRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// OpenTargetRequest carries one explicit addressed target open for a live
+// terminal client.
+type OpenTargetRequest struct {
+	Path    string
+	Address string
+}
+
+func (m *OpenTargetRequest) Kind() Kind { return KindOpenTargetRequest }
+
+func (m *OpenTargetRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeString(&b, m.Path); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Address); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *OpenTargetRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	path, err := readString(r)
+	if err != nil {
+		return err
+	}
+	address, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("open-target request has trailing data")
+	}
+	m.Path = path
+	m.Address = address
+	return nil
+}
+
 // OKResponse acknowledges one successful request with no typed payload.
 type OKResponse struct{}
 

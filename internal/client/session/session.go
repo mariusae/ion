@@ -104,6 +104,19 @@ func (c *Client) OpenFiles(files []string) (wire.BufferView, error) {
 	return resp.View, nil
 }
 
+// OpenTarget opens one file target and applies its final address as one logical operation.
+func (c *Client) OpenTarget(path, address string) (wire.BufferView, error) {
+	_, msg, err := c.roundTrip(&wire.OpenTargetRequest{Path: path, Address: address})
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	resp, ok := msg.(*wire.BufferViewMessage)
+	if !ok {
+		return wire.BufferView{}, fmt.Errorf("open-target response type %T, want *wire.BufferViewMessage", msg)
+	}
+	return resp.View, nil
+}
+
 // MenuFiles returns the current file-menu snapshot.
 func (c *Client) MenuFiles() ([]wire.MenuFile, error) {
 	_, msg, err := c.roundTrip(&wire.MenuFilesRequest{})

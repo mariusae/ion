@@ -34,6 +34,7 @@ type TermService interface {
 	DownloadService
 	CurrentView() (BufferView, error)
 	OpenFiles(files []string) (BufferView, error)
+	OpenTarget(path, address string) (BufferView, error)
 	MenuFiles() ([]MenuFile, error)
 	NavigationStack() (NavigationStack, error)
 	FocusFile(id int) (BufferView, error)

@@ -211,3 +211,78 @@ func TestOpenWithoutAddressStillFocusesExistingFile(t *testing.T) {
 		t.Fatalf("SetAddress() = %#v, want none", svc.addresses)
 	}
 }
+
+func TestOpenWithoutAddressUsesOpenTargetForMissingFinalFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{
+		menuFiles: []wire.MenuFile{
+			{ID: 7, Name: "loaded.txt", Current: true},
+		},
+	}
+	view, err := Open(svc, []string{"loaded.txt", "missing.txt"})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if len(svc.openCalls) != 0 {
+		t.Fatalf("OpenFiles() calls = %#v, want none", svc.openCalls)
+	}
+	if got, want := svc.openTargets, []Target{{Path: "missing.txt", Address: ""}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() = %#v, want %#v", got, want)
+	}
+	if len(svc.focusCalls) != 0 {
+		t.Fatalf("FocusFile() = %#v, want none", svc.focusCalls)
+	}
+	if got, want := view.Name, "addressed"; got != want {
+		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+}
+
+func TestParseAddressOnly(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := ParseAddressOnly("#56,#81"); !ok || got != "#56,#81" {
+		t.Fatalf("ParseAddressOnly(#56,#81) = (%q, %v), want (#56,#81, true)", got, ok)
+	}
+	if got, ok := ParseAddressOnly("5:2"); !ok || got != "5+#1" {
+		t.Fatalf("ParseAddressOnly(5:2) = (%q, %v), want (5+#1, true)", got, ok)
+	}
+	if got, ok := ParseAddressOnly("README.md:/one"); ok || got != "" {
+		t.Fatalf("ParseAddressOnly(file target) = (%q, %v), want (\"\", false)", got, ok)
+	}
+}
+
+func TestOpenTokenAppliesBareAddressToCurrentFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{}
+	view, err := OpenToken(svc, "#56,#81")
+	if err != nil {
+		t.Fatalf("OpenToken() error = %v", err)
+	}
+	if got, want := svc.addresses, []string{"#56,#81"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SetAddress() = %#v, want %#v", got, want)
+	}
+	if len(svc.openTargets) != 0 {
+		t.Fatalf("OpenTarget() = %#v, want none", svc.openTargets)
+	}
+	if got, want := view.Name, "addressed"; got != want {
+		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+}
+
+func TestOpenTokenKeepsAddressedFileTargetAsOpen(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{}
+	_, err := OpenToken(svc, "README.md:/one")
+	if err != nil {
+		t.Fatalf("OpenToken() error = %v", err)
+	}
+	if got, want := svc.openTargets, []Target{{Path: "README.md", Address: "/one"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenTarget() = %#v, want %#v", got, want)
+	}
+	if len(svc.addresses) != 0 {
+		t.Fatalf("SetAddress() = %#v, want none", svc.addresses)
+	}
+}

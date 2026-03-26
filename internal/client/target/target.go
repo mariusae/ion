@@ -31,6 +31,15 @@ type AddressService interface {
 	SetAddress(expr string) (wire.BufferView, error)
 }
 
+// ParseAddressOnly validates one bare address token like #12,#18 or /func.
+func ParseAddressOnly(arg string) (string, bool) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return "", false
+	}
+	return normalizeAddressSuffix(arg)
+}
+
 // Parse converts one external token like file.go:12 or file.go:/^func into a target.
 func Parse(arg string) Target {
 	if arg == "" {
@@ -43,6 +52,19 @@ func Parse(arg string) Target {
 		return Target{Path: path, Address: addr}
 	}
 	return Target{Path: arg}
+}
+
+// OpenToken resolves one plumbed token, treating bare address expressions as
+// addresses in the current file and addressed file tokens as open requests.
+func OpenToken(svc Service, token string) (wire.BufferView, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return wire.BufferView{}, nil
+	}
+	if addr, ok := ParseAddressOnly(token); ok {
+		return svc.SetAddress(addr)
+	}
+	return Open(svc, []string{token})
 }
 
 // ParseAll converts a file list into addressed targets.
@@ -90,6 +112,16 @@ func Open(svc Service, args []string) (wire.BufferView, error) {
 		}
 		_ = view
 		return svc.OpenTarget(last.Path, last.Address)
+	}
+
+	if _, ok := loaded[last.Path]; !ok {
+		toOpen := missingWithoutLast(missing, last.Path)
+		if len(toOpen) > 0 {
+			if _, err := svc.OpenFiles(toOpen); err != nil {
+				return wire.BufferView{}, err
+			}
+		}
+		return svc.OpenTarget(last.Path, "")
 	}
 
 	var view wire.BufferView

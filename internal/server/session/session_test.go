@@ -293,6 +293,42 @@ func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
 	}
 }
 
+func TestTargetOpenWithoutAddressRecordsNavigationImmediately(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(fileA, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.txt) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{fileA}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	if _, err := clienttarget.Open(sess, []string{fileB}); err != nil {
+		t.Fatalf("target.Open() error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+	want := "" +
+		"-  " + fileA + ":#0\n" +
+		"*  " + fileB + ":#0\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
 	t.Parallel()
 
@@ -397,6 +433,46 @@ func TestOpenTargetOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
 	}
 	if got, want := view.DotEnd, 8; got != want {
 		t.Fatalf("DotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestNavigationStackReusesExistingDestination(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.SetAddress("2"); err != nil {
+		t.Fatalf("SetAddress(2) error = %v", err)
+	}
+	if _, err := sess.SetAddress("3"); err != nil {
+		t.Fatalf("SetAddress(3) error = %v", err)
+	}
+	if _, err := sess.SetAddress("2"); err != nil {
+		t.Fatalf("SetAddress(2) second error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+	want := "" +
+		"-  " + file + ":#0\n" +
+		"*  " + file + ":#4,#8\n" +
+		"-  " + file + ":#8,#14\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}
 }
 

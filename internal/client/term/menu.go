@@ -346,6 +346,17 @@ func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
 		if idx := menuItemIndexByKind(items, sticky.historyKind); idx >= 0 {
 			return idx
 		}
+		// Fall back to the other history direction (e.g., prev when next
+		// disappears at end of stack).
+		other := menuHistoryPrev
+		if sticky.historyKind == menuHistoryPrev {
+			other = menuHistoryNext
+		}
+		if idx := menuItemIndexByKind(items, other); idx >= 0 {
+			return idx
+		}
+		// Stack is empty; no item should be selected.
+		return -1
 	}
 	if sticky.preferPreviousFile {
 		if idx := menuItemIndexByFileID(items, sticky.previousFileID); idx >= 0 {

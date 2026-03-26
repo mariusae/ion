@@ -250,6 +250,59 @@ func TestNextMenuStickyStateForHistoryNavigationTargetsCommandKind(t *testing.T)
 	}
 }
 
+func TestStickyHistoryFallsBackToOtherDirection(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "b.txt",
+	})
+
+	// At end of stack: prev exists, next does not.
+	nav := wire.NavigationStack{
+		Entries: []wire.NavigationEntry{
+			{Label: "a.txt:#0"},
+			{Label: "b.txt:#6,#10"},
+		},
+		Current: 1,
+	}
+	sticky := menuStickyState{
+		itemIndex:     8,
+		preferHistory: true,
+		historyKind:   menuHistoryNext,
+	}
+
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nav, 10, 10, sticky)
+	want := menuItemIndexByKind(menu.items, menuHistoryPrev)
+	if want < 0 {
+		t.Fatal("expected prev history item in menu")
+	}
+	if got := menu.hover; got != want {
+		t.Fatalf("menu.hover = %d, want prev history index %d", got, want)
+	}
+}
+
+func TestStickyHistoryEmptyStackSelectsNothing(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "b.txt",
+	})
+
+	// Empty stack: neither prev nor next exists.
+	sticky := menuStickyState{
+		itemIndex:     8,
+		preferHistory: true,
+		historyKind:   menuHistoryNext,
+	}
+
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, wire.NavigationStack{}, 10, 10, sticky)
+	if got := menu.hover; got != -1 {
+		t.Fatalf("menu.hover = %d, want -1 (no selection)", got)
+	}
+}
+
 func TestPlumbTokenTrimsFileLineGarbage(t *testing.T) {
 	t.Parallel()
 

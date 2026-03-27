@@ -191,18 +191,14 @@ func waitForInputByte(stdin *os.File, timeoutUsec int64) (bool, error) {
 	fd := int(stdin.Fd())
 	var readfds syscall.FdSet
 	fdSetAdd(&readfds, fd)
-	tv := syscall.Timeval{
-		Sec:  timeoutUsec / 1_000_000,
-		Usec: timeoutUsec % 1_000_000,
-	}
-	ready, err := syscall.Select(fd+1, &readfds, nil, nil, &tv)
-	if err != nil {
+	tv := timevalFromUsec(timeoutUsec)
+	if err := selectRead(fd+1, &readfds, &tv); err != nil {
 		if errors.Is(err, syscall.EINTR) {
 			return false, nil
 		}
 		return false, err
 	}
-	return ready > 0 && fdSetHas(&readfds, fd), nil
+	return fdSetHas(&readfds, fd), nil
 }
 
 func readMouseEvent(reader *bufio.Reader) (mouseEvent, error) {

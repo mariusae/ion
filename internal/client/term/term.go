@@ -1618,7 +1618,7 @@ func waitForTTYReady(stdin, wake *os.File) (bool, error) {
 	var readfds syscall.FdSet
 	fdSetAdd(&readfds, stdinFD)
 	fdSetAdd(&readfds, wakeFD)
-	if _, err := syscall.Select(maxFD+1, &readfds, nil, nil, nil); err != nil {
+	if err := selectRead(maxFD+1, &readfds, nil); err != nil {
 		if errors.Is(err, syscall.EINTR) {
 			return true, nil
 		}

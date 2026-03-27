@@ -901,6 +901,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		if key == keyFocusOut {
 			focused = false
+			if menu.visible {
+				menu.dismiss()
+				clearMenuLostRelease()
+				menuSawHover = false
+				return false, fullRedraw(redrawMenuClose)
+			}
 			return false, redraw(redrawTheme)
 		}
 		if key == keyMouse {
@@ -1307,6 +1313,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						continue
 					case keyFocusOut:
 						focused = false
+						if menu.visible {
+							menu.dismiss()
+							clearMenuLostRelease()
+							menuSawHover = false
+							if err := fullRedraw(redrawMenuClose); err != nil {
+								return err
+							}
+							continue
+						}
 						if err := redraw(redrawTheme); err != nil {
 							return err
 						}

@@ -246,9 +246,50 @@ func TestTermSessionShowNavigationStack(t *testing.T) {
 	}
 
 	want := "" +
-		"-  " + readme + ":#0\n" +
-		"-  " + readme + ":#6,#11\n" +
-		"*  " + goMod + ":#0\n"
+		" -  " + readme + ":#0\n" +
+		" -  " + readme + ":#6,#11\n" +
+		" -. " + goMod + ":#0\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("stderr after S = %q, want %q", got, want)
+	}
+}
+
+func TestTermSessionShowNavigationStackMarksDirtyCurrentEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	readme := filepath.Join(root, "README.md")
+	if err := os.WriteFile(readme, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{readme}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.SetAddress("2"); err != nil {
+		t.Fatalf("SetAddress(2) error = %v", err)
+	}
+	view, err := sess.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() error = %v", err)
+	}
+	if _, err := sess.Replace(view.DotStart, view.DotStart, "x"); err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	stderr.Reset()
+
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+
+	want := "" +
+		" -  " + readme + ":#0\n" +
+		"'-. " + readme + ":#6,#11\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("stderr after S = %q, want %q", got, want)
 	}
@@ -286,8 +327,8 @@ func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
 	want := "" +
-		"-  " + fileA + ":#0\n" +
-		"*  " + fileB + ":#6,#11\n"
+		" -  " + fileA + ":#0\n" +
+		" -. " + fileB + ":#6,#11\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}
@@ -322,8 +363,8 @@ func TestTargetOpenWithoutAddressRecordsNavigationImmediately(t *testing.T) {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
 	want := "" +
-		"-  " + fileA + ":#0\n" +
-		"*  " + fileB + ":#0\n"
+		" -  " + fileA + ":#0\n" +
+		" -. " + fileB + ":#0\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}
@@ -357,8 +398,8 @@ func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
 	want := "" +
-		"-  " + fileA + ":#0\n" +
-		"*  " + fileB + ":#6,#11\n"
+		" -  " + fileA + ":#0\n" +
+		" -. " + fileB + ":#6,#11\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}
@@ -468,9 +509,9 @@ func TestNavigationStackReusesExistingDestination(t *testing.T) {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
 	want := "" +
-		"-  " + file + ":#0\n" +
-		"*  " + file + ":#4,#8\n" +
-		"-  " + file + ":#8,#14\n"
+		" -  " + file + ":#0\n" +
+		" -. " + file + ":#4,#8\n" +
+		" -  " + file + ":#8,#14\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}

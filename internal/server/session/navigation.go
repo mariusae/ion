@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"ion/internal/core/cmdlang"
@@ -143,23 +142,45 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 	if s == nil {
 		return true, nil
 	}
-	return true, s.history.WriteTo(s.stderr)
-}
-
-func (s *navigationStack) WriteTo(w io.Writer) error {
-	if s == nil || w == nil {
-		return nil
+	if s.stderr == nil {
+		return true, nil
 	}
-	for i, point := range s.points {
-		marker := '-'
-		if i == s.index {
-			marker = '*'
+	menuFiles, err := s.ws.MenuFiles()
+	if err != nil {
+		return true, err
+	}
+	currentDirty := false
+	currentPoint := navigationPoint{}
+	hasCurrentPoint := false
+	for _, file := range menuFiles {
+		if !file.Current {
+			continue
 		}
-		if _, err := fmt.Fprintf(w, "%c  %s\n", marker, point.displayLabel()); err != nil {
-			return err
+		currentDirty = file.Dirty
+		if view, err := s.ws.CurrentView(); err == nil {
+			if point, ok := navigationPointFromView(view); ok {
+				currentPoint = point
+				hasCurrentPoint = true
+			}
+		}
+		break
+	}
+	for i, point := range s.history.points {
+		if i == s.history.index {
+			mod := ' '
+			if currentDirty && (!hasCurrentPoint || sameNavigationFile(point, currentPoint)) {
+				mod = '\''
+			}
+			if _, err := fmt.Fprintf(s.stderr, "%c-. %s\n", mod, point.displayLabel()); err != nil {
+				return true, err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(s.stderr, " -  %s\n", point.displayLabel()); err != nil {
+			return true, err
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func (p navigationPoint) displayLabel() string {

@@ -50,7 +50,7 @@ func (b *Buffer) Insert(q0 Posn, s []rune) error {
 		if cacheLen+n <= MaxBlock {
 			t := cacheLen + n
 			m = n
-			if b.blocks == nil {
+			if len(b.blocks) == 0 {
 				if cacheLen != 0 {
 					return fmt.Errorf("bufinsert inconsistent cache")
 				}

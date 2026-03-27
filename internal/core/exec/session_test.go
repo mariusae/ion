@@ -772,7 +772,7 @@ func TestEditCommandWithoutArgumentReloadsLargeCurrentFile(t *testing.T) {
 
 	root := t.TempDir()
 	path := filepath.Join(root, "a.txt")
-	large := strings.Repeat("x", text.MaxStringRunes+64) + "\n"
+	large := strings.Repeat("x", text.MaxBlock+64) + "\n"
 	if err := os.WriteFile(path, []byte(large), 0o644); err != nil {
 		t.Fatalf("write a.txt: %v", err)
 	}

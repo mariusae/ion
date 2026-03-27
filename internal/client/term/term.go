@@ -1288,6 +1288,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.moveLeft()
 					case keyRight:
 						overlay.moveRight()
+					case keyAltLeft:
+						overlay.moveWordLeft()
+					case keyAltRight:
+						overlay.moveWordRight()
 					case keyHome:
 						overlay.moveHome()
 					case keyEnd:
@@ -1298,10 +1302,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.recallNext()
 					case keyPgUp:
 						overlay.scrollOlder(5)
+					case keyAltPageUp:
+						overlay.scrollOlder(5)
 					case keyPgDn:
 						overlay.scrollNewer(5)
 					case keyDel:
 						overlay.deleteForward()
+					case keyAltBackspace:
+						overlay.killWord()
 					case keyFocusIn:
 						focused = true
 						if err := refreshThemeOnFocus(); err != nil {
@@ -1339,7 +1347,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					overlayClass := redrawOverlayInput
 					switch key {
-					case keyUp, keyDown, keyPgUp, keyPgDn:
+					case keyUp, keyDown, keyPgUp, keyAltPageUp, keyPgDn:
 						overlayClass = redrawOverlayHistory
 					}
 					if !overlay.visible {
@@ -1389,11 +1397,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					overlay.recallNext()
 					overlayClass = redrawOverlayHistory
 				case 0x15:
-					overlay.killLine()
+					overlay.killToStart()
 				case 0x17:
 					overlay.killWord()
 				case 0x0b:
-					overlay.clearHistory()
+					overlay.killLine()
+				case 0x16:
+					overlay.scrollNewer(5)
 					overlayClass = redrawOverlayHistory
 				default:
 					if r >= 32 || r == '\t' {

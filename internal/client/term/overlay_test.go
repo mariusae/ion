@@ -79,6 +79,69 @@ func TestOverlayOpenPrefillReplacesDraft(t *testing.T) {
 	}
 }
 
+func TestOverlayWordMovementUsesWordBoundaries(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("alpha beta gamma")
+
+	overlay.moveWordLeft()
+	if got, want := overlay.cursor, 11; got != want {
+		t.Fatalf("moveWordLeft() cursor = %d, want %d", got, want)
+	}
+	overlay.moveWordLeft()
+	if got, want := overlay.cursor, 6; got != want {
+		t.Fatalf("second moveWordLeft() cursor = %d, want %d", got, want)
+	}
+	overlay.moveWordRight()
+	if got, want := overlay.cursor, 11; got != want {
+		t.Fatalf("moveWordRight() cursor = %d, want %d", got, want)
+	}
+}
+
+func TestOverlayKillWordUsesWordBoundaries(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("alpha  beta")
+	overlay.moveEnd()
+
+	overlay.killWord()
+
+	if got, want := string(overlay.input), "alpha  "; got != want {
+		t.Fatalf("killWord() input = %q, want %q", got, want)
+	}
+	if got, want := overlay.cursor, 7; got != want {
+		t.Fatalf("killWord() cursor = %d, want %d", got, want)
+	}
+}
+
+func TestOverlayKillToStartAndKillLineRespectCursor(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("alpha beta")
+	overlay.cursor = 6
+
+	overlay.killToStart()
+	if got, want := string(overlay.input), "beta"; got != want {
+		t.Fatalf("killToStart() input = %q, want %q", got, want)
+	}
+	if got, want := overlay.cursor, 0; got != want {
+		t.Fatalf("killToStart() cursor = %d, want %d", got, want)
+	}
+
+	overlay.open("alpha beta")
+	overlay.cursor = 6
+	overlay.killLine()
+	if got, want := string(overlay.input), "alpha "; got != want {
+		t.Fatalf("killLine() input = %q, want %q", got, want)
+	}
+	if got, want := overlay.cursor, 6; got != want {
+		t.Fatalf("killLine() cursor = %d, want %d", got, want)
+	}
+}
+
 func TestOutputCaptureFlushesBufferedLines(t *testing.T) {
 	t.Parallel()
 

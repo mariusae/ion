@@ -135,7 +135,18 @@ func (o *overlayState) deleteForward() {
 }
 
 func (o *overlayState) killLine() {
-	o.input = o.input[:0]
+	if o.cursor >= len(o.input) {
+		return
+	}
+	o.input = o.input[:o.cursor]
+}
+
+func (o *overlayState) killToStart() {
+	if o.cursor <= 0 {
+		return
+	}
+	next := append([]rune{}, o.input[o.cursor:]...)
+	o.input = next
 	o.cursor = 0
 }
 
@@ -143,13 +154,7 @@ func (o *overlayState) killWord() {
 	if o.cursor == 0 {
 		return
 	}
-	start := o.cursor
-	for start > 0 && o.input[start-1] == ' ' {
-		start--
-	}
-	for start > 0 && o.input[start-1] != ' ' {
-		start--
-	}
+	start := prevWordStart(o.input, o.cursor)
 	next := append([]rune{}, o.input[:start]...)
 	next = append(next, o.input[o.cursor:]...)
 	o.input = next
@@ -174,6 +179,14 @@ func (o *overlayState) moveHome() {
 
 func (o *overlayState) moveEnd() {
 	o.cursor = len(o.input)
+}
+
+func (o *overlayState) moveWordLeft() {
+	o.cursor = prevWordStart(o.input, o.cursor)
+}
+
+func (o *overlayState) moveWordRight() {
+	o.cursor = nextWordStart(o.input, o.cursor)
 }
 
 func (o *overlayState) addCommand(text string) {

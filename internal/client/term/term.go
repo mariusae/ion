@@ -972,7 +972,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 					if doubleClick {
 						buffer.markMode = false
-						start, end := wordSpanAt(buffer.text, pos)
+						start, end := doubleClickSpanAt(buffer.text, pos)
 						if start < end {
 							mouseSelecting = false
 							buffer.cursor = start
@@ -3072,6 +3072,163 @@ func wordSpanAt(text []rune, pos int) (start, end int) {
 		end++
 	}
 	return start, end
+}
+
+func doubleClickSpanAt(text []rune, pos int) (start, end int) {
+	pos = clampIndex(pos, len(text))
+	if start, end, ok := delimitedSpanAt(text, pos); ok {
+		return start, end
+	}
+	if start, end, ok := lineSpanAtDoubleClick(text, pos); ok {
+		return start, end
+	}
+	return wordSpanAt(text, pos)
+}
+
+func lineSpanAtDoubleClick(text []rune, pos int) (start, end int, ok bool) {
+	pos = clampIndex(pos, len(text))
+	start = lineStart(text, pos)
+	end = lineEnd(text, pos)
+	if pos == end {
+		return start, end, true
+	}
+	return 0, 0, false
+}
+
+func delimitedSpanAt(text []rune, pos int) (start, end int, ok bool) {
+	type boundary struct {
+		index     int
+		opening   bool
+		delimiter rune
+	}
+	var checks []boundary
+	if pos > 0 {
+		if isOpeningDelimiter(text[pos-1]) {
+			checks = append(checks, boundary{index: pos - 1, opening: true, delimiter: text[pos-1]})
+		}
+		if isClosingDelimiter(text[pos-1]) {
+			checks = append(checks, boundary{index: pos - 1, opening: false, delimiter: text[pos-1]})
+		}
+	}
+	if pos < len(text) {
+		if isOpeningDelimiter(text[pos]) {
+			checks = append(checks, boundary{index: pos, opening: true, delimiter: text[pos]})
+		}
+		if isClosingDelimiter(text[pos]) {
+			checks = append(checks, boundary{index: pos, opening: false, delimiter: text[pos]})
+		}
+	}
+	for _, check := range checks {
+		var openIdx, closeIdx int
+		if check.opening {
+			closeIdx, ok = findDelimitedClose(text, check.index, check.delimiter)
+			openIdx = check.index
+		} else {
+			openIdx, ok = findDelimitedOpen(text, check.index, check.delimiter)
+			closeIdx = check.index
+		}
+		if !ok || openIdx+1 > closeIdx {
+			continue
+		}
+		return openIdx + 1, closeIdx, true
+	}
+	return 0, 0, false
+}
+
+func isOpeningDelimiter(r rune) bool {
+	switch r {
+	case '(', '{', '[', '<', '"', '\'':
+		return true
+	}
+	return false
+}
+
+func isClosingDelimiter(r rune) bool {
+	switch r {
+	case ')', '}', ']', '>', '"', '\'':
+		return true
+	}
+	return false
+}
+
+func matchingDelimiter(r rune) rune {
+	switch r {
+	case '(':
+		return ')'
+	case '{':
+		return '}'
+	case '[':
+		return ']'
+	case '<':
+		return '>'
+	case ')':
+		return '('
+	case '}':
+		return '{'
+	case ']':
+		return '['
+	case '>':
+		return '<'
+	case '"', '\'':
+		return r
+	}
+	return 0
+}
+
+func findDelimitedClose(text []rune, openIdx int, open rune) (int, bool) {
+	close := matchingDelimiter(open)
+	if close == 0 {
+		return 0, false
+	}
+	if open == close {
+		for i := openIdx + 1; i < len(text); i++ {
+			if text[i] == close {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	depth := 1
+	for i := openIdx + 1; i < len(text); i++ {
+		switch text[i] {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func findDelimitedOpen(text []rune, closeIdx int, close rune) (int, bool) {
+	open := matchingDelimiter(close)
+	if open == 0 {
+		return 0, false
+	}
+	if open == close {
+		for i := closeIdx - 1; i >= 0; i-- {
+			if text[i] == open {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	depth := 1
+	for i := closeIdx - 1; i >= 0; i-- {
+		switch text[i] {
+		case close:
+			depth++
+		case open:
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func updateSelection(state *bufferState) {

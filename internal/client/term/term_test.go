@@ -236,6 +236,56 @@ func TestWordSpanAtSelectsWholeWord(t *testing.T) {
 	}
 }
 
+func TestDoubleClickSpanAtSelectsWholeLineAtLineEnd(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta\nomega\n")
+	start, end := doubleClickSpanAt(text, 10)
+	if start != 0 || end != 10 {
+		t.Fatalf("doubleClickSpanAt(line end) = (%d, %d), want (0, 10)", start, end)
+	}
+}
+
+func TestDoubleClickSpanAtPrioritizesDelimitedSelectionAtLineEnd(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("type goListPackage struct {\n\tImportPath string\n\tImports    []string\n}")
+	start, end := doubleClickSpanAt(text, len(text)-1)
+	if got, want := string(text[start:end]), "\n\tImportPath string\n\tImports    []string\n"; got != want {
+		t.Fatalf("doubleClickSpanAt(delimited line end) = %q, want %q", got, want)
+	}
+}
+
+func TestDoubleClickSpanAtSelectsInsideParensFromRightOfOpen(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("hello( there, okay)")
+	start, end := doubleClickSpanAt(text, 6)
+	if got, want := string(text[start:end]), " there, okay"; got != want {
+		t.Fatalf("doubleClickSpanAt(right of open) = %q, want %q", got, want)
+	}
+}
+
+func TestDoubleClickSpanAtSelectsInsideParensFromLeftOfClose(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("hello( there, okay)")
+	start, end := doubleClickSpanAt(text, len(text)-1)
+	if got, want := string(text[start:end]), " there, okay"; got != want {
+		t.Fatalf("doubleClickSpanAt(left of close) = %q, want %q", got, want)
+	}
+}
+
+func TestDoubleClickSpanAtSelectsInsideQuotes(t *testing.T) {
+	t.Parallel()
+
+	text := []rune(`say "quoted text" now`)
+	start, end := doubleClickSpanAt(text, 5)
+	if got, want := string(text[start:end]), "quoted text"; got != want {
+		t.Fatalf("doubleClickSpanAt(quotes) = %q, want %q", got, want)
+	}
+}
+
 func TestDrawBufferLineSuppressesSelectionDuringFlash(t *testing.T) {
 	t.Parallel()
 

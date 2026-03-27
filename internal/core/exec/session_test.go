@@ -389,6 +389,75 @@ func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	}
 }
 
+func TestFileLoopRegexpMatchesDisplayedStatusLine(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	name := text.NewStringFromUTF8(path)
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+	if err := loadUnreadFile(f); err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+	sess.AddFile(f)
+	sess.Current = f
+
+	appendCmd, err := cmdlang.NewParser("$a\nbeta\n.\n").Parse()
+	if err != nil {
+		t.Fatalf("parse append: %v", err)
+	}
+	ok, err := sess.Execute(appendCmd)
+	if err != nil {
+		t.Fatalf("execute append: %v", err)
+	}
+	if !ok {
+		t.Fatal("append requested stop")
+	}
+	diag.Reset()
+
+	cmd, err := cmdlang.NewParser("X/'/w\n").Parse()
+	if err != nil {
+		t.Fatalf("parse X loop: %v", err)
+	}
+	ok, err = sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute X loop: %v", err)
+	}
+	if !ok {
+		t.Fatal("X loop requested stop")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read a.txt: %v", err)
+	}
+	if got, want := string(data), "alpha\nbeta\n"; got != want {
+		t.Fatalf("written contents = %q, want %q", got, want)
+	}
+	if got, want := diag.String(), path+": #11\n"; got != want {
+		t.Fatalf("diag = %q, want %q", got, want)
+	}
+}
+
 func TestWriteFailsWhileChangingInSameSequence(t *testing.T) {
 	t.Parallel()
 

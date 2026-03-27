@@ -950,7 +950,7 @@ func (s *Session) fileLoop(cmd *ioncmd.Cmd, wantMatch bool) error {
 		if f == nil {
 			continue
 		}
-		matched, err := fileMatchesRegexp(f, cmd.Re)
+		matched, err := fileMatchesRegexp(f, cmd.Re, f == s.Current)
 		if err != nil {
 			return err
 		}
@@ -1837,6 +1837,11 @@ func (s *Session) printFileStatus(f *text.File, current bool) error {
 }
 
 func (s *Session) printFileStatusName(modified, current bool, name string) error {
+	_, err := io.WriteString(s.Diag, fileStatusLine(modified, current, name))
+	return err
+}
+
+func fileStatusLine(modified, current bool, name string) string {
 	mod := ' '
 	if modified {
 		mod = '\''
@@ -1845,8 +1850,7 @@ func (s *Session) printFileStatusName(modified, current bool, name string) error
 	if current {
 		cur = '.'
 	}
-	_, err := fmt.Fprintf(s.Diag, "%c-%c %s\n", mod, cur, trimToken(name))
-	return err
+	return fmt.Sprintf("%c-%c %s\n", mod, cur, trimToken(name))
 }
 
 // PrintCurrentStatus prints the current file status line, if any.
@@ -2439,7 +2443,7 @@ func (s *Session) replaceWithShellOutput(f *text.File, a ionaddr.Address, data [
 	})
 }
 
-func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {
+func fileMatchesRegexp(f *text.File, re *text.String, current bool) (bool, error) {
 	if re == nil {
 		return true, nil
 	}
@@ -2457,7 +2461,7 @@ func fileMatchesRegexp(f *text.File, re *text.String) (bool, error) {
 		_ = tmpDisk.Close()
 	}()
 	menu.Unread = false
-	line := trimToken(f.Name.UTF8()) + "\n"
+	line := fileStatusLine(f.Mod, current, f.Name.UTF8())
 	if _, _, err := menu.LoadInitial(strings.NewReader(line)); err != nil {
 		return false, err
 	}

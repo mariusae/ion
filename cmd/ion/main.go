@@ -140,7 +140,23 @@ func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClien
 	return withServerSocket(server, socketPath, stdout, stderr, runClient)
 }
 
+func withLocalServerClients(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Client) error) error {
+	server := transport.New(ws)
+	socketPath, cleanup, err := makeSocketPath()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return withServerSocketClients(server, socketPath, stdout, stderr, runClient)
+}
+
 func withServerSocket(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
+	return withServerSocketClients(server, socketPath, stdout, stderr, func(client *clientsession.Client, _ *clientsession.Client) error {
+		return runClient(client)
+	})
+}
+
+func withServerSocketClients(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Client) error) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return err
 	}
@@ -160,9 +176,17 @@ func withServerSocket(server *transport.Server, socketPath string, stdout, stder
 		<-serverErr
 		return err
 	}
+	interruptClient, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		_ = client.Close()
+		_ = listener.Close()
+		<-serverErr
+		return err
+	}
 
-	clientErr := runClient(client)
+	clientErr := runClient(client, interruptClient)
 	closeErr := client.Close()
+	interruptCloseErr := interruptClient.Close()
 	listenerErr := listener.Close()
 	serveErr := <-serverErr
 
@@ -171,6 +195,9 @@ func withServerSocket(server *transport.Server, socketPath string, stdout, stder
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	if interruptCloseErr != nil {
+		return interruptCloseErr
 	}
 	if listenerErr != nil && !errors.Is(listenerErr, net.ErrClosed) {
 		return listenerErr

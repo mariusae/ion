@@ -3,11 +3,13 @@ package session
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
@@ -97,6 +99,78 @@ func TestClientRoundTripsDownloadAndTermRequests(t *testing.T) {
 	}
 	if got, want := files[0].ID, view.ID; got != want {
 		t.Fatalf("file id = %d, want current view id %d", got, want)
+	}
+}
+
+func TestClientInterruptStopsRunningShellCommand(t *testing.T) {
+	t.Parallel()
+
+	socketPath, cleanup, err := testSocketPath()
+	if err != nil {
+		t.Fatalf("testSocketPath() error = %v", err)
+	}
+	defer cleanup()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	server := transport.New(workspace.New())
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		if err := <-serverErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	client, err := DialUnix(socketPath, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix(client) error = %v", err)
+	}
+	defer client.Close()
+
+	interruptClient, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(interrupt) error = %v", err)
+	}
+	defer interruptClient.Close()
+
+	if err := client.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap(nil) error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Execute("!sleep 10\n")
+		done <- err
+	}()
+
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Execute(!sleep 10) error = %v", err)
+			}
+			if got := stderr.String(); strings.Contains(got, "?warning: exit status not 0") {
+				t.Fatalf("stderr = %q, want no non-zero exit warning for interrupted shell", got)
+			}
+			return
+		case <-ticker.C:
+			if err := interruptClient.Interrupt(); err != nil {
+				t.Fatalf("Interrupt() error = %v", err)
+			}
+		case <-deadline:
+			t.Fatal("Execute(!sleep 10) did not stop after interrupt")
+		}
 	}
 }
 

@@ -148,6 +148,11 @@ func (s *TermSession) CurrentView() (wire.BufferView, error) {
 	return s.ws.CurrentView()
 }
 
+// Interrupt interrupts one currently running external command in the shared workspace.
+func (s *TermSession) Interrupt() error {
+	return s.ws.Interrupt()
+}
+
 // OpenFiles opens one explicit file list in the shared workspace.
 // Navigation is not recorded here; the caller is expected to follow up
 // with FocusFile and/or SetAddress which handle recording.

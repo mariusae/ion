@@ -78,6 +78,18 @@ func (c *Client) Execute(script string) (bool, error) {
 	return resp.Continue, nil
 }
 
+// Interrupt asks the server to interrupt one currently running external command.
+func (c *Client) Interrupt() error {
+	_, msg, err := c.roundTrip(&wire.InterruptRequest{})
+	if err != nil {
+		return err
+	}
+	if _, ok := msg.(*wire.OKResponse); !ok {
+		return fmt.Errorf("interrupt response type %T, want *wire.OKResponse", msg)
+	}
+	return nil
+}
+
 // CurrentView returns the current buffer snapshot.
 func (c *Client) CurrentView() (wire.BufferView, error) {
 	_, msg, err := c.roundTrip(&wire.CurrentViewRequest{})

@@ -159,6 +159,20 @@ func (m *CommandResponse) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// InterruptRequest asks the server to interrupt one currently running external command.
+type InterruptRequest struct{}
+
+func (m *InterruptRequest) Kind() Kind { return KindInterruptRequest }
+
+func (m *InterruptRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *InterruptRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("interrupt request has trailing data")
+	}
+	return nil
+}
+
 // ErrorResponse returns one protocol-level or command-level error string.
 type ErrorResponse struct {
 	Message        string

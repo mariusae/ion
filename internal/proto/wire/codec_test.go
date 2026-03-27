@@ -95,6 +95,38 @@ func TestAddressRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInterruptRequestRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := &InterruptRequest{}
+	data, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+	var got InterruptRequest
+	if err := got.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary() error = %v", err)
+	}
+	frameData, err := EncodeFrame(9, 11, want)
+	if err != nil {
+		t.Fatalf("EncodeFrame() error = %v", err)
+	}
+	frame, err := ReadFrame(bytes.NewReader(frameData))
+	if err != nil {
+		t.Fatalf("ReadFrame() error = %v", err)
+	}
+	if got, want := frame.Kind, KindInterruptRequest; got != want {
+		t.Fatalf("frame.Kind = %d, want %d", got, want)
+	}
+	msg, err := DecodeMessage(frame)
+	if err != nil {
+		t.Fatalf("DecodeMessage() error = %v", err)
+	}
+	if _, ok := msg.(*InterruptRequest); !ok {
+		t.Fatalf("DecodeMessage() type = %T, want *InterruptRequest", msg)
+	}
+}
+
 func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 	t.Parallel()
 

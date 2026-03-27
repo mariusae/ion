@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode"
 	"unicode/utf8"
@@ -37,6 +38,9 @@ type Session struct {
 	execDepth     int
 	fileLoopDepth int
 	frame         *execFrame
+	shellMu       sync.Mutex
+	shellCmd      *osexec.Cmd
+	shellSignal   bool
 }
 
 type ShellInputMode int
@@ -2272,6 +2276,7 @@ type shellResult struct {
 	Stdout   []byte
 	Stderr   []byte
 	ExitCode int
+	Signaled bool
 }
 
 func (s *Session) resolveShellCommand(token *text.String) (string, error) {
@@ -2290,6 +2295,7 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 	c := osexec.Command("/bin/sh", "-c", cmd)
 	c.Args[0] = "sh"
 	c.Env = append(os.Environ(), shellEnv(f)...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var shellStdin *os.File
 	var err error
 	if stdin != nil {
@@ -2302,30 +2308,19 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 		defer shellStdin.Close()
 		c.Stdin = shellStdin
 	}
-	if captureStdout {
-		var stderr bytes.Buffer
-		c.Stderr = &stderr
-		stdout, err := c.Output()
-		res := shellResult{Stdout: stdout, Stderr: stderr.Bytes()}
-		if err == nil {
-			return res, nil
-		}
-		var exitErr *osexec.ExitError
-		if errors.As(err, &exitErr) {
-			res.ExitCode = exitErr.ExitCode()
-			return res, nil
-		}
-		return shellResult{}, err
-	}
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
-	err = c.Run()
+	if err := c.Start(); err != nil {
+		return shellResult{}, err
+	}
+	s.setRunningShell(c)
+	err = c.Wait()
 	res := shellResult{
-		Stdout: stdout.Bytes(),
-		Stderr: stderr.Bytes(),
+		Stdout:   stdout.Bytes(),
+		Stderr:   stderr.Bytes(),
+		Signaled: s.clearRunningShell(c),
 	}
 	if err == nil {
 		return res, nil
@@ -2336,6 +2331,37 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 		return res, nil
 	}
 	return shellResult{}, err
+}
+
+func (s *Session) setRunningShell(cmd *osexec.Cmd) {
+	s.shellMu.Lock()
+	defer s.shellMu.Unlock()
+	s.shellCmd = cmd
+	s.shellSignal = false
+}
+
+func (s *Session) clearRunningShell(cmd *osexec.Cmd) bool {
+	s.shellMu.Lock()
+	defer s.shellMu.Unlock()
+	signaled := s.shellCmd == cmd && s.shellSignal
+	if s.shellCmd == cmd {
+		s.shellCmd = nil
+		s.shellSignal = false
+	}
+	return signaled
+}
+
+func (s *Session) InterruptShell() error {
+	s.shellMu.Lock()
+	defer s.shellMu.Unlock()
+	if s.shellCmd == nil || s.shellCmd.Process == nil {
+		return nil
+	}
+	s.shellSignal = true
+	if err := syscall.Kill(-s.shellCmd.Process.Pid, syscall.SIGINT); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 func (s *Session) shellStdin() (*os.File, error) {
@@ -2368,7 +2394,7 @@ func shellEnv(f *text.File) []string {
 }
 
 func (s *Session) writeShellWarnings(res shellResult, warnOnExit bool) error {
-	if warnOnExit && res.ExitCode != 0 {
+	if warnOnExit && res.ExitCode != 0 && !res.Signaled {
 		if _, err := fmt.Fprintln(s.Diag, "?warning: exit status not 0"); err != nil {
 			return err
 		}

@@ -96,6 +96,14 @@ func (w *Workspace) Execute(cmd *cmdlang.Cmd, stdout, stderr io.Writer) (bool, e
 	return w.session.Execute(cmd)
 }
 
+// Interrupt interrupts one currently running external shell command.
+func (w *Workspace) Interrupt() error {
+	if w == nil || w.session == nil {
+		return nil
+	}
+	return w.session.InterruptShell()
+}
+
 // CurrentView returns the current file text and selection state for the
 // initial terminal client.
 func (w *Workspace) CurrentView() (wire.BufferView, error) {

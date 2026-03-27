@@ -81,6 +81,7 @@ type diagnosticReporter interface {
 type Options struct {
 	AutoIndent bool
 	Refresh    <-chan struct{}
+	Interrupt  func() error
 }
 
 type overlayOutputQueue struct {
@@ -568,6 +569,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, err
 		}
 
+		checkOverlayInterrupt := func() error {
+			if options.Interrupt == nil || stdin == nil {
+				return nil
+			}
+			if reader.Buffered() == 0 {
+				ok, err := waitForInputByte(stdin, 0)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+			}
+			peek, err := reader.Peek(1)
+			if err != nil || len(peek) == 0 || peek[0] != 0x03 {
+				return err
+			}
+			if _, _, err := reader.ReadRune(); err != nil {
+				return err
+			}
+			if err := options.Interrupt(); err != nil {
+				return err
+			}
+			overlay.addOutput("^C")
+			return redraw(redrawOverlayHistory)
+		}
+
 		go func() {
 			if capture != nil {
 				capture.Start(func(line string) {
@@ -593,6 +621,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 			case <-ticker.C:
+				if err := checkOverlayInterrupt(); err != nil {
+					overlay.setRunning(false)
+					return false, err
+				}
 				if err := redrawRunningCommand(); err != nil {
 					overlay.setRunning(false)
 					return false, err

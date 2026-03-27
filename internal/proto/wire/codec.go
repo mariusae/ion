@@ -23,6 +23,7 @@ const (
 	KindOKResponse
 	KindCommandRequest
 	KindCommandResponse
+	KindInterruptRequest
 	KindErrorResponse
 	KindStdoutEvent
 	KindStderrEvent
@@ -159,6 +160,8 @@ func DecodeMessage(frame Frame) (any, error) {
 	case KindCommandResponse:
 		var msg CommandResponse
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindInterruptRequest:
+		return &InterruptRequest{}, nil
 	case KindErrorResponse:
 		var msg ErrorResponse
 		return &msg, msg.UnmarshalBinary(frame.Payload)

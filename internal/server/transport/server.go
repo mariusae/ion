@@ -114,6 +114,12 @@ func (s *Server) handleFrame(conn io.Writer, session *serversession.TermSession,
 			break
 		}
 		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.CommandResponse{Continue: cont})
+	case *wire.InterruptRequest:
+		if err := session.Interrupt(); err != nil {
+			responseErr = writeError(conn, frame.RequestID, session.ID(), err)
+			break
+		}
+		responseErr = wire.WriteFrame(conn, frame.RequestID, session.ID(), &wire.OKResponse{})
 	case *wire.CurrentViewRequest:
 		view, err := session.CurrentView()
 		if err != nil {

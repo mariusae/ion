@@ -203,6 +203,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	menuSawHover := false
 	menuLostReleaseSuspect := false
 	var menuLostReleaseTimer *time.Timer
+	var bufferBoundaryWheel wheelBoundarySuppressor
+	var overlayBoundaryWheel wheelBoundarySuppressor
 	renderer := newFrameRenderer()
 	renderStats := newFrameRenderStats(stderr)
 	defer renderStats.Report()
@@ -789,7 +791,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	handleMenuMouse := func(event mouseEvent) (bool, error) {
 		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("menu-mouse button=%d pressed=%t x=%d y=%d visible=%t hover=%d suspect=%t sawHover=%t", event.button, event.pressed, event.x, event.y, menu.visible, menu.hover, menuLostReleaseSuspect, menuSawHover)
+			renderer.trace.Printf("menu-mouse button=%d repeat=%d pressed=%t x=%d y=%d visible=%t hover=%d suspect=%t sawHover=%t", event.button, event.count(), event.pressed, event.x, event.y, menu.visible, menu.hover, menuLostReleaseSuspect, menuSawHover)
 		}
 		if !menu.visible {
 			return false, nil
@@ -844,10 +846,88 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection)
 	}
 
+	drainBufferedBoundaryWheel := func(event mouseEvent, suppressor *wheelBoundarySuppressor, scope string) error {
+		now := time.Now()
+		suppressor.arm(event, now)
+		drained, err := drainWheelBurstUntil(reader, stdin, event, now.Add(boundaryWheelDrainWindow))
+		if err != nil {
+			return err
+		}
+		if renderer != nil && renderer.trace != nil {
+			dir, _ := event.verticalWheelDirection()
+			renderer.trace.Printf("%s-wheel-boundary-suppress button=%d dir=%d drained=%d x=%d y=%d until=%s", scope, event.button, dir, drained, event.x, event.y, suppressor.until.Format(time.RFC3339Nano))
+		}
+		return nil
+	}
+
+	shouldSuppressBoundaryWheel := func(event mouseEvent, suppressor *wheelBoundarySuppressor, scope string) (bool, error) {
+		now := time.Now()
+		if !suppressor.match(event, now) {
+			return false, nil
+		}
+		deadline := now.Add(boundaryWheelDrainWindow)
+		if deadline.After(suppressor.until) {
+			deadline = suppressor.until
+		}
+		drained, err := drainWheelBurstUntil(reader, stdin, event, deadline)
+		if err != nil {
+			return true, err
+		}
+		if renderer != nil && renderer.trace != nil {
+			dir, _ := event.verticalWheelDirection()
+			renderer.trace.Printf("%s-wheel-boundary-skip button=%d dir=%d drained=%d x=%d y=%d until=%s", scope, event.button, dir, drained, event.x, event.y, suppressor.until.Format(time.RFC3339Nano))
+		}
+		return true, nil
+	}
+
+	drainSuppressedBoundaryWheel := func(suppressor *wheelBoundarySuppressor, scope string) error {
+		if suppressor == nil {
+			return nil
+		}
+		if reader.Buffered() == 0 {
+			return nil
+		}
+		drained := 0
+		for {
+			now := time.Now()
+			if now.After(suppressor.until) {
+				if renderer != nil && renderer.trace != nil {
+					renderer.trace.Printf("%s-wheel-boundary-background-drain reason=expired drained=%d buffered=%d until=%s", scope, drained, reader.Buffered(), suppressor.until.Format(time.RFC3339Nano))
+				}
+				return nil
+			}
+			if reader.Buffered() == 0 {
+				if drained > 0 && renderer != nil && renderer.trace != nil {
+					renderer.trace.Printf("%s-wheel-boundary-background-drain reason=depleted drained=%d buffered=%d until=%s", scope, drained, reader.Buffered(), suppressor.until.Format(time.RFC3339Nano))
+				}
+				return nil
+			}
+			event, size, ok, err := peekMouseEvent(reader, stdin, 0)
+			if err != nil {
+				return err
+			}
+			if !ok || !suppressor.match(event, time.Now()) {
+				if renderer != nil && renderer.trace != nil {
+					if ok {
+						dir, _ := event.verticalWheelDirection()
+						renderer.trace.Printf("%s-wheel-boundary-background-drain reason=nonmatch drained=%d buffered=%d button=%d dir=%d x=%d y=%d until=%s", scope, drained, reader.Buffered(), event.button, dir, event.x, event.y, suppressor.until.Format(time.RFC3339Nano))
+					} else if drained > 0 {
+						renderer.trace.Printf("%s-wheel-boundary-background-drain reason=not-ok drained=%d buffered=%d until=%s", scope, drained, reader.Buffered(), suppressor.until.Format(time.RFC3339Nano))
+					}
+				}
+				return nil
+			}
+			if _, err := reader.Discard(size); err != nil {
+				return err
+			}
+			drained += event.count()
+		}
+	}
+
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
 		if renderer != nil && renderer.trace != nil {
 			if mouse != nil {
-				renderer.trace.Printf("buffer-special key=%d mouseButton=%d pressed=%t x=%d y=%d overlay=%t menu=%t", key, mouse.button, mouse.pressed, mouse.x, mouse.y, overlay.visible, menu.visible)
+				renderer.trace.Printf("buffer-special key=%d mouseButton=%d repeat=%d pressed=%t x=%d y=%d overlay=%t menu=%t", key, mouse.button, mouse.count(), mouse.pressed, mouse.x, mouse.y, overlay.visible, menu.visible)
 			} else {
 				renderer.trace.Printf("buffer-special key=%d overlay=%t menu=%t", key, overlay.visible, menu.visible)
 			}
@@ -905,6 +985,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			if menu.visible {
 				return false, nil
+			}
+			if _, wheel := mouse.verticalWheelDirection(); wheel {
+				suppressed, err := shouldSuppressBoundaryWheel(*mouse, &bufferBoundaryWheel, "buffer")
+				if err != nil {
+					return false, err
+				}
+				if suppressed {
+					return false, nil
+				}
+				coalesced, drained, err := coalesceTimedWheelBurst(reader, stdin, *mouse, time.Now().Add(activeWheelCoalesceWindow), 8)
+				if err != nil {
+					return false, err
+				}
+				if drained > 0 {
+					*mouse = coalesced
+					if renderer != nil && renderer.trace != nil {
+						renderer.trace.Printf("buffer-wheel-coalesce button=%d repeat=%d drained=%d x=%d y=%d", mouse.button, mouse.count(), drained, mouse.x, mouse.y)
+					}
+				}
 			}
 			if mouse.button == 2 && mouse.pressed {
 				return false, showMenu(mouse.x, mouse.y)
@@ -971,6 +1070,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			previous := snapshotBufferState(buffer)
 			wasSelecting := mouseSelecting
 			if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
+				bufferBoundaryWheel.clear()
 				if _, wheel := mouse.verticalWheelDirection(); !wheel {
 					if err := syncBufferDot(); err != nil {
 						return false, err
@@ -987,6 +1087,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 				}
 				return false, redraw(classifyBufferRedraw(previous, buffer))
+			}
+			if mouse.isWheel() {
+				if _, wheel := mouse.verticalWheelDirection(); wheel {
+					if err := drainBufferedBoundaryWheel(*mouse, &bufferBoundaryWheel, "buffer"); err != nil {
+						return false, err
+					}
+				}
+			} else {
+				bufferBoundaryWheel.clear()
 			}
 			return false, nil
 		}
@@ -1132,58 +1241,74 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	for {
-		if reader.Buffered() == 0 {
-			wake, err := waitForTTYReady(stdin, wakeR)
-			if err != nil {
-				return err
+		if inBufferMode {
+			activeSuppressor := &bufferBoundaryWheel
+			scope := "buffer"
+			if overlay.visible {
+				activeSuppressor = &overlayBoundaryWheel
+				scope = "overlay"
 			}
-			if wake {
-				tags, err := readWakeTags(wakeR)
+			if activeSuppressor.until.After(time.Now()) {
+				err := drainSuppressedBoundaryWheel(activeSuppressor, scope)
 				if err != nil {
 					return err
 				}
-				for _, tag := range tags {
-					if renderer != nil && renderer.trace != nil {
-						renderer.trace.Printf("wake tag=%q inBuffer=%t overlay=%t menu=%t", tag, inBufferMode, overlay.visible, menu.visible)
-					}
-					switch tag {
-					case wakeWinch:
-						refreshTerminalSize()
-						if inBufferMode {
-							if err := fullRedraw(redrawResize); err != nil {
-								return err
-							}
-						}
-					case wakeRefresh:
-						if inBufferMode {
-							if err := refreshBuffer(); err != nil {
-								return err
-							}
-							if err := redraw(redrawRefresh); err != nil {
-								return err
-							}
-						}
-					case wakeRecover:
-						if inBufferMode {
-							if err := fullRedraw(redrawRecover); err != nil {
-								return err
-							}
-						}
-					case wakeMenu:
-						if inBufferMode && menu.visible && menuLostReleaseSuspect {
-							menu.dismiss()
-							clearMenuLostRelease()
-							menuSawHover = false
-							if err := fullRedraw(redrawMenuClose); err != nil {
-								return err
-							}
-						}
-					}
-				}
-				continue
 			}
-			if renderer != nil && renderer.trace != nil {
-				renderer.trace.Printf("stdin-ready buffered=0")
+		}
+		if reader.Buffered() == 0 {
+			if reader.Buffered() == 0 {
+				wake, err := waitForTTYReady(stdin, wakeR)
+				if err != nil {
+					return err
+				}
+				if wake {
+					tags, err := readWakeTags(wakeR)
+					if err != nil {
+						return err
+					}
+					for _, tag := range tags {
+						if renderer != nil && renderer.trace != nil {
+							renderer.trace.Printf("wake tag=%q inBuffer=%t overlay=%t menu=%t", tag, inBufferMode, overlay.visible, menu.visible)
+						}
+						switch tag {
+						case wakeWinch:
+							refreshTerminalSize()
+							if inBufferMode {
+								if err := fullRedraw(redrawResize); err != nil {
+									return err
+								}
+							}
+						case wakeRefresh:
+							if inBufferMode {
+								if err := refreshBuffer(); err != nil {
+									return err
+								}
+								if err := redraw(redrawRefresh); err != nil {
+									return err
+								}
+							}
+						case wakeRecover:
+							if inBufferMode {
+								if err := fullRedraw(redrawRecover); err != nil {
+									return err
+								}
+							}
+						case wakeMenu:
+							if inBufferMode && menu.visible && menuLostReleaseSuspect {
+								menu.dismiss()
+								clearMenuLostRelease()
+								menuSawHover = false
+								if err := fullRedraw(redrawMenuClose); err != nil {
+									return err
+								}
+							}
+						}
+					}
+					continue
+				}
+				if renderer != nil && renderer.trace != nil {
+					renderer.trace.Printf("stdin-ready buffered=0")
+				}
 			}
 		} else if renderer != nil && renderer.trace != nil {
 			renderer.trace.Printf("stdin-ready buffered=%d", reader.Buffered())
@@ -1228,6 +1353,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.close()
 					case keyMouse:
 						if mouse != nil {
+							if _, wheel := mouse.verticalWheelDirection(); wheel {
+								suppressed, err := shouldSuppressBoundaryWheel(*mouse, &overlayBoundaryWheel, "overlay")
+								if err != nil {
+									return err
+								}
+								if suppressed {
+									continue
+								}
+								coalesced, drained, err := coalesceTimedWheelBurst(reader, stdin, *mouse, time.Now().Add(activeWheelCoalesceWindow), 8)
+								if err != nil {
+									return err
+								}
+								if drained > 0 {
+									*mouse = coalesced
+									if renderer != nil && renderer.trace != nil {
+										renderer.trace.Printf("overlay-wheel-coalesce button=%d repeat=%d drained=%d x=%d y=%d", mouse.button, mouse.count(), drained, mouse.x, mouse.y)
+									}
+								}
+							}
 							done, err := handleMenuMouse(*mouse)
 							if err != nil {
 								return err
@@ -1243,6 +1387,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 							if handled {
+								overlayBoundaryWheel.clear()
 								class := redrawOverlayHistory
 								if !overlay.visible {
 									class = redrawOverlayClose
@@ -1251,6 +1396,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 									return err
 								}
 								continue
+							}
+							if mouse.isWheel() {
+								if _, wheel := mouse.verticalWheelDirection(); wheel {
+									if err := drainBufferedBoundaryWheel(*mouse, &overlayBoundaryWheel, "overlay"); err != nil {
+										return err
+									}
+								}
+							} else {
+								overlayBoundaryWheel.clear()
 							}
 							continue
 						}
@@ -1888,7 +2042,10 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 	}
 	if dir, ok := event.verticalWheelDirection(); ok {
 		prevScroll := overlay.scroll
-		lines := 3 * event.count()
+		lines := event.count()
+		if maxStep := overlayHistoryRows(overlay) - 1; maxStep > 0 && lines > maxStep {
+			lines = maxStep
+		}
 		if dir < 0 {
 			overlay.scrollOlder(lines)
 		} else {
@@ -1971,7 +2128,7 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 
 func redrawNeedsFullFrame(class redrawClass) bool {
 	switch class {
-	case redrawBufferCursor, redrawBufferContent, redrawBufferStatus, redrawOverlayInput:
+	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory:
 		return false
 	default:
 		return true

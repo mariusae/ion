@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"syscall"
+	"time"
 )
 
 type mouseEvent struct {
@@ -235,8 +236,48 @@ func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
 const escSequenceWait = 20_000 // 20ms in microseconds
 const (
 	passiveMotionCoalesceWait = 20_000
-	wheelCoalesceWait         = 20_000
+	maxBufferedWheelRepeat    = 4
 )
+
+const boundaryWheelSuppressWindow = 75 * time.Millisecond
+const activeWheelCoalesceWindow = 8 * time.Millisecond
+const boundaryWheelDrainWindow = 12 * time.Millisecond
+
+type wheelBoundarySuppressor struct {
+	until time.Time
+	dir   int
+	x     int
+	y     int
+}
+
+func (s *wheelBoundarySuppressor) match(event mouseEvent, now time.Time) bool {
+	if s == nil || now.After(s.until) {
+		return false
+	}
+	dir, ok := event.verticalWheelDirection()
+	return ok && dir == s.dir && event.x == s.x && event.y == s.y
+}
+
+func (s *wheelBoundarySuppressor) arm(event mouseEvent, now time.Time) {
+	if s == nil {
+		return
+	}
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
+		return
+	}
+	s.until = now.Add(boundaryWheelSuppressWindow)
+	s.dir = dir
+	s.x = event.x
+	s.y = event.y
+}
+
+func (s *wheelBoundarySuppressor) clear() {
+	if s == nil {
+		return
+	}
+	*s = wheelBoundarySuppressor{}
+}
 
 func waitForInputByte(stdin *os.File, timeoutUsec int64) (bool, error) {
 	if stdin == nil {
@@ -334,7 +375,10 @@ func coalesceMouseEvent(reader *bufio.Reader, stdin *os.File, event mouseEvent) 
 	count := event.count()
 	latest.repeat = count
 	for i := 0; i < 256; i++ {
-		next, size, ok, err := peekMouseEvent(reader, stdin, wheelCoalesceWait)
+		if count >= maxBufferedWheelRepeat {
+			return latest, nil
+		}
+		next, size, ok, err := peekMouseEvent(reader, stdin, 0)
 		if err != nil {
 			return mouseEvent{}, err
 		}
@@ -349,33 +393,253 @@ func coalesceMouseEvent(reader *bufio.Reader, stdin *os.File, event mouseEvent) 
 			return mouseEvent{}, err
 		}
 		count += next.count()
+		if count > maxBufferedWheelRepeat {
+			count = maxBufferedWheelRepeat
+		}
 		latest = next
 		latest.repeat = count
 	}
 	return latest, nil
 }
 
+func drainWheelBurst(reader *bufio.Reader, stdin *os.File, event mouseEvent, timeoutUsec int64) (int, error) {
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
+		return 0, nil
+	}
+	drained := 0
+	for i := 0; i < 256; i++ {
+		next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
+		if err != nil {
+			return drained, err
+		}
+		if !ok {
+			return drained, nil
+		}
+		nextDir, nextWheel := next.verticalWheelDirection()
+		if !nextWheel || nextDir != dir {
+			return drained, nil
+		}
+		if _, err := reader.Discard(size); err != nil {
+			return drained, err
+		}
+		drained += next.count()
+	}
+	return drained, nil
+}
+
+func drainWheelBurstUntil(reader *bufio.Reader, stdin *os.File, event mouseEvent, deadline time.Time) (int, error) {
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
+		return 0, nil
+	}
+	drained := 0
+	for i := 0; i < 256; i++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return drained, nil
+		}
+		timeoutUsec := remaining.Microseconds()
+		if timeoutUsec <= 0 {
+			timeoutUsec = 1
+		}
+		next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
+		if err != nil {
+			return drained, err
+		}
+		if !ok {
+			return drained, nil
+		}
+		nextDir, nextWheel := next.verticalWheelDirection()
+		if !nextWheel || nextDir != dir || next.x != event.x || next.y != event.y {
+			return drained, nil
+		}
+		if _, err := reader.Discard(size); err != nil {
+			return drained, err
+		}
+		drained += next.count()
+	}
+	return drained, nil
+}
+
+func drainBufferedMatchingWheelBurst(reader *bufio.Reader, stdin *os.File, event mouseEvent) (int, error) {
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
+		return 0, nil
+	}
+	drained := 0
+	for i := 0; i < 256; i++ {
+		next, size, ok, err := peekMouseEvent(reader, stdin, 0)
+		if err != nil {
+			return drained, err
+		}
+		if !ok {
+			return drained, nil
+		}
+		nextDir, nextWheel := next.verticalWheelDirection()
+		if !nextWheel || nextDir != dir || next.x != event.x || next.y != event.y {
+			return drained, nil
+		}
+		if _, err := reader.Discard(size); err != nil {
+			return drained, err
+		}
+		drained += next.count()
+	}
+	return drained, nil
+}
+
+func coalesceTimedWheelBurst(reader *bufio.Reader, stdin *os.File, event mouseEvent, deadline time.Time, maxRepeat int) (mouseEvent, int, error) {
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
+		return event, 0, nil
+	}
+	total := event.count()
+	if maxRepeat > 0 && total > maxRepeat {
+		total = maxRepeat
+	}
+	latest := event
+	latest.repeat = total
+	drained := 0
+	for i := 0; i < 256; i++ {
+		if maxRepeat > 0 && total >= maxRepeat {
+			return latest, drained, nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return latest, drained, nil
+		}
+		timeoutUsec := remaining.Microseconds()
+		if timeoutUsec <= 0 {
+			timeoutUsec = 1
+		}
+		next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
+		if err != nil {
+			return latest, drained, err
+		}
+		if !ok {
+			return latest, drained, nil
+		}
+		nextDir, nextWheel := next.verticalWheelDirection()
+		if !nextWheel || nextDir != dir || next.x != event.x || next.y != event.y {
+			return latest, drained, nil
+		}
+		if _, err := reader.Discard(size); err != nil {
+			return latest, drained, err
+		}
+		drained += next.count()
+		total += next.count()
+		if maxRepeat > 0 && total > maxRepeat {
+			total = maxRepeat
+		}
+		latest = next
+		latest.repeat = total
+	}
+	return latest, drained, nil
+}
+
 func peekMouseEvent(reader *bufio.Reader, stdin *os.File, timeoutUsec int64) (mouseEvent, int, bool, error) {
-	if reader.Buffered() == 0 {
-		ok, err := waitForInputByte(stdin, timeoutUsec)
+	deadline := time.Time{}
+	if timeoutUsec > 0 {
+		deadline = time.Now().Add(time.Duration(timeoutUsec) * time.Microsecond)
+	}
+	for i := 0; i < 256; i++ {
+		if reader.Buffered() == 0 {
+			ok, err := waitForInputByte(stdin, remainingTimeoutUsec(deadline))
+			if err != nil {
+				return mouseEvent{}, 0, false, err
+			}
+			if !ok {
+				return mouseEvent{}, 0, false, nil
+			}
+			if _, err := reader.Peek(1); err != nil {
+				if errors.Is(err, io.EOF) {
+					return mouseEvent{}, 0, false, nil
+				}
+				return mouseEvent{}, 0, false, err
+			}
+		}
+		buf, err := reader.Peek(reader.Buffered())
+		if err != nil {
+			return mouseEvent{}, 0, false, err
+		}
+		event, size, ok, err := parseMouseEvent(buf)
+		if err != nil {
+			return mouseEvent{}, 0, false, err
+		}
+		if ok {
+			return event, size, true, nil
+		}
+		if !isMouseEventPrefix(buf) {
+			return mouseEvent{}, 0, false, nil
+		}
+		if stdin == nil {
+			return mouseEvent{}, 0, false, nil
+		}
+		ok, err = waitForInputByte(stdin, remainingTimeoutUsec(deadline))
 		if err != nil {
 			return mouseEvent{}, 0, false, err
 		}
 		if !ok {
 			return mouseEvent{}, 0, false, nil
 		}
-		if _, err := reader.Peek(1); err != nil {
+		if _, err := reader.Peek(reader.Buffered() + 1); err != nil {
 			if errors.Is(err, io.EOF) {
 				return mouseEvent{}, 0, false, nil
 			}
 			return mouseEvent{}, 0, false, err
 		}
 	}
-	buf, err := reader.Peek(reader.Buffered())
-	if err != nil {
-		return mouseEvent{}, 0, false, err
+	return mouseEvent{}, 0, false, nil
+}
+
+func remainingTimeoutUsec(deadline time.Time) int64 {
+	if deadline.IsZero() {
+		return 0
 	}
-	return parseMouseEvent(buf)
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0
+	}
+	timeoutUsec := remaining.Microseconds()
+	if timeoutUsec <= 0 {
+		return 1
+	}
+	return timeoutUsec
+}
+
+func isMouseEventPrefix(buf []byte) bool {
+	if len(buf) == 0 {
+		return false
+	}
+	prefix := []byte{0x1b, '[', '<'}
+	for i := 0; i < len(buf) && i < len(prefix); i++ {
+		if buf[i] != prefix[i] {
+			return false
+		}
+	}
+	if len(buf) <= len(prefix) {
+		return true
+	}
+	field := 0
+	sawDigit := false
+	for i := len(prefix); i < len(buf); i++ {
+		b := buf[i]
+		switch {
+		case b >= '0' && b <= '9':
+			sawDigit = true
+		case b == ';':
+			if !sawDigit || field >= 2 {
+				return false
+			}
+			field++
+			sawDigit = false
+		case b == 'M' || b == 'm':
+			return field == 2 && sawDigit && i == len(buf)-1
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func parseMouseEvent(buf []byte) (mouseEvent, int, bool, error) {

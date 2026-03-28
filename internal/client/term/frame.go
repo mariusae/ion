@@ -49,6 +49,7 @@ const (
 	frameRowKindNone frameRowKind = iota
 	frameRowKindBuffer
 	frameRowKindOverlay
+	frameRowKindOverlayHistory
 	frameRowKindStatus
 	frameRowKindMenu
 )
@@ -317,8 +318,13 @@ func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class red
 		r.trace.Printf("render diff class=%s changedRows=%d cursorChanged=%t prevSig=%x nextSig=%x", class, len(changedRows), r.last.cursor != frame.cursor, frameSignature(r.last), frameSignature(frame))
 	}
 	scrollRows := changedRows
-	if class == redrawBufferViewport {
-		if _, exposed, ok := detectViewportRowShift(r.last, frame); ok {
+	switch class {
+	case redrawBufferViewport:
+		if _, _, _, exposed, ok := detectFrameRegionRowShift(r.last, frame, frameRowKindBuffer); ok {
+			scrollRows = exposed
+		}
+	case redrawOverlayHistory:
+		if _, _, _, exposed, ok := detectFrameRegionRowShift(r.last, frame, frameRowKindOverlayHistory); ok {
 			scrollRows = exposed
 		}
 	}
@@ -397,7 +403,7 @@ func renderOverlayFrame(frame *terminalFrame, overlay *overlayState, theme *uiTh
 		if row < len(lines) {
 			line = lines[row]
 		}
-		frame.rows[startRow+row].id = frameRowID{kind: frameRowKindOverlay, anchor: startRow + row}
+		frame.rows[startRow+row].id = overlayHistoryFrameRowID(row, line)
 		renderOverlayFrameLine(frame.rows[startRow+row].cells, line, overlay, theme)
 	}
 
@@ -577,6 +583,20 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 	}
 
 	changedRows := changedFrameRows(prev, next)
+	usedRowShift := false
+	if top, bottom, shift, exposedRows, ok := detectFrameRegionRowShift(prev, next, frameRowKindBuffer); ok {
+		if err := writeFrameRegionShift(stdout, next, top, bottom, shift, exposedRows); err != nil {
+			return err
+		}
+		changedRows = exposedRows
+		usedRowShift = true
+	} else if top, bottom, shift, exposedRows, ok := detectFrameRegionRowShift(prev, next, frameRowKindOverlayHistory); ok {
+		if err := writeFrameRegionShift(stdout, next, top, bottom, shift, exposedRows); err != nil {
+			return err
+		}
+		changedRows = exposedRows
+		usedRowShift = true
+	}
 
 	cursorChanged := prev.cursor != next.cursor
 	terminalChanged := prev.terminal != next.terminal
@@ -584,7 +604,7 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 		return nil
 	}
 
-	if len(changedRows) > 0 {
+	if len(changedRows) > 0 && !usedRowShift {
 		if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
 			return err
 		}
@@ -704,21 +724,70 @@ func changedFrameRows(prev, next *terminalFrame) []int {
 	return changed
 }
 
-func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
-	if !sameFrameGeometry(prev, next) || len(prev.rows) == 0 {
-		return 0, nil, false
+func overlayHistoryFrameRowID(row int, line overlayRenderLine) frameRowID {
+	anchor := -1 - row
+	if line.history >= 0 {
+		anchor = line.history
 	}
+	return frameRowID{kind: frameRowKindOverlayHistory, anchor: anchor}
+}
+
+func detectFrameRegionRowShift(prev, next *terminalFrame, kind frameRowKind) (int, int, int, []int, bool) {
+	top, bottom, ok := findFrameRowKindRegion(prev, next, kind)
+	if !ok {
+		return 0, 0, 0, nil, false
+	}
+	shift, exposed, ok := detectRowShiftWithinRegion(prev, next, top, bottom)
+	if !ok {
+		return 0, 0, 0, nil, false
+	}
+	return top, bottom, shift, exposed, true
+}
+
+func findFrameRowKindRegion(prev, next *terminalFrame, kind frameRowKind) (int, int, bool) {
+	if !sameFrameGeometry(prev, next) || len(prev.rows) == 0 {
+		return 0, 0, false
+	}
+	top := -1
+	bottom := -1
 	for i := range prev.rows {
-		if prev.rows[i].id.kind != frameRowKindBuffer || next.rows[i].id.kind != frameRowKindBuffer {
-			return 0, nil, false
+		prevMatch := prev.rows[i].id.kind == kind
+		nextMatch := next.rows[i].id.kind == kind
+		if prevMatch != nextMatch {
+			return 0, 0, false
+		}
+		if !prevMatch {
+			if top >= 0 && bottom < 0 {
+				bottom = i
+			}
+			continue
+		}
+		if top < 0 {
+			top = i
+			continue
+		}
+		if bottom >= 0 {
+			return 0, 0, false
 		}
 	}
+	if top < 0 {
+		return 0, 0, false
+	}
+	if bottom < 0 {
+		bottom = len(prev.rows)
+	}
+	return top, bottom, true
+}
 
-	rows := len(prev.rows)
+func detectRowShiftWithinRegion(prev, next *terminalFrame, top, bottom int) (int, []int, bool) {
+	rows := bottom - top
+	if rows <= 1 {
+		return 0, nil, false
+	}
 	for shift := 1; shift < rows; shift++ {
 		match := true
 		for row := 0; row < rows-shift; row++ {
-			if prev.rows[row+shift].id != next.rows[row].id || !sameFrameCells(prev.rows[row+shift], next.rows[row]) {
+			if prev.rows[top+row+shift].id != next.rows[top+row].id || !sameFrameCells(prev.rows[top+row+shift], next.rows[top+row]) {
 				match = false
 				break
 			}
@@ -726,7 +795,7 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 		if match {
 			exposed := make([]int, 0, shift)
 			for row := rows - shift; row < rows; row++ {
-				exposed = append(exposed, row)
+				exposed = append(exposed, top+row)
 			}
 			return shift, exposed, true
 		}
@@ -734,7 +803,7 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 	for shift := 1; shift < rows; shift++ {
 		match := true
 		for row := 0; row < rows-shift; row++ {
-			if prev.rows[row].id != next.rows[row+shift].id || !sameFrameCells(prev.rows[row], next.rows[row+shift]) {
+			if prev.rows[top+row].id != next.rows[top+row+shift].id || !sameFrameCells(prev.rows[top+row], next.rows[top+row+shift]) {
 				match = false
 				break
 			}
@@ -742,7 +811,7 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 		if match {
 			exposed := make([]int, 0, shift)
 			for row := 0; row < shift; row++ {
-				exposed = append(exposed, row)
+				exposed = append(exposed, top+row)
 			}
 			return -shift, exposed, true
 		}
@@ -750,14 +819,25 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 	return 0, nil, false
 }
 
-func writeViewportShift(stdout io.Writer, next *terminalFrame, shift int, exposedRows []int) error {
+func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
+	_, _, shift, exposed, ok := detectFrameRegionRowShift(prev, next, frameRowKindBuffer)
+	return shift, exposed, ok
+}
+
+func writeFrameRegionShift(stdout io.Writer, next *terminalFrame, top, bottom, shift int, exposedRows []int) error {
 	if shift == 0 || len(exposedRows) == 0 {
 		return nil
 	}
 	if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "\x1b[1;1H"); err != nil {
+	fullHeight := next != nil && top == 0 && bottom == len(next.rows)
+	if !fullHeight {
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dr", top+1, bottom); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", top+1); err != nil {
 		return err
 	}
 	op := 'L'
@@ -768,6 +848,11 @@ func writeViewportShift(stdout io.Writer, next *terminalFrame, shift int, expose
 	}
 	if _, err := fmt.Fprintf(stdout, "\x1b[%d%c", count, op); err != nil {
 		return err
+	}
+	if !fullHeight {
+		if _, err := io.WriteString(stdout, "\x1b[r"); err != nil {
+			return err
+		}
 	}
 	for _, row := range exposedRows {
 		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {

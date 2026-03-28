@@ -416,7 +416,7 @@ func TestDetectViewportRowShiftDownAndUp(t *testing.T) {
 	}
 }
 
-func TestWriteFrameDiffViewportShiftRepaintsChangedRows(t *testing.T) {
+func TestWriteFrameDiffViewportShiftUsesLineMotion(t *testing.T) {
 	t.Parallel()
 
 	prev := newTerminalFrame(4, 4)
@@ -436,13 +436,74 @@ func TestWriteFrameDiffViewportShiftRepaintsChangedRows(t *testing.T) {
 		t.Fatalf("writeFrameDiff() error = %v", err)
 	}
 	got := out.String()
-	if strings.Contains(got, "\x1b[1M") || strings.Contains(got, "\x1b[1L") {
-		t.Fatalf("writeFrameDiff() = %q, want no line-motion optimization", got)
+	if !strings.Contains(got, "\x1b[1;1H\x1b[1M") {
+		t.Fatalf("writeFrameDiff() = %q, want line-delete viewport shift", got)
 	}
-	for row, r := range []rune{'b', 'c', 'd', 'e'} {
-		want := "\x1b[" + string(rune('1'+row)) + ";1H\x1b[2K" + string(r)
+	for _, want := range []string{
+		"\x1b[4;1H\x1b[2Ke",
+		"\x1b[1;1H",
+	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("writeFrameDiff() = %q, want repaint for row %d", got, row+1)
+			t.Fatalf("writeFrameDiff() = %q, want %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{
+		"\x1b[1;1H\x1b[2Kb",
+		"\x1b[2;1H\x1b[2Kc",
+		"\x1b[3;1H\x1b[2Kd",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("writeFrameDiff() = %q, want no repaint for preserved row %q", got, unwanted)
+		}
+	}
+}
+
+func TestWriteFrameDiffOverlayHistoryShiftUsesScopedScrollRegion(t *testing.T) {
+	t.Parallel()
+
+	prev := newTerminalFrame(5, 4)
+	next := newTerminalFrame(5, 4)
+
+	prev.rows[0].id = frameRowID{kind: frameRowKindBuffer, anchor: 0}
+	prev.rows[0].cells[0] = frameCell{r: 'a'}
+	next.rows[0] = prev.rows[0]
+
+	prev.rows[1].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 10}
+	prev.rows[1].cells[0] = frameCell{r: 'b'}
+	prev.rows[2].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 11}
+	prev.rows[2].cells[0] = frameCell{r: 'c'}
+	prev.rows[3].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 12}
+	prev.rows[3].cells[0] = frameCell{r: 'd'}
+
+	next.rows[1].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 11}
+	next.rows[1].cells[0] = frameCell{r: 'c'}
+	next.rows[2].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 12}
+	next.rows[2].cells[0] = frameCell{r: 'd'}
+	next.rows[3].id = frameRowID{kind: frameRowKindOverlayHistory, anchor: 13}
+	next.rows[3].cells[0] = frameCell{r: 'e'}
+
+	prev.rows[4].id = frameRowID{kind: frameRowKindOverlay, anchor: 4}
+	prev.rows[4].cells[0] = frameCell{r: 'p'}
+	next.rows[4] = prev.rows[4]
+
+	var out bytes.Buffer
+	if err := writeFrameDiff(&out, prev, next); err != nil {
+		t.Fatalf("writeFrameDiff() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[2;4r\x1b[2;1H\x1b[1M\x1b[r") {
+		t.Fatalf("writeFrameDiff() = %q, want scoped overlay scroll-region shift", got)
+	}
+	if !strings.Contains(got, "\x1b[4;1H\x1b[2Ke") {
+		t.Fatalf("writeFrameDiff() = %q, want repaint for exposed overlay history row", got)
+	}
+	for _, unwanted := range []string{
+		"\x1b[2;1H\x1b[2Kc",
+		"\x1b[3;1H\x1b[2Kd",
+		"\x1b[5;1H\x1b[2Kp",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("writeFrameDiff() = %q, want no repaint for preserved row %q", got, unwanted)
 		}
 	}
 }

@@ -37,22 +37,33 @@ func TestClassifyBufferRedrawViewportAndContent(t *testing.T) {
 	}
 }
 
-func TestBuildRenderRequestMapsClassesToIncrementalInvalidation(t *testing.T) {
+func TestExplicitRenderRequestsMapToIncrementalInvalidation(t *testing.T) {
 	t.Parallel()
 
-	if got, want := buildRenderRequest(redrawBufferViewport, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateBuffer; got != want {
+	if got, want := bufferRenderRequest(redrawBufferViewport, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateBuffer; got != want {
 		t.Fatalf("buffer viewport invalidation = %v, want %v", got, want)
 	}
-	if got, want := buildRenderRequest(redrawOverlayInput, false, &bufferState{}, newOverlayState(), newMenuState(), true).invalidation, renderInvalidateOverlayInput; got != want {
+	if got, want := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput).invalidation, renderInvalidateOverlayInput; got != want {
 		t.Fatalf("overlay input invalidation = %v, want %v", got, want)
 	}
-	if got, want := buildRenderRequest(redrawOverlayOpen, false, &bufferState{}, newOverlayState(), newMenuState(), true).invalidation, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput; got != want {
+	if got, want := renderRequestForLayers(redrawOverlayOpen, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput).invalidation, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput; got != want {
 		t.Fatalf("overlay open invalidation = %v, want %v", got, want)
 	}
-	if got, want := buildRenderRequest(redrawMenuOpen, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateMenu; got != want {
+	if got, want := renderRequestForLayers(redrawMenuOpen, renderInvalidateMenu).invalidation, renderInvalidateMenu; got != want {
 		t.Fatalf("menu open invalidation = %v, want %v", got, want)
 	}
-	if got, want := buildRenderRequest(redrawTheme, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateAllLayers; got != want {
+	if got, want := fullRenderRequest(redrawTheme).invalidation, renderInvalidateAllLayers; got != want {
 		t.Fatalf("theme invalidation = %v, want %v", got, want)
+	}
+}
+
+func TestLegacyBuildRenderRequestMatchesOverlayCompatibilityMapping(t *testing.T) {
+	t.Parallel()
+
+	if got, want := buildRenderRequest(redrawOverlayOpen, false, &bufferState{}, newOverlayState(), newMenuState(), true).invalidation, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput; got != want {
+		t.Fatalf("legacy overlay open invalidation = %v, want %v", got, want)
+	}
+	if got, want := buildRenderRequest(redrawTheme, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateAllLayers; got != want {
+		t.Fatalf("legacy theme invalidation = %v, want %v", got, want)
 	}
 }

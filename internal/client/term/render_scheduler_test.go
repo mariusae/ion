@@ -28,12 +28,12 @@ func TestRenderSchedulerCoalescesToLatestClassAndStrongestMode(t *testing.T) {
 	}
 }
 
-func TestBuildRenderRequestBufferCursorSkipsLayerWhenCursorNotPainted(t *testing.T) {
+func TestBufferRenderRequestCursorSkipsLayerWhenCursorNotPainted(t *testing.T) {
 	t.Parallel()
 
 	state := &bufferState{dotStart: 1, dotEnd: 1}
-	req := buildRenderRequest(redrawBufferCursor, false, state, nil, newMenuState(), true)
+	req := bufferRenderRequest(redrawBufferCursor, state, nil, newMenuState(), true)
 	if got, want := req.invalidation, renderInvalidateNone; got != want {
-		t.Fatalf("buildRenderRequest() invalidation = %v, want %v", got, want)
+		t.Fatalf("bufferRenderRequest() invalidation = %v, want %v", got, want)
 	}
 }

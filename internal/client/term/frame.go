@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// terminalFrame and frameRenderer implement the legacy snapshot/diff renderer.
+// The live TTY path uses the grid compositor; this code remains for compatibility
+// fallbacks and focused regression tests while the old path is retired.
 type terminalFrame struct {
 	title      string
 	titleDirty bool

@@ -23,6 +23,7 @@ type renderScheduler struct {
 	req     renderRequest
 }
 
+// renderRequestForLayers is the primary semantic render API for the live compositor path.
 func renderRequestForLayers(class redrawClass, invalidation renderInvalidation) renderRequest {
 	return renderRequest{
 		class:        class,
@@ -38,7 +39,7 @@ func fullRenderRequest(class redrawClass) renderRequest {
 	}
 }
 
-func bufferRenderRequest(class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
+func bufferRenderRequest(class redrawClass, _ *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
 	req := renderRequestForLayers(class, renderInvalidateBuffer)
 	if class != redrawBufferCursor {
 		return req
@@ -78,6 +79,8 @@ func (r renderRequest) invalidates(mask renderInvalidation) bool {
 	return r.invalidation&mask != 0
 }
 
+// buildRenderRequest maps legacy redraw classes onto semantic invalidations.
+// New live-path code should prefer the explicit request constructors above.
 func buildRenderRequest(class redrawClass, forceFull bool, state *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
 	req := renderRequest{
 		class:     class,

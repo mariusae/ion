@@ -1688,7 +1688,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *gridRende
 	}
 	state := newBufferState(view)
 	refreshCurrentBufferDirty(svc, state)
-	if err := drawBufferMode(stdout, renderer, stats, redrawInitial, state, overlay, menu, theme, focused, true); err != nil {
+	if err := drawBufferModeRequest(stdout, renderer, stats, fullRenderRequest(redrawInitial), state, overlay, menu, theme, focused); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -2045,6 +2045,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
+// drawBufferMode is a compatibility wrapper for legacy class-based callers and tests.
 func drawBufferMode(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
 	req := buildRenderRequest(class, forceFull, state, overlay, menu, focused)
 	return drawBufferModeRequest(stdout, renderer, stats, req, state, overlay, menu, theme, focused)

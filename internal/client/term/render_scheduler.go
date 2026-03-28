@@ -38,6 +38,18 @@ func fullRenderRequest(class redrawClass) renderRequest {
 	}
 }
 
+func bufferRenderRequest(class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
+	req := renderRequestForLayers(class, renderInvalidateBuffer)
+	if class != redrawBufferCursor {
+		return req
+	}
+	req.invalidation = renderInvalidateNone
+	if bufferInactive(overlay, menu, focused) {
+		req.invalidation = renderInvalidateBuffer
+	}
+	return req
+}
+
 func (s *renderScheduler) Request(req renderRequest) {
 	if s == nil {
 		return
@@ -73,11 +85,11 @@ func buildRenderRequest(class redrawClass, forceFull bool, state *bufferState, o
 	}
 	switch class {
 	case redrawBufferCursor:
-		if bufferInactive(overlay, menu, focused) {
-			req.invalidation = renderInvalidateBuffer
-		}
+		req = bufferRenderRequest(class, state, overlay, menu, focused)
+		req.forceFull = forceFull
 	case redrawBufferSelection, redrawBufferViewport, redrawBufferContent, redrawBufferStatus:
-		req.invalidation = renderInvalidateBuffer
+		req = bufferRenderRequest(class, state, overlay, menu, focused)
+		req.forceFull = forceFull
 	case redrawOverlayInput:
 		req.invalidation = renderInvalidateOverlayInput
 	case redrawOverlayHistory:

@@ -37,32 +37,22 @@ func TestClassifyBufferRedrawViewportAndContent(t *testing.T) {
 	}
 }
 
-func TestRedrawNeedsFullFrameAllowsViewportAndOverlayDiff(t *testing.T) {
+func TestBuildRenderRequestMapsClassesToIncrementalInvalidation(t *testing.T) {
 	t.Parallel()
 
-	for _, class := range []redrawClass{
-		redrawBufferCursor,
-		redrawBufferViewport,
-		redrawBufferContent,
-		redrawBufferStatus,
-		redrawOverlayInput,
-		redrawOverlayHistory,
-		redrawOverlayOpen,
-		redrawOverlayClose,
-		redrawMenuHover,
-		redrawMenuOpen,
-		redrawMenuClose,
-	} {
-		if redrawNeedsFullFrame(class) {
-			t.Fatalf("redrawNeedsFullFrame(%q) = true, want false", class)
-		}
+	if got, want := buildRenderRequest(redrawBufferViewport, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateBuffer; got != want {
+		t.Fatalf("buffer viewport invalidation = %v, want %v", got, want)
 	}
-
-	for _, class := range []redrawClass{
-		redrawTheme,
-	} {
-		if !redrawNeedsFullFrame(class) {
-			t.Fatalf("redrawNeedsFullFrame(%q) = false, want true", class)
-		}
+	if got, want := buildRenderRequest(redrawOverlayInput, false, &bufferState{}, newOverlayState(), newMenuState(), true).invalidation, renderInvalidateOverlayInput; got != want {
+		t.Fatalf("overlay input invalidation = %v, want %v", got, want)
+	}
+	if got, want := buildRenderRequest(redrawOverlayOpen, false, &bufferState{}, newOverlayState(), newMenuState(), true).invalidation, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput; got != want {
+		t.Fatalf("overlay open invalidation = %v, want %v", got, want)
+	}
+	if got, want := buildRenderRequest(redrawMenuOpen, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateMenu; got != want {
+		t.Fatalf("menu open invalidation = %v, want %v", got, want)
+	}
+	if got, want := buildRenderRequest(redrawTheme, false, &bufferState{}, nil, newMenuState(), true).invalidation, renderInvalidateAllLayers; got != want {
+		t.Fatalf("theme invalidation = %v, want %v", got, want)
 	}
 }

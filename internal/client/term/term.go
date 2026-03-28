@@ -2034,7 +2034,7 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 }
 
 func drawBufferMode(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
-	req := buildRenderRequest(class, forceFull || redrawNeedsFullFrame(class), state, overlay, menu, focused)
+	req := buildRenderRequest(class, forceFull, state, overlay, menu, focused)
 	return drawBufferModeRequest(stdout, renderer, stats, req, state, overlay, menu, theme, focused)
 }
 
@@ -2141,15 +2141,6 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 		}
 	}
 	return false, nil
-}
-
-func redrawNeedsFullFrame(class redrawClass) bool {
-	switch class {
-	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawOverlayOpen, redrawOverlayClose, redrawMenuHover, redrawMenuOpen, redrawMenuClose:
-		return false
-	default:
-		return true
-	}
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {

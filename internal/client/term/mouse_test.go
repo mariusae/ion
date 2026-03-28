@@ -284,6 +284,61 @@ func TestReadBufferEscapeCoalescesBufferedMouseMotion(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeCoalescesTimedPassiveMouseMotion(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		_, _ = w.Write([]byte("\x1b[<35;2;2M"))
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte("\x1b[<35;7;4M"))
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte("\x1b[<0;3;3M"))
+		_ = w.Close()
+	}()
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with first ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(timed coalesced motion) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(timed coalesced motion) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 35; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.x, 6; got != want {
+		t.Fatalf("mouse.x = %d, want %d", got, want)
+	}
+	if got, want := mouse.y, 3; got != want {
+		t.Fatalf("mouse.y = %d, want %d", got, want)
+	}
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with next ESC: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(next event after timed coalescing) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(next event after timed coalescing) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 0; got != want {
+		t.Fatalf("next mouse.button = %d, want %d", got, want)
+	}
+}
+
 func TestScreenToPosUsesWrappedRows(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 3

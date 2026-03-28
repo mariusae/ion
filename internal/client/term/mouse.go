@@ -208,6 +208,7 @@ func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
 }
 
 const escSequenceWait = 20_000 // 20ms in microseconds
+const passiveMotionCoalesceWait = 20_000
 
 func waitForInputByte(stdin *os.File, timeoutUsec int64) (bool, error) {
 	if stdin == nil {
@@ -279,8 +280,12 @@ func coalesceMouseMotion(reader *bufio.Reader, stdin *os.File, event mouseEvent)
 		return event, nil
 	}
 	latest := event
+	timeoutUsec := int64(0)
+	if event.noButtonsDown() {
+		timeoutUsec = passiveMotionCoalesceWait
+	}
 	for i := 0; i < 256; i++ {
-		next, size, ok, err := peekMouseEvent(reader, stdin)
+		next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
 		if err != nil {
 			return mouseEvent{}, err
 		}
@@ -295,9 +300,9 @@ func coalesceMouseMotion(reader *bufio.Reader, stdin *os.File, event mouseEvent)
 	return latest, nil
 }
 
-func peekMouseEvent(reader *bufio.Reader, stdin *os.File) (mouseEvent, int, bool, error) {
+func peekMouseEvent(reader *bufio.Reader, stdin *os.File, timeoutUsec int64) (mouseEvent, int, bool, error) {
 	if reader.Buffered() == 0 {
-		ok, err := waitForInputByte(stdin, 0)
+		ok, err := waitForInputByte(stdin, timeoutUsec)
 		if err != nil {
 			return mouseEvent{}, 0, false, err
 		}

@@ -47,3 +47,15 @@
   - input starvation/backlog
   - redraw scheduling bugs
   - diff/full-frame rendering interactions
+
+## Lab Notebook
+
+### 2026-03-27 21:22:32 EDT
+
+- Context: active freeze reproduced with `ION_TERM_TRACE=1`, trace written to `/tmp/ion-term-trace.log`.
+- Observation: the client was still processing `stdin-ready`, `read-rune`, and redraw events while the UI appeared frozen.
+- Observation: the trace window was dominated by passive SGR motion events (`button=35`), with earlier bursts of scroll events (`button=65`).
+- Observation: no keyboard input appeared in that trace window, which matches the earlier starvation/backlog hypothesis.
+- Interpretation: this still does not look like a hard deadlock; it looks like mouse-input pressure starving more useful input.
+- Change: updated the mouse decoder to coalesce timed bursts of passive no-button motion, not just runs that were already buffered contiguously.
+- Verification: `go test ./internal/client/term -count=1` passed after the decoder change.

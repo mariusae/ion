@@ -343,7 +343,7 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), nil, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -385,7 +385,7 @@ func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), nil, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\x07") {
@@ -409,7 +409,7 @@ func TestDrawBufferModeMarksDirtyWindowTitle(t *testing.T) {
 	state.dirty = true
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), nil, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt'\x07") {
@@ -911,7 +911,7 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, overlay, newMenuState(), theme, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, overlay, newMenuState(), theme, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -942,7 +942,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 	menu := buildContextMenu(state, nil, wire.NavigationStack{}, 5, 8, menuStickyState{})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, menu, theme, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, menu, theme, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -974,7 +974,7 @@ func TestDrawBufferModeShowsSelectionWhenUnfocused(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), theme, false, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), theme, false); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
@@ -1200,7 +1200,7 @@ func TestDrawBufferModeWrapsLongLines(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := drawBufferMode(&out, nil, nil, redrawInitial, state, nil, newMenuState(), nil, true, true); err != nil {
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()

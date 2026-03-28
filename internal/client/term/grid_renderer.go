@@ -58,8 +58,8 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 		return nil
 	}
 	if r == nil {
-		frame := buildBufferFrame(state, overlay, menu, theme, focused)
-		return writeFullFrame(stdout, frame)
+		renderer := newGridRenderer()
+		return renderer.Draw(stdout, req, state, overlay, menu, theme, focused, stats)
 	}
 	prevRects := r.layerRects()
 	rootChanged := r.ensureGrids(overlay, menu)

@@ -212,3 +212,54 @@ func TestDrawBufferModeMenuOpenAndCloseStayIncremental(t *testing.T) {
 		t.Fatalf("drawBufferMode(menu close) = %q, want menu-area recomposition", gotClose)
 	}
 }
+
+func TestDrawBufferModeOverlayOpenAndCloseStayIncremental(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 30
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\ngamma\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	overlay := newOverlayState()
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, renderer, nil, redrawInitial, state, overlay, newMenuState(), nil, true, true); err != nil {
+		t.Fatalf("drawBufferMode(initial) error = %v", err)
+	}
+
+	overlay.open(",")
+	overlay.addOutput("hello")
+	out.Reset()
+	if err := drawBufferMode(&out, renderer, nil, redrawOverlayOpen, state, overlay, newMenuState(), nil, true, false); err != nil {
+		t.Fatalf("drawBufferMode(overlay open) error = %v", err)
+	}
+	gotOpen := out.String()
+	if strings.Contains(gotOpen, "\x1b[2J") {
+		t.Fatalf("drawBufferMode(overlay open) = %q, want no full clear", gotOpen)
+	}
+	if !strings.Contains(gotOpen, "\x1b[6;") {
+		t.Fatalf("drawBufferMode(overlay open) = %q, want lower-screen recomposition", gotOpen)
+	}
+
+	overlay.close()
+	out.Reset()
+	if err := drawBufferMode(&out, renderer, nil, redrawOverlayClose, state, overlay, newMenuState(), nil, true, false); err != nil {
+		t.Fatalf("drawBufferMode(overlay close) error = %v", err)
+	}
+	gotClose := out.String()
+	if strings.Contains(gotClose, "\x1b[2J") {
+		t.Fatalf("drawBufferMode(overlay close) = %q, want no full clear", gotClose)
+	}
+	if !strings.Contains(gotClose, "\x1b[6;") {
+		t.Fatalf("drawBufferMode(overlay close) = %q, want lower-screen recomposition", gotClose)
+	}
+}

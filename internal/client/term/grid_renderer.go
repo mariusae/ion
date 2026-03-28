@@ -28,12 +28,6 @@ type gridScrollOp struct {
 	delta  int
 }
 
-type rowRange struct {
-	top    int
-	bottom int
-	ok     bool
-}
-
 func newGridRenderer() *gridRenderer {
 	return &gridRenderer{
 		trace:   newTraceLogger(),
@@ -67,9 +61,9 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 		frame := buildBufferFrame(state, overlay, menu, theme, focused)
 		return writeFullFrame(stdout, frame)
 	}
-	prevMenuRows := visibleGridRowRange(r.menu)
-	geometryChanged := r.ensureGrids(overlay, menu)
-	forceFull = forceFull || !r.initialized || geometryChanged
+	prevRects := r.layerRects()
+	rootChanged := r.ensureGrids(overlay, menu)
+	forceFull = forceFull || !r.initialized || rootChanged
 
 	nextTitle := state.name
 	nextTitleDirty := state.dirty
@@ -78,7 +72,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 
 	bufferAnchors := currentBufferAnchors(state, overlay, r.buffer.rows)
 	overlayAnchors := currentOverlayAnchors(overlay)
-	nextMenuRows := visibleGridRowRange(r.menu)
+	nextRects := r.layerRects()
 
 	scrollOps := make([]gridScrollOp, 0, 2)
 	if !forceFull {
@@ -105,8 +99,8 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	r.renderMenuGrid(menu, theme)
 
 	rootBuilder := newGridLineBuilder(r.root.cols)
-	composeRows := r.rootComposeRows(forceFull, prevMenuRows, nextMenuRows)
-	composeRootGrid(r.root, rootBuilder, composeRows, r.buffer, r.hudHistory, r.hudInput, r.menu)
+	composeSpans := r.rootComposeSpans(forceFull, prevRects, nextRects)
+	composeRootGrid(r.root, rootBuilder, composeSpans, r.buffer, r.hudHistory, r.hudInput, r.menu)
 
 	counted := &countingWriter{w: stdout}
 	backend := newTTYRenderBackend(counted, r.palette)
@@ -162,10 +156,9 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 }
 
 func (r *gridRenderer) ensureGrids(overlay *overlayState, menu *menuState) bool {
-	changed := false
-	changed = r.ensureGrid(&r.root, termRows, termCols) || changed
+	rootChanged := r.ensureGrid(&r.root, termRows, termCols)
 	bufferRows := bufferViewRows(overlay)
-	changed = r.ensureGrid(&r.buffer, bufferRows, termCols) || changed
+	r.ensureGrid(&r.buffer, bufferRows, termCols)
 	r.buffer.originRow = 0
 	r.buffer.originCol = 0
 	r.buffer.visible = true
@@ -174,13 +167,13 @@ func (r *gridRenderer) ensureGrids(overlay *overlayState, menu *menuState) bool 
 	if overlay != nil && overlay.visible {
 		historyRows = overlayHeight(overlay) - overlayPromptRows(overlay)
 	}
-	changed = r.ensureGrid(&r.hudHistory, historyRows, termCols) || changed
+	r.ensureGrid(&r.hudHistory, historyRows, termCols)
 	r.hudHistory.originRow = overlayTopRow(overlay)
 	r.hudHistory.originCol = 0
 	r.hudHistory.visible = overlay != nil && overlay.visible && historyRows > 0
 
 	inputRows := overlayPromptRows(overlay)
-	changed = r.ensureGrid(&r.hudInput, inputRows, termCols) || changed
+	r.ensureGrid(&r.hudInput, inputRows, termCols)
 	r.hudInput.originRow = termRows - 1 - overlayBottomPadRows(overlay)
 	r.hudInput.originCol = 0
 	r.hudInput.visible = overlay != nil && overlay.visible && inputRows > 0
@@ -199,7 +192,7 @@ func (r *gridRenderer) ensureGrids(overlay *overlayState, menu *menuState) bool 
 		r.menu.originCol = menu.x
 		r.menu.visible = true
 	}
-	return changed
+	return rootChanged
 }
 
 func (r *gridRenderer) ensureGrid(target **ScreenGrid, rows, cols int) bool {
@@ -371,24 +364,31 @@ func (r *gridRenderer) emitDirtyRows(backend renderBackend, grid *ScreenGrid) {
 	}
 }
 
-func (r *gridRenderer) rootComposeRows(forceFull bool, prevMenuRows, nextMenuRows rowRange) []bool {
+func (r *gridRenderer) rootComposeSpans(forceFull bool, prevRects, nextRects []gridRect) []gridDirtySpan {
 	if r == nil || r.root == nil {
 		return nil
 	}
-	rows := make([]bool, r.root.rows)
+	spans := make([]gridDirtySpan, r.root.rows)
+	for row := range spans {
+		spans[row] = gridDirtySpan{start: r.root.cols}
+	}
 	if forceFull {
-		for row := range rows {
-			rows[row] = true
+		for row := range spans {
+			spans[row] = gridDirtySpan{start: 0, end: r.root.cols}
 		}
-		return rows
+		return spans
 	}
-	projectGridDirtyRows(r.root, rows)
+	projectGridDirtySpans(r.root, spans)
 	for _, layer := range []*ScreenGrid{r.buffer, r.hudHistory, r.hudInput, r.menu} {
-		projectLayerDirtyRows(r.root, layer, rows)
+		projectLayerDirtySpans(r.root, layer, spans)
 	}
-	markRowRange(rows, prevMenuRows)
-	markRowRange(rows, nextMenuRows)
-	return rows
+	for _, rect := range prevRects {
+		markRect(spans, rect)
+	}
+	for _, rect := range nextRects {
+		markRect(spans, rect)
+	}
+	return spans
 }
 
 func (r *gridRenderer) clearGridDirty() {
@@ -613,31 +613,12 @@ func abs(v int) int {
 	return v
 }
 
-func visibleGridRowRange(grid *ScreenGrid) rowRange {
-	if grid == nil || !grid.visible || grid.rows <= 0 {
-		return rowRange{}
-	}
-	return rowRange{
-		top:    grid.originRow,
-		bottom: grid.originRow + grid.rows,
-		ok:     true,
-	}
-}
-
-func markRowRange(rows []bool, rr rowRange) {
-	if !rr.ok || len(rows) == 0 {
-		return
-	}
-	top := rr.top
-	if top < 0 {
-		top = 0
-	}
-	bottom := rr.bottom
-	if bottom > len(rows) {
-		bottom = len(rows)
-	}
-	for row := top; row < bottom; row++ {
-		rows[row] = true
+func (r *gridRenderer) layerRects() []gridRect {
+	return []gridRect{
+		visibleGridRect(r.buffer),
+		visibleGridRect(r.hudHistory),
+		visibleGridRect(r.hudInput),
+		visibleGridRect(r.menu),
 	}
 }
 

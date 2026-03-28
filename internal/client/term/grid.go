@@ -190,6 +190,14 @@ func (b *GridLineBuilder) Start(grid *ScreenGrid, row int) {
 	}
 }
 
+func (b *GridLineBuilder) StartFromGrid(grid *ScreenGrid, row int) {
+	b.Start(grid, row)
+	if grid == nil || row < 0 || row >= grid.rows {
+		return
+	}
+	copy(b.cells, grid.rowCells(row))
+}
+
 func (b *GridLineBuilder) PutCell(col int, cell gridCell) {
 	if col < 0 || col >= len(b.cells) {
 		return

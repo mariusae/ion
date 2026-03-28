@@ -1,24 +1,34 @@
 package term
 
-func composeRootGrid(root *ScreenGrid, builder *GridLineBuilder, rows []bool, layers ...*ScreenGrid) {
+type gridRect struct {
+	top    int
+	bottom int
+	left   int
+	right  int
+	ok     bool
+}
+
+func composeRootGrid(root *ScreenGrid, builder *GridLineBuilder, spans []gridDirtySpan, layers ...*ScreenGrid) {
 	if root == nil || builder == nil {
 		return
 	}
 	for row := 0; row < root.rows; row++ {
-		if len(rows) != 0 && !rows[row] {
+		span := spanAt(spans, row, root.cols)
+		if span.start >= span.end {
 			continue
 		}
 		root.clearRowDirty(row)
-		builder.Start(root, row)
+		builder.StartFromGrid(root, row)
+		builder.Fill(span.start, span.end, gridCell{r: ' '})
 		for _, layer := range layers {
-			composeGridRow(builder, row, layer)
+			composeGridSpan(builder, row, span.start, span.end, layer)
 		}
 		builder.Flush()
 	}
 	root.valid = true
 }
 
-func composeGridRow(builder *GridLineBuilder, rootRow int, layer *ScreenGrid) {
+func composeGridSpan(builder *GridLineBuilder, rootRow, startCol, endCol int, layer *ScreenGrid) {
 	if builder == nil || layer == nil || !layer.visible {
 		return
 	}
@@ -30,12 +40,12 @@ func composeGridRow(builder *GridLineBuilder, rootRow int, layer *ScreenGrid) {
 	if len(layerRow) == 0 {
 		return
 	}
-	startCol := max(layer.originCol, 0)
-	endCol := min(layer.originCol+layer.cols, len(builder.cells))
-	if startCol >= endCol {
+	start := max(startCol, layer.originCol)
+	end := min(endCol, layer.originCol+layer.cols)
+	if start >= end {
 		return
 	}
-	for rootCol := startCol; rootCol < endCol; rootCol++ {
+	for rootCol := start; rootCol < end; rootCol++ {
 		cell := layerRow[rootCol-layer.originCol]
 		if cell.r == ' ' && cell.style == 0 {
 			continue
@@ -44,8 +54,17 @@ func composeGridRow(builder *GridLineBuilder, rootRow int, layer *ScreenGrid) {
 	}
 }
 
-func projectLayerDirtyRows(root *ScreenGrid, layer *ScreenGrid, rows []bool) {
-	if root == nil || layer == nil || !layer.visible || len(rows) != root.rows {
+func projectGridDirtySpans(grid *ScreenGrid, spans []gridDirtySpan) {
+	if grid == nil || len(spans) != grid.rows {
+		return
+	}
+	for row := 0; row < grid.rows; row++ {
+		mergeDirtySpan(spans, row, grid.dirty[row])
+	}
+}
+
+func projectLayerDirtySpans(root *ScreenGrid, layer *ScreenGrid, spans []gridDirtySpan) {
+	if root == nil || layer == nil || !layer.visible || len(spans) != root.rows {
 		return
 	}
 	for row := 0; row < layer.rows; row++ {
@@ -57,18 +76,70 @@ func projectLayerDirtyRows(root *ScreenGrid, layer *ScreenGrid, rows []bool) {
 		if rootRow < 0 || rootRow >= root.rows {
 			continue
 		}
-		rows[rootRow] = true
+		mergeDirtySpan(spans, rootRow, gridDirtySpan{
+			start: layer.originCol + span.start,
+			end:   layer.originCol + span.end,
+		})
 	}
 }
 
-func projectGridDirtyRows(grid *ScreenGrid, rows []bool) {
-	if grid == nil || len(rows) != grid.rows {
+func mergeDirtySpan(spans []gridDirtySpan, row int, span gridDirtySpan) {
+	if row < 0 || row >= len(spans) || span.start >= span.end {
 		return
 	}
-	for row := 0; row < grid.rows; row++ {
-		span := grid.dirty[row]
-		if span.start < span.end {
-			rows[row] = true
-		}
+	dst := &spans[row]
+	if dst.start >= dst.end {
+		*dst = span
+		return
 	}
+	if span.start < dst.start {
+		dst.start = span.start
+	}
+	if span.end > dst.end {
+		dst.end = span.end
+	}
+}
+
+func markRect(spans []gridDirtySpan, rect gridRect) {
+	if !rect.ok || len(spans) == 0 {
+		return
+	}
+	top := max(rect.top, 0)
+	bottom := min(rect.bottom, len(spans))
+	if top >= bottom {
+		return
+	}
+	for row := top; row < bottom; row++ {
+		mergeDirtySpan(spans, row, gridDirtySpan{start: rect.left, end: rect.right})
+	}
+}
+
+func visibleGridRect(grid *ScreenGrid) gridRect {
+	if grid == nil || !grid.visible || grid.rows <= 0 || grid.cols <= 0 {
+		return gridRect{}
+	}
+	return gridRect{
+		top:    grid.originRow,
+		bottom: grid.originRow + grid.rows,
+		left:   grid.originCol,
+		right:  grid.originCol + grid.cols,
+		ok:     true,
+	}
+}
+
+func spanAt(spans []gridDirtySpan, row, cols int) gridDirtySpan {
+	if row < 0 || row >= len(spans) {
+		return gridDirtySpan{start: cols}
+	}
+	span := spans[row]
+	if span.start < 0 {
+		span.start = 0
+	}
+	if span.end > cols {
+		span.end = cols
+	}
+	if span.start >= span.end {
+		return gridDirtySpan{start: cols}
+	}
+	return span
 }

@@ -206,6 +206,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var bufferBoundaryWheel wheelBoundarySuppressor
 	var overlayBoundaryWheel wheelBoundarySuppressor
 	renderer := newGridRenderer()
+	var renderQueue renderScheduler
 	renderStats := newFrameRenderStats(stderr)
 	defer renderStats.Report()
 	if renderer != nil && renderer.trace != nil {
@@ -389,31 +390,36 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return nil
 	}
 
-	redraw := func(class redrawClass) error {
+	flushRender := func(reason string) error {
+		class, forceFull, ok := renderQueue.Drain()
+		if !ok {
+			return nil
+		}
 		refreshTerminalSize()
 		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("redraw class=%s file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", class, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
+			renderer.trace.Printf("render-flush reason=%s class=%s force=%t file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", reason, class, forceFull, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
 		}
-		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, false)
+		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, forceFull)
 		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("redraw done class=%s err=%v", class, err)
+			renderer.trace.Printf("render-flush done reason=%s class=%s err=%v", reason, class, err)
 		}
 		return err
 	}
 
+	redraw := func(class redrawClass) error {
+		renderQueue.Request(class, false)
+		if reader.Buffered() == 0 {
+			return flushRender("idle")
+		}
+		return nil
+	}
+
 	fullRedraw := func(class redrawClass) error {
-		refreshTerminalSize()
-		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("full-redraw class=%s file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", class, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
+		renderQueue.Request(class, true)
+		if reader.Buffered() == 0 {
+			return flushRender("idle")
 		}
-		if renderer != nil {
-			renderer.Reset()
-		}
-		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, true)
-		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("full-redraw done class=%s err=%v", class, err)
-		}
-		return err
+		return nil
 	}
 
 	stopMenuLostReleaseTimer := func() {
@@ -1259,6 +1265,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		if reader.Buffered() == 0 {
 			if reader.Buffered() == 0 {
+				if inBufferMode {
+					if err := flushRender("before-wait"); err != nil {
+						return err
+					}
+				}
 				wake, err := waitForTTYReady(stdin, wakeR)
 				if err != nil {
 					return err
@@ -2130,7 +2141,7 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 
 func redrawNeedsFullFrame(class redrawClass) bool {
 	switch class {
-	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawMenuHover, redrawMenuOpen, redrawMenuClose:
+	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawOverlayOpen, redrawOverlayClose, redrawMenuHover, redrawMenuOpen, redrawMenuClose:
 		return false
 	default:
 		return true

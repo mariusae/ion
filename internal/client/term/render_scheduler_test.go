@@ -31,8 +31,7 @@ func TestRenderSchedulerCoalescesToLatestClassAndStrongestMode(t *testing.T) {
 func TestBufferRenderRequestCursorSkipsLayerWhenCursorNotPainted(t *testing.T) {
 	t.Parallel()
 
-	state := &bufferState{dotStart: 1, dotEnd: 1}
-	req := bufferRenderRequest(redrawBufferCursor, state, nil, newMenuState(), true)
+	req := bufferRenderRequest(redrawBufferCursor, nil, newMenuState(), true)
 	if got, want := req.invalidation, renderInvalidateNone; got != want {
 		t.Fatalf("bufferRenderRequest() invalidation = %v, want %v", got, want)
 	}

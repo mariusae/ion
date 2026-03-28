@@ -39,7 +39,7 @@ func fullRenderRequest(class redrawClass) renderRequest {
 	}
 }
 
-func bufferRenderRequest(class redrawClass, _ *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
+func bufferRenderRequest(class redrawClass, overlay *overlayState, menu *menuState, focused bool) renderRequest {
 	req := renderRequestForLayers(class, renderInvalidateBuffer)
 	if class != redrawBufferCursor {
 		return req
@@ -77,34 +77,4 @@ func (s *renderScheduler) Drain() (renderRequest, bool) {
 
 func (r renderRequest) invalidates(mask renderInvalidation) bool {
 	return r.invalidation&mask != 0
-}
-
-// buildRenderRequest maps legacy redraw classes onto semantic invalidations.
-// New live-path code should prefer the explicit request constructors above.
-func buildRenderRequest(class redrawClass, forceFull bool, state *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
-	req := renderRequest{
-		class:     class,
-		forceFull: forceFull,
-	}
-	switch class {
-	case redrawBufferCursor:
-		req = bufferRenderRequest(class, state, overlay, menu, focused)
-		req.forceFull = forceFull
-	case redrawBufferSelection, redrawBufferViewport, redrawBufferContent, redrawBufferStatus:
-		req = bufferRenderRequest(class, state, overlay, menu, focused)
-		req.forceFull = forceFull
-	case redrawOverlayInput:
-		req.invalidation = renderInvalidateOverlayInput
-	case redrawOverlayHistory:
-		req.invalidation = renderInvalidateOverlayHistory
-	case redrawOverlayOpen, redrawOverlayClose:
-		req.invalidation = renderInvalidateBuffer | renderInvalidateOverlayHistory | renderInvalidateOverlayInput
-	case redrawMenuHover, redrawMenuOpen, redrawMenuClose:
-		req.invalidation = renderInvalidateMenu
-	case redrawTheme, redrawRefresh:
-		req.invalidation = renderInvalidateAllLayers
-	default:
-		req.invalidation = renderInvalidateAllLayers
-	}
-	return req
 }

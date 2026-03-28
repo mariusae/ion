@@ -39,7 +39,7 @@ func TestGridRendererViewportScrollUsesScrollOperation(t *testing.T) {
 	}, state)
 	next.origin = nextVisualRowStart(next.text, state.origin)
 
-	if err := renderer.Draw(&out, bufferRenderRequest(redrawBufferViewport, next, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
+	if err := renderer.Draw(&out, bufferRenderRequest(redrawBufferViewport, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(viewport) error = %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestGridRendererBufferCursorRedrawMovesCursorOnly(t *testing.T) {
 		DotEnd:   1,
 	}, state)
 	out.Reset()
-	if err := renderer.Draw(&out, bufferRenderRequest(redrawBufferCursor, next, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
+	if err := renderer.Draw(&out, bufferRenderRequest(redrawBufferCursor, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(cursor) error = %v", err)
 	}
 	if got, want := out.String(), "\x1b[?25h\x1b[1;2H"; got != want {

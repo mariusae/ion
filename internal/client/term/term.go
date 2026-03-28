@@ -415,7 +415,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	bufferRedraw := func(class redrawClass) error {
-		return redraw(bufferRenderRequest(class, buffer, overlay, menu, focused))
+		return redraw(bufferRenderRequest(class, overlay, menu, focused))
 	}
 
 	classifiedBufferRedraw := func(previous *bufferState) error {

@@ -60,5 +60,5 @@ func classifyBufferRedraw(previous, next *bufferState) redrawClass {
 
 func classifyBufferRenderRequest(previous, next *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
 	class := classifyBufferRedraw(previous, next)
-	return bufferRenderRequest(class, next, overlay, menu, focused)
+	return bufferRenderRequest(class, overlay, menu, focused)
 }

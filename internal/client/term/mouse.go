@@ -3,6 +3,7 @@ package term
 import (
 	"bufio"
 	"errors"
+	"io"
 	"os"
 	"syscall"
 )
@@ -12,6 +13,26 @@ type mouseEvent struct {
 	x       int
 	y       int
 	pressed bool
+}
+
+func (e mouseEvent) isMotion() bool {
+	return e.button >= 32 && e.button < 64
+}
+
+func (e mouseEvent) baseButton() int {
+	return e.button & 3
+}
+
+func (e mouseEvent) noButtonsDown() bool {
+	return e.isMotion() && e.baseButton() == 3
+}
+
+func (e mouseEvent) dismissesOverlayOutside() bool {
+	switch e.button {
+	case 64, 65:
+		return true
+	}
+	return !e.isMotion() && e.pressed
 }
 
 func bufferViewRows(overlay *overlayState) int {
@@ -65,6 +86,10 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 			return keyFocusOut, nil, nil
 		case '<':
 			event, err := readMouseEvent(reader)
+			if err != nil {
+				return 0, nil, err
+			}
+			event, err = coalesceMouseMotion(reader, stdin, event)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -249,6 +274,95 @@ func readMouseNumber(reader *bufio.Reader) (int, error) {
 	}
 }
 
+func coalesceMouseMotion(reader *bufio.Reader, stdin *os.File, event mouseEvent) (mouseEvent, error) {
+	if !event.isMotion() {
+		return event, nil
+	}
+	latest := event
+	for i := 0; i < 256; i++ {
+		next, size, ok, err := peekMouseEvent(reader, stdin)
+		if err != nil {
+			return mouseEvent{}, err
+		}
+		if !ok || !next.isMotion() {
+			return latest, nil
+		}
+		if _, err := reader.Discard(size); err != nil {
+			return mouseEvent{}, err
+		}
+		latest = next
+	}
+	return latest, nil
+}
+
+func peekMouseEvent(reader *bufio.Reader, stdin *os.File) (mouseEvent, int, bool, error) {
+	if reader.Buffered() == 0 {
+		ok, err := waitForInputByte(stdin, 0)
+		if err != nil {
+			return mouseEvent{}, 0, false, err
+		}
+		if !ok {
+			return mouseEvent{}, 0, false, nil
+		}
+		if _, err := reader.Peek(1); err != nil {
+			if errors.Is(err, io.EOF) {
+				return mouseEvent{}, 0, false, nil
+			}
+			return mouseEvent{}, 0, false, err
+		}
+	}
+	buf, err := reader.Peek(reader.Buffered())
+	if err != nil {
+		return mouseEvent{}, 0, false, err
+	}
+	return parseMouseEvent(buf)
+}
+
+func parseMouseEvent(buf []byte) (mouseEvent, int, bool, error) {
+	if len(buf) < 6 || buf[0] != 0x1b || buf[1] != '[' || buf[2] != '<' {
+		return mouseEvent{}, 0, false, nil
+	}
+	button, next, ok := parseMouseField(buf, 3, ';')
+	if !ok {
+		return mouseEvent{}, 0, false, nil
+	}
+	x, next, ok := parseMouseField(buf, next, ';')
+	if !ok {
+		return mouseEvent{}, 0, false, nil
+	}
+	y, next, ok := parseMouseField(buf, next, 'M', 'm')
+	if !ok {
+		return mouseEvent{}, 0, false, nil
+	}
+	end := buf[next-1]
+	return mouseEvent{
+		button:  button,
+		x:       x - 1,
+		y:       y - 1,
+		pressed: end == 'M',
+	}, next, true, nil
+}
+
+func parseMouseField(buf []byte, start int, terminators ...byte) (int, int, bool) {
+	if start >= len(buf) {
+		return 0, 0, false
+	}
+	n := 0
+	for i := start; i < len(buf); i++ {
+		b := buf[i]
+		for _, term := range terminators {
+			if b == term {
+				return n, i + 1, true
+			}
+		}
+		if b < '0' || b > '9' {
+			return 0, 0, false
+		}
+		n = n*10 + int(b-'0')
+	}
+	return 0, 0, false
+}
+
 func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEvent, selecting *bool, selectStart *int) bool {
 	if state == nil {
 		return false
@@ -282,16 +396,19 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 	if !ok {
 		return false
 	}
-	if event.button >= 32 && event.button < 64 {
+	if event.isMotion() {
 		if !*selecting {
 			return false
 		}
 		state.cursor = pos
 		state.markMode = false
 		updateMouseSelection(state, *selectStart, pos)
+		if event.noButtonsDown() {
+			*selecting = false
+		}
 		return true
 	}
-	if event.button&3 != 0 {
+	if event.baseButton() != 0 {
 		return false
 	}
 	if event.pressed {

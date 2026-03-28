@@ -2,6 +2,7 @@ package term
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"strings"
@@ -34,6 +35,7 @@ type frameCursor struct {
 type frameRenderer struct {
 	last        *terminalFrame
 	initialized bool
+	trace       *traceLogger
 }
 
 type frameRowID struct {
@@ -146,7 +148,7 @@ func newTerminalFrame(rows, cols int) *terminalFrame {
 }
 
 func newFrameRenderer() *frameRenderer {
-	return &frameRenderer{}
+	return &frameRenderer{trace: newTraceLogger()}
 }
 
 func defaultFrameTerminalState() frameTerminalState {
@@ -244,8 +246,42 @@ func (r *frameRenderer) Recover(stdout io.Writer, frame *terminalFrame, class re
 	if r == nil {
 		return writeFullFrame(stdout, frame)
 	}
-	r.Reset()
-	return r.Render(stdout, frame, class, true, stats)
+	if frame == nil {
+		return nil
+	}
+	if r.trace != nil {
+		rows := 0
+		prevSig := uint64(0)
+		nextSig := frameSignature(frame)
+		if frame != nil {
+			rows = len(frame.rows)
+		}
+		if r.last != nil {
+			prevSig = frameSignature(r.last)
+		}
+		r.trace.Printf("render recover class=%s initialized=%t rows=%d prevSig=%x nextSig=%x", class, r.initialized, rows, prevSig, nextSig)
+	}
+	counted := &countingWriter{w: stdout}
+	result := frameRenderResult{}
+	if !r.initialized || r.last == nil {
+		if err := writeFullFrame(counted, frame); err != nil {
+			return err
+		}
+	} else {
+		if err := writeRecoveredFrame(counted, r.last, frame); err != nil {
+			return err
+		}
+	}
+	result = frameRenderResult{full: true, rows: len(frame.rows), bytes: counted.count}
+	r.last = cloneTerminalFrame(frame)
+	r.initialized = true
+	if r.trace != nil {
+		r.trace.Printf("render recover done class=%s bytes=%d nextSig=%x", class, counted.count, frameSignature(frame))
+	}
+	if stats != nil {
+		stats.Record(class, result)
+	}
+	return nil
 }
 
 func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class redrawClass, forceFull bool, stats *frameRenderStats) error {
@@ -258,6 +294,13 @@ func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class red
 	counted := &countingWriter{w: stdout}
 	result := frameRenderResult{}
 	if forceFull || !r.initialized || !sameFrameGeometry(r.last, frame) {
+		if r.trace != nil {
+			prevSig := uint64(0)
+			if r.last != nil {
+				prevSig = frameSignature(r.last)
+			}
+			r.trace.Printf("render full class=%s force=%t initialized=%t sameGeometry=%t prevSig=%x nextSig=%x", class, forceFull, r.initialized, sameFrameGeometry(r.last, frame), prevSig, frameSignature(frame))
+		}
 		if err := writeFullFrame(counted, frame); err != nil {
 			return err
 		}
@@ -270,6 +313,9 @@ func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class red
 		return nil
 	}
 	changedRows := changedFrameRows(r.last, frame)
+	if r.trace != nil {
+		r.trace.Printf("render diff class=%s changedRows=%d cursorChanged=%t prevSig=%x nextSig=%x", class, len(changedRows), r.last.cursor != frame.cursor, frameSignature(r.last), frameSignature(frame))
+	}
 	scrollRows := changedRows
 	if class == redrawBufferViewport {
 		if _, exposed, ok := detectViewportRowShift(r.last, frame); ok {
@@ -281,10 +327,28 @@ func (r *frameRenderer) Render(stdout io.Writer, frame *terminalFrame, class red
 	}
 	result = frameRenderResult{rows: len(scrollRows), bytes: counted.count}
 	r.last = cloneTerminalFrame(frame)
+	if r.trace != nil {
+		r.trace.Printf("render diff done class=%s bytes=%d nextSig=%x", class, counted.count, frameSignature(frame))
+	}
 	if stats != nil {
 		stats.Record(class, result)
 	}
 	return nil
+}
+
+func frameSignature(frame *terminalFrame) uint64 {
+	if frame == nil {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%s|%t|%t|%d|%d|%t|%t|%t|%t|%t|%d|%d|%d|", frame.title, frame.titleDirty, frame.cursor.visible, frame.cursor.row, frame.cursor.col, frame.terminal.altScreen, frame.terminal.mousePress, frame.terminal.mouseMotion, frame.terminal.focusReporting, frame.terminal.mouseSGR, frame.terminal.cursorShape, len(frame.rows), len(frame.rows))
+	for _, row := range frame.rows {
+		_, _ = fmt.Fprintf(h, "%d|%d|", row.id.kind, row.id.anchor)
+		for _, cell := range row.cells {
+			_, _ = fmt.Fprintf(h, "%c|%s|", cell.r, cell.style)
+		}
+	}
+	return h.Sum64()
 }
 
 func buildBufferFrame(state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) *terminalFrame {
@@ -368,18 +432,30 @@ func renderMenuFrame(frame *terminalFrame, menu *menuState, theme *uiTheme) {
 	}
 	inner := menu.width - 2
 	row := menu.y
+	if row < 0 || row >= len(frame.rows) {
+		return
+	}
 	frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 	renderFrameRowText(frame, row, menu.x, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), frameMenuBorderStyle(theme), 0)
 	row++
 	for i, item := range menu.items {
+		if row >= len(frame.rows) {
+			return
+		}
 		frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 		renderFrameRowText(frame, row, menu.x, formatMenuItemLine(item, inner), frameMenuItemStyle(theme, item.current, menu.hover == i), 0)
 		row++
 		if item.sepAfter && i < len(menu.items)-1 {
+			if row >= len(frame.rows) {
+				return
+			}
 			frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 			renderFrameRowText(frame, row, menu.x, formatMenuBorder("", inner, '├', '┤', '─'), frameMenuBorderStyle(theme), 0)
 			row++
 		}
+	}
+	if row >= len(frame.rows) {
+		return
 	}
 	frame.rows[row].id = frameRowID{kind: frameRowKindMenu, anchor: row}
 	renderFrameRowText(frame, row, menu.x, formatMenuBorder("", inner, '╰', '╯', '─'), frameMenuBorderStyle(theme), 0)
@@ -446,6 +522,43 @@ func writeFullFrame(stdout io.Writer, frame *terminalFrame) error {
 	return writeFrameCursor(stdout, frame.cursor)
 }
 
+func writeRecoveredFrame(stdout io.Writer, prev, next *terminalFrame) error {
+	if next == nil {
+		return nil
+	}
+	prevTerminal := frameTerminalState{}
+	if prev != nil {
+		prevTerminal = prev.terminal
+		if prev.title != next.title || prev.titleDirty != next.titleDirty {
+			if _, err := io.WriteString(stdout, bufferWindowTitleSequence(next.title, next.titleDirty)); err != nil {
+				return err
+			}
+		}
+	} else {
+		if _, err := io.WriteString(stdout, bufferWindowTitleSequence(next.title, next.titleDirty)); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(stdout, "\x1b[?25l"); err != nil {
+		return err
+	}
+	if err := writeFrameTerminalState(stdout, prevTerminal, next.terminal); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(stdout, "\x1b[2J"); err != nil {
+		return err
+	}
+	for row := range next.rows {
+		if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
+			return err
+		}
+		if err := writeFrameRow(stdout, next.rows[row]); err != nil {
+			return err
+		}
+	}
+	return writeFrameCursor(stdout, next.cursor)
+}
+
 func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 	if next == nil {
 		return nil
@@ -464,21 +577,6 @@ func writeFrameDiff(stdout io.Writer, prev, next *terminalFrame) error {
 	}
 
 	changedRows := changedFrameRows(prev, next)
-	if shift, exposed, ok := detectViewportRowShift(prev, next); ok {
-		if err := writeViewportShift(stdout, next, shift, exposed); err != nil {
-			return err
-		}
-		return writeFrameCursor(stdout, next.cursor)
-	}
-	if len(changedRows) == 1 {
-		row := changedRows[0]
-		if edit, ok := detectFrameRowEdit(prev.rows[row], next.rows[row]); ok {
-			if err := writeFrameRowEdit(stdout, row, next.rows[row], edit); err != nil {
-				return err
-			}
-			return writeFrameCursor(stdout, next.cursor)
-		}
-	}
 
 	cursorChanged := prev.cursor != next.cursor
 	terminalChanged := prev.terminal != next.terminal
@@ -577,7 +675,7 @@ func sameFrameGeometry(a, b *terminalFrame) bool {
 	return true
 }
 
-func sameFrameRow(a, b frameRow) bool {
+func sameFrameCells(a, b frameRow) bool {
 	if len(a.cells) != len(b.cells) {
 		return false
 	}
@@ -587,6 +685,10 @@ func sameFrameRow(a, b frameRow) bool {
 		}
 	}
 	return true
+}
+
+func sameFrameRow(a, b frameRow) bool {
+	return a.id == b.id && sameFrameCells(a, b)
 }
 
 func changedFrameRows(prev, next *terminalFrame) []int {
@@ -616,7 +718,7 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 	for shift := 1; shift < rows; shift++ {
 		match := true
 		for row := 0; row < rows-shift; row++ {
-			if prev.rows[row+shift].id != next.rows[row].id || !sameFrameRow(prev.rows[row+shift], next.rows[row]) {
+			if prev.rows[row+shift].id != next.rows[row].id || !sameFrameCells(prev.rows[row+shift], next.rows[row]) {
 				match = false
 				break
 			}
@@ -632,7 +734,7 @@ func detectViewportRowShift(prev, next *terminalFrame) (int, []int, bool) {
 	for shift := 1; shift < rows; shift++ {
 		match := true
 		for row := 0; row < rows-shift; row++ {
-			if prev.rows[row].id != next.rows[row+shift].id || !sameFrameRow(prev.rows[row], next.rows[row+shift]) {
+			if prev.rows[row].id != next.rows[row+shift].id || !sameFrameCells(prev.rows[row], next.rows[row+shift]) {
 				match = false
 				break
 			}
@@ -827,8 +929,8 @@ func writeFrameTerminalState(stdout io.Writer, prev, next frameTerminalState) er
 		on   string
 		off  string
 	}{
-		{prev.mousePress, next.mousePress, "\x1b[?1000h", "\x1b[?1000l"},
-		{prev.mouseMotion, next.mouseMotion, "\x1b[?1002h", "\x1b[?1002l"},
+		{prev.mousePress, next.mousePress, "\x1b[?1002h", "\x1b[?1002l"},
+		{prev.mouseMotion, next.mouseMotion, "\x1b[?1003h", "\x1b[?1003l"},
 		{prev.focusReporting, next.focusReporting, "\x1b[?1004h", "\x1b[?1004l"},
 		{prev.mouseSGR, next.mouseSGR, "\x1b[?1006h", "\x1b[?1006l"},
 		{prev.bracketedPaste, next.bracketedPaste, "\x1b[?2004h", "\x1b[?2004l"},

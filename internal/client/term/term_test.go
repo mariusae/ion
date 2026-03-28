@@ -353,6 +353,12 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	if !strings.Contains(got, "\x1b[?1004h") {
 		t.Fatalf("drawBufferMode() = %q, want focus reporting enabled", got)
 	}
+	if !strings.Contains(got, "\x1b[?1002h") {
+		t.Fatalf("drawBufferMode() = %q, want drag mouse tracking enabled by default", got)
+	}
+	if !strings.Contains(got, "\x1b[?1003h") {
+		t.Fatalf("drawBufferMode() = %q, want full-motion mouse tracking enabled", got)
+	}
 	if !strings.Contains(got, "\x1b[1;2H") {
 		t.Fatalf("drawBufferMode() = %q, want terminal cursor positioned at row 1 col 2", got)
 	}
@@ -942,6 +948,9 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 	}
 	if !strings.Contains(got, "\x1b[?25l") {
 		t.Fatalf("drawBufferMode() = %q, want hidden terminal cursor while menu is visible", got)
+	}
+	if !strings.Contains(got, "\x1b[?1003h") {
+		t.Fatalf("drawBufferMode() = %q, want full-motion mouse tracking while menu is visible", got)
 	}
 }
 

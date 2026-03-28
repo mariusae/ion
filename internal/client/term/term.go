@@ -206,6 +206,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	renderer := newFrameRenderer()
 	renderStats := newFrameRenderStats(stderr)
 	defer renderStats.Report()
+	if renderer != nil && renderer.trace != nil {
+		defer renderer.trace.Close()
+	}
 	buffer, err := enterBufferMode(stdout, svc, renderer, renderStats, overlay, menu, theme, focused)
 	if err != nil {
 		return err
@@ -386,13 +389,27 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	redraw := func(class redrawClass) error {
 		refreshTerminalSize()
-		return drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, false)
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("redraw class=%s file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", class, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
+		}
+		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, false)
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("redraw done class=%s err=%v", class, err)
+		}
+		return err
 	}
 
 	fullRedraw := func(class redrawClass) error {
 		refreshTerminalSize()
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("full-redraw class=%s file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", class, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
+		}
 		frame := buildBufferFrame(buffer, overlay, menu, theme, focused)
-		return renderer.Recover(stdout, frame, class, renderStats)
+		err := renderer.Recover(stdout, frame, class, renderStats)
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("full-redraw done class=%s err=%v", class, err)
+		}
+		return err
 	}
 
 	stopMenuLostReleaseTimer := func() {
@@ -413,7 +430,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return
 		}
 		stopMenuLostReleaseTimer()
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("menu-lost-release schedule")
+		}
 		menuLostReleaseTimer = time.AfterFunc(350*time.Millisecond, func() {
+			if renderer != nil && renderer.trace != nil {
+				renderer.trace.Printf("menu-lost-release fire")
+			}
 			_, _ = wakeW.Write([]byte{wakeMenu})
 		})
 	}
@@ -765,10 +788,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleMenuMouse := func(event mouseEvent) (bool, error) {
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("menu-mouse button=%d pressed=%t x=%d y=%d visible=%t hover=%d suspect=%t sawHover=%t", event.button, event.pressed, event.x, event.y, menu.visible, menu.hover, menuLostReleaseSuspect, menuSawHover)
+		}
 		if !menu.visible {
 			return false, nil
 		}
-		btn := event.button & 3
+		btn := event.baseButton()
 		if !event.pressed && (btn == 2 || btn == 3) {
 			clearMenuLostRelease()
 			menuSawHover = false
@@ -785,12 +811,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, fullRedraw(redrawMenuClose)
 		}
-		if event.button >= 32 && event.button < 64 {
+		if event.isMotion() {
 			item := menu.itemAt(event.x, event.y)
 			if item >= 0 {
 				menuSawHover = true
+				clearMenuLostRelease()
 			}
-			if item < 0 && menuSawHover && (btn == 2 || btn == 3) && menu.outsideDistance(event.x, event.y) >= 2 {
+			if item < 0 && menuSawHover && (btn == 2 || btn == 3) {
 				menuLostReleaseSuspect = true
 			}
 			if menuLostReleaseSuspect && (btn == 2 || btn == 3) {
@@ -818,7 +845,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		if event.y < overlayTopRow(overlay) {
-			if event.pressed {
+			if event.dismissesOverlayOutside() {
 				overlay.close()
 				return true, nil
 			}
@@ -832,9 +859,30 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			overlay.scrollNewer(3)
 			overlay.selecting = false
 		default:
-			if event.button >= 32 && event.button < 64 {
+			if event.isMotion() {
 				if overlay.selecting {
 					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
+					if event.noButtonsDown() {
+						overlay.selecting = false
+						if overlay.selectBtn2 {
+							overlay.selectBtn2 = false
+							token := ""
+							start, end, ok := overlay.selectionBounds()
+							if ok && isOverlayClickSelection(start, end) {
+								token = overlay.tokenAt(start)
+							} else {
+								token = trimOverlaySelection(overlay.selectedText())
+							}
+							if token != "" {
+								if err := openTargetToken(token); err == nil {
+									return true, nil
+								}
+							}
+							return true, nil
+						}
+						_ = copyToClipboard(stdout, overlay.selectedText())
+						return true, flashOverlaySelection()
+					}
 				}
 				return true, nil
 			}
@@ -876,6 +924,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
+		if renderer != nil && renderer.trace != nil {
+			if mouse != nil {
+				renderer.trace.Printf("buffer-special key=%d mouseButton=%d pressed=%t x=%d y=%d overlay=%t menu=%t", key, mouse.button, mouse.pressed, mouse.x, mouse.y, overlay.visible, menu.visible)
+			} else {
+				renderer.trace.Printf("buffer-special key=%d overlay=%t menu=%t", key, overlay.visible, menu.visible)
+			}
+		}
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
@@ -993,13 +1048,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 			}
 			previous := snapshotBufferState(buffer)
+			wasSelecting := mouseSelecting
 			if handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart) {
 				if mouse.button != 64 && mouse.button != 65 {
 					if err := syncBufferDot(); err != nil {
 						return false, err
 					}
 				}
-				if mouse.button&3 == 0 && !mouse.pressed && buffer.dotEnd > buffer.dotStart {
+				selectionCompleted := wasSelecting && !mouseSelecting &&
+					((mouse.baseButton() == 0 && !mouse.pressed) || mouse.noButtonsDown())
+				if selectionCompleted && buffer.dotEnd > buffer.dotStart {
 					if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 						return false, err
 					}
@@ -1164,6 +1222,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return err
 				}
 				for _, tag := range tags {
+					if renderer != nil && renderer.trace != nil {
+						renderer.trace.Printf("wake tag=%q inBuffer=%t overlay=%t menu=%t", tag, inBufferMode, overlay.visible, menu.visible)
+					}
 					switch tag {
 					case wakeWinch:
 						refreshTerminalSize()
@@ -1200,9 +1261,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				continue
 			}
+			if renderer != nil && renderer.trace != nil {
+				renderer.trace.Printf("stdin-ready buffered=0")
+			}
+		} else if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("stdin-ready buffered=%d", reader.Buffered())
 		}
 		r, _, err := reader.ReadRune()
 		if err != nil {
+			if renderer != nil && renderer.trace != nil {
+				renderer.trace.Printf("read-rune err=%v", err)
+			}
 			if errors.Is(err, io.EOF) {
 				pending = append(pending, linebuf...)
 				_, err := executePending(true)
@@ -1212,6 +1281,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return nil
 			}
 			return err
+		}
+		if renderer != nil && renderer.trace != nil {
+			renderer.trace.Printf("read-rune value=%U char=%q buffered=%d inBuffer=%t overlay=%t menu=%t", r, r, reader.Buffered(), inBufferMode, overlay.visible, menu.visible)
 		}
 		if inBufferMode {
 			if overlay.visible {
@@ -1259,12 +1331,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								continue
 							}
-							if !menu.visible {
-								handled := handleMouseEvent(buffer, overlay, *mouse, &mouseSelecting, &mouseSelectStart)
-								if !handled {
-									overlay.close()
-								}
-							}
+							continue
 						}
 					case keyPaste:
 						overlayClass := redrawOverlayInput
@@ -1528,7 +1595,7 @@ func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *frameRend
 }
 
 func exitBufferMode(stdout io.Writer) error {
-	_, err := io.WriteString(stdout, "\x1b[?25h\x1b[0 q\x1b[?1000l\x1b[?1002l\x1b[?1004l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
+	_, err := io.WriteString(stdout, "\x1b[?25h\x1b[0 q\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?2004l\x1b[?1049l")
 	return err
 }
 
@@ -1880,10 +1947,20 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 
 func drawBufferMode(stdout io.Writer, renderer *frameRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
 	frame := buildBufferFrame(state, overlay, menu, theme, focused)
+	forceFull = forceFull || redrawNeedsFullFrame(class)
 	if renderer == nil {
 		return writeFullFrame(stdout, frame)
 	}
 	return renderer.Render(stdout, frame, class, forceFull, stats)
+}
+
+func redrawNeedsFullFrame(class redrawClass) bool {
+	switch class {
+	case redrawBufferCursor, redrawBufferContent, redrawBufferStatus:
+		return false
+	default:
+		return true
+	}
 }
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {

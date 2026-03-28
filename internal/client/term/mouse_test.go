@@ -151,6 +151,62 @@ func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	}
 }
 
+func TestHandleMouseEventNoButtonMotionEndsSelection(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	overlay := newOverlayState()
+	selecting := false
+	selectStart := 0
+
+	if ok := handleMouseEvent(state, overlay, mouseEvent{button: 0, x: 0, y: 0, pressed: true}, &selecting, &selectStart); !ok {
+		t.Fatalf("press not handled")
+	}
+	if !selecting {
+		t.Fatalf("selecting = false, want true after press")
+	}
+	if ok := handleMouseEvent(state, overlay, mouseEvent{button: 35, x: 2, y: 0, pressed: true}, &selecting, &selectStart); !ok {
+		t.Fatalf("no-button motion not handled")
+	}
+	if selecting {
+		t.Fatalf("selecting = true, want false after no-button motion")
+	}
+	if got, want := state.dotStart, 0; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := state.dotEnd, 2; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestMouseEventDismissesOverlayOutside(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		event mouseEvent
+		want  bool
+	}{
+		{name: "left press", event: mouseEvent{button: 0, pressed: true}, want: true},
+		{name: "right press", event: mouseEvent{button: 2, pressed: true}, want: true},
+		{name: "scroll up", event: mouseEvent{button: 64}, want: true},
+		{name: "scroll down", event: mouseEvent{button: 65}, want: true},
+		{name: "left release", event: mouseEvent{button: 0, pressed: false}, want: false},
+		{name: "motion with button down", event: mouseEvent{button: 32, pressed: true}, want: false},
+		{name: "motion with no buttons", event: mouseEvent{button: 35, pressed: true}, want: false},
+	}
+
+	for _, tt := range tests {
+		if got := tt.event.dismissesOverlayOutside(); got != tt.want {
+			t.Fatalf("%s dismissesOverlayOutside() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestReadBufferEscapeMouseWithFragmentedSequence(t *testing.T) {
 	t.Parallel()
 
@@ -187,6 +243,44 @@ func TestReadBufferEscapeMouseWithFragmentedSequence(t *testing.T) {
 	}
 	if !mouse.pressed {
 		t.Fatalf("mouse.pressed = false, want true")
+	}
+}
+
+func TestReadBufferEscapeCoalescesBufferedMouseMotion(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b[<35;2;2M\x1b[<35;7;4M\x1b[<0;3;3M"))
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with first ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(coalesced motion) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(coalesced motion) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 35; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.x, 6; got != want {
+		t.Fatalf("mouse.x = %d, want %d", got, want)
+	}
+	if got, want := mouse.y, 3; got != want {
+		t.Fatalf("mouse.y = %d, want %d", got, want)
+	}
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with next ESC: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(next event) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(next event) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 0; got != want {
+		t.Fatalf("next mouse.button = %d, want %d", got, want)
 	}
 }
 

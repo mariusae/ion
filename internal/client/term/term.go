@@ -205,7 +205,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var menuLostReleaseTimer *time.Timer
 	var bufferBoundaryWheel wheelBoundarySuppressor
 	var overlayBoundaryWheel wheelBoundarySuppressor
-	renderer := newFrameRenderer()
+	renderer := newGridRenderer()
 	renderStats := newFrameRenderStats(stderr)
 	defer renderStats.Report()
 	if renderer != nil && renderer.trace != nil {
@@ -406,8 +406,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if renderer != nil && renderer.trace != nil {
 			renderer.trace.Printf("full-redraw class=%s file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", class, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
 		}
-		frame := buildBufferFrame(buffer, overlay, menu, theme, focused)
-		err := renderer.Recover(stdout, frame, class, renderStats)
+		if renderer != nil {
+			renderer.Reset()
+		}
+		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, true)
 		if renderer != nil && renderer.trace != nil {
 			renderer.trace.Printf("full-redraw done class=%s err=%v", class, err)
 		}
@@ -1656,7 +1658,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 }
 
-func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *frameRenderer, stats *frameRenderStats, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) (*bufferState, error) {
+func enterBufferMode(stdout io.Writer, svc wire.TermService, renderer *gridRenderer, stats *frameRenderStats, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) (*bufferState, error) {
 	view, err := svc.CurrentView()
 	if err != nil {
 		return nil, err
@@ -2020,13 +2022,13 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	return next, nil
 }
 
-func drawBufferMode(stdout io.Writer, renderer *frameRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
-	frame := buildBufferFrame(state, overlay, menu, theme, focused)
+func drawBufferMode(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
 	forceFull = forceFull || redrawNeedsFullFrame(class)
 	if renderer == nil {
+		frame := buildBufferFrame(state, overlay, menu, theme, focused)
 		return writeFullFrame(stdout, frame)
 	}
-	return renderer.Render(stdout, frame, class, forceFull, stats)
+	return renderer.Draw(stdout, class, state, overlay, menu, theme, focused, forceFull, stats)
 }
 
 func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error) (bool, error) {

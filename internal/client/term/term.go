@@ -2053,8 +2053,7 @@ func drawBufferMode(stdout io.Writer, renderer *gridRenderer, stats *frameRender
 
 func drawBufferModeRequest(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, req renderRequest, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {
 	if renderer == nil {
-		frame := buildBufferFrame(state, overlay, menu, theme, focused)
-		return writeFullFrame(stdout, frame)
+		renderer = newGridRenderer()
 	}
 	return renderer.Draw(stdout, req, state, overlay, menu, theme, focused, stats)
 }

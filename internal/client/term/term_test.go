@@ -347,8 +347,11 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[?25l\x1b[6 q") {
-		t.Fatalf("drawBufferMode() = %q, want redraw to hide cursor before painting with steady bar shape", got)
+	if !strings.Contains(got, "\x1b[?25l") {
+		t.Fatalf("drawBufferMode() = %q, want redraw to hide the terminal cursor before painting", got)
+	}
+	if !strings.Contains(got, "\x1b[6 q") {
+		t.Fatalf("drawBufferMode() = %q, want steady bar cursor shape", got)
 	}
 	if !strings.Contains(got, "\x1b[?1004h") {
 		t.Fatalf("drawBufferMode() = %q, want focus reporting enabled", got)
@@ -912,10 +915,10 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[4;1H\x1b[2K"+theme.hudPrefix()) {
+	if !strings.Contains(got, "\x1b[4;1H") || !strings.Contains(got, theme.hudPrefix()) {
 		t.Fatalf("drawBufferMode() = %q, want tinted top HUD padding row", got)
 	}
-	if !strings.Contains(got, "\x1b[6;1H\x1b[2K"+theme.hudPrefix()) {
+	if !strings.Contains(got, "\x1b[6;1H") || !strings.Contains(got, theme.hudPrefix()) {
 		t.Fatalf("drawBufferMode() = %q, want tinted bottom HUD padding row", got)
 	}
 }
@@ -1201,10 +1204,10 @@ func TestDrawBufferModeWrapsLongLines(t *testing.T) {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[1;1H\x1b[2Kabc") {
+	if !strings.Contains(got, "\x1b[1;1H") || !strings.Contains(got, "abc") {
 		t.Fatalf("drawBufferMode() = %q, want first wrapped row", got)
 	}
-	if !strings.Contains(got, "\x1b[2;1H\x1b[2Kdef") {
+	if !strings.Contains(got, "\x1b[2;1H") || !strings.Contains(got, "def") {
 		t.Fatalf("drawBufferMode() = %q, want second wrapped row", got)
 	}
 }

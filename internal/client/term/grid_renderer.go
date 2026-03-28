@@ -178,16 +178,19 @@ func (r *gridRenderer) ensureGrids(overlay *overlayState, menu *menuState) bool 
 
 	historyRows := 0
 	if overlay != nil && overlay.visible {
-		historyRows = overlayHeight(overlay) - overlayPromptRows(overlay)
+		historyRows = overlayTopPadRows(overlay) + overlayHistoryRows(overlay)
 	}
 	r.ensureGrid(&r.hudHistory, historyRows, termCols)
 	r.hudHistory.originRow = overlayTopRow(overlay)
 	r.hudHistory.originCol = 0
 	r.hudHistory.visible = overlay != nil && overlay.visible && historyRows > 0
 
-	inputRows := overlayPromptRows(overlay)
+	inputRows := 0
+	if overlay != nil && overlay.visible {
+		inputRows = overlayPromptRows(overlay) + overlayBottomPadRows(overlay)
+	}
 	r.ensureGrid(&r.hudInput, inputRows, termCols)
-	r.hudInput.originRow = termRows - 1 - overlayBottomPadRows(overlay)
+	r.hudInput.originRow = termRows - inputRows
 	r.hudInput.originCol = 0
 	r.hudInput.visible = overlay != nil && overlay.visible && inputRows > 0
 
@@ -279,7 +282,6 @@ func (r *gridRenderer) renderHUDHistoryGrid(overlay *overlayState, theme *uiThem
 		return
 	}
 	topPad := overlayTopPadRows(overlay)
-	bottomPad := overlayBottomPadRows(overlay)
 	historyRows := overlayHistoryRows(overlay)
 	lines := overlay.renderLines(historyRows)
 	hudStyle := r.palette.ID(hudPrefix(theme))
@@ -297,14 +299,6 @@ func (r *gridRenderer) renderHUDHistoryGrid(overlay *overlayState, theme *uiThem
 		renderOverlayGridLine(builder, line, overlay, theme, r.palette)
 		builder.Flush()
 	}
-	for row := r.hudHistory.rows - bottomPad; row < r.hudHistory.rows; row++ {
-		if row < 0 {
-			continue
-		}
-		builder.Start(r.hudHistory, row)
-		builder.Fill(0, r.hudHistory.cols, gridCell{r: ' ', style: hudStyle})
-		builder.Flush()
-	}
 	r.hudHistory.valid = true
 }
 
@@ -315,7 +309,11 @@ func (r *gridRenderer) renderHUDInputGrid(overlay *overlayState, theme *uiTheme)
 	builder := newGridLineBuilder(r.hudInput.cols)
 	for row := 0; row < r.hudInput.rows; row++ {
 		builder.Start(r.hudInput, row)
-		renderOverlayPromptGridRow(builder, overlay, theme, r.palette)
+		if row == 0 && overlay != nil && overlay.visible && overlayPromptRows(overlay) > 0 {
+			renderOverlayPromptGridRow(builder, overlay, theme, r.palette)
+		} else {
+			builder.Fill(0, r.hudInput.cols, gridCell{r: ' ', style: r.palette.ID(hudPrefix(theme))})
+		}
 		builder.Flush()
 	}
 	r.hudInput.valid = true

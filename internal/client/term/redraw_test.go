@@ -36,3 +36,31 @@ func TestClassifyBufferRedrawViewportAndContent(t *testing.T) {
 		t.Fatalf("content classifyBufferRedraw() = %q, want %q", got, want)
 	}
 }
+
+func TestRedrawNeedsFullFrameAllowsOverlayInputDiffOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, class := range []redrawClass{
+		redrawBufferCursor,
+		redrawBufferContent,
+		redrawBufferStatus,
+		redrawOverlayInput,
+	} {
+		if redrawNeedsFullFrame(class) {
+			t.Fatalf("redrawNeedsFullFrame(%q) = true, want false", class)
+		}
+	}
+
+	for _, class := range []redrawClass{
+		redrawOverlayHistory,
+		redrawOverlayOpen,
+		redrawOverlayClose,
+		redrawMenuOpen,
+		redrawMenuClose,
+		redrawTheme,
+	} {
+		if !redrawNeedsFullFrame(class) {
+			t.Fatalf("redrawNeedsFullFrame(%q) = false, want true", class)
+		}
+	}
+}

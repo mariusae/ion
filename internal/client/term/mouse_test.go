@@ -196,6 +196,7 @@ func TestMouseEventDismissesOverlayOutside(t *testing.T) {
 		{name: "right press", event: mouseEvent{button: 2, pressed: true}, want: true},
 		{name: "scroll up", event: mouseEvent{button: 64}, want: true},
 		{name: "scroll down", event: mouseEvent{button: 65}, want: true},
+		{name: "horizontal wheel", event: mouseEvent{button: 66}, want: false},
 		{name: "left release", event: mouseEvent{button: 0, pressed: false}, want: false},
 		{name: "motion with button down", event: mouseEvent{button: 32, pressed: true}, want: false},
 		{name: "motion with no buttons", event: mouseEvent{button: 35, pressed: true}, want: false},
@@ -235,6 +236,93 @@ func TestHandleOverlayMouseEventIgnoresPassiveMotionWithoutSelection(t *testing.
 	}
 	if overlay.selecting {
 		t.Fatal("overlay.selecting = true, want false")
+	}
+}
+
+func TestHandleOverlayMouseEventIgnoresUnknownWheelButton(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("alpha")
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  66,
+		x:       2,
+		y:       overlayTopRow(overlay) + 1,
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if handled {
+		t.Fatal("handleOverlayMouseEvent() handled = true, want false for unknown wheel event")
+	}
+}
+
+func TestHandleOverlayMouseEventIgnoresNoOpScrollAtBoundary(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("alpha")
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  65,
+		x:       2,
+		y:       overlayTopRow(overlay) + 1,
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if handled {
+		t.Fatal("handleOverlayMouseEvent() handled = true, want false for no-op scroll")
+	}
+}
+
+func TestHandleOverlayMouseEventCoalescedWheelScrollsMultipleSteps(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 10; i++ {
+		overlay.addOutput("alpha")
+	}
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  64,
+		x:       2,
+		y:       overlayTopRow(overlay) + 1,
+		pressed: true,
+		repeat:  2,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent() handled = false, want true for coalesced scroll")
+	}
+	if got, want := overlay.scroll, 6; got != want {
+		t.Fatalf("overlay.scroll = %d, want %d", got, want)
 	}
 }
 
@@ -315,6 +403,41 @@ func TestReadBufferEscapeCoalescesBufferedMouseMotion(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeCoalescesBufferedMouseWheel(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<0;3;3M"))
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with first ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(coalesced wheel) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(coalesced wheel) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 64; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.repeat, 2; got != want {
+		t.Fatalf("mouse.repeat = %d, want %d", got, want)
+	}
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with next ESC: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(next event after wheel coalescing) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(next event after wheel coalescing) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 0; got != want {
+		t.Fatalf("next mouse.button = %d, want %d", got, want)
+	}
+}
+
 func TestReadBufferEscapeCoalescesTimedPassiveMouseMotion(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +487,58 @@ func TestReadBufferEscapeCoalescesTimedPassiveMouseMotion(t *testing.T) {
 	}
 	if key != keyMouse || mouse == nil {
 		t.Fatalf("readBufferEscape(next event after timed coalescing) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 0; got != want {
+		t.Fatalf("next mouse.button = %d, want %d", got, want)
+	}
+}
+
+func TestReadBufferEscapeCoalescesTimedMouseWheel(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte("\x1b[<0;3;3M"))
+		_ = w.Close()
+	}()
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with first ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(timed coalesced wheel) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(timed coalesced wheel) = (%d, %#v), want mouse event", key, mouse)
+	}
+	if got, want := mouse.button, 64; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.repeat, 2; got != want {
+		t.Fatalf("mouse.repeat = %d, want %d", got, want)
+	}
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with next ESC: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(next event after timed wheel coalescing) error = %v", err)
+	}
+	if key != keyMouse || mouse == nil {
+		t.Fatalf("readBufferEscape(next event after timed wheel coalescing) = (%d, %#v), want mouse event", key, mouse)
 	}
 	if got, want := mouse.button, 0; got != want {
 		t.Fatalf("next mouse.button = %d, want %d", got, want)

@@ -13,14 +13,40 @@ type mouseEvent struct {
 	x       int
 	y       int
 	pressed bool
+	repeat  int
 }
 
 func (e mouseEvent) isMotion() bool {
 	return e.button >= 32 && e.button < 64
 }
 
+func (e mouseEvent) isWheel() bool {
+	return !e.isMotion() && e.button&64 != 0
+}
+
 func (e mouseEvent) baseButton() int {
 	return e.button & 3
+}
+
+func (e mouseEvent) verticalWheelDirection() (int, bool) {
+	if !e.isWheel() {
+		return 0, false
+	}
+	switch e.baseButton() {
+	case 0:
+		return -1, true
+	case 1:
+		return 1, true
+	default:
+		return 0, false
+	}
+}
+
+func (e mouseEvent) count() int {
+	if e.repeat > 0 {
+		return e.repeat
+	}
+	return 1
 }
 
 func (e mouseEvent) noButtonsDown() bool {
@@ -28,8 +54,7 @@ func (e mouseEvent) noButtonsDown() bool {
 }
 
 func (e mouseEvent) dismissesOverlayOutside() bool {
-	switch e.button {
-	case 64, 65:
+	if _, ok := e.verticalWheelDirection(); ok {
 		return true
 	}
 	return !e.isMotion() && e.pressed
@@ -89,7 +114,7 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 			if err != nil {
 				return 0, nil, err
 			}
-			event, err = coalesceMouseMotion(reader, stdin, event)
+			event, err = coalesceMouseEvent(reader, stdin, event)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -208,7 +233,10 @@ func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
 }
 
 const escSequenceWait = 20_000 // 20ms in microseconds
-const passiveMotionCoalesceWait = 20_000
+const (
+	passiveMotionCoalesceWait = 20_000
+	wheelCoalesceWait         = 20_000
+)
 
 func waitForInputByte(stdin *os.File, timeoutUsec int64) (bool, error) {
 	if stdin == nil {
@@ -275,27 +303,54 @@ func readMouseNumber(reader *bufio.Reader) (int, error) {
 	}
 }
 
-func coalesceMouseMotion(reader *bufio.Reader, stdin *os.File, event mouseEvent) (mouseEvent, error) {
-	if !event.isMotion() {
+func coalesceMouseEvent(reader *bufio.Reader, stdin *os.File, event mouseEvent) (mouseEvent, error) {
+	if event.isMotion() {
+		latest := event
+		timeoutUsec := int64(0)
+		if event.noButtonsDown() {
+			timeoutUsec = passiveMotionCoalesceWait
+		}
+		for i := 0; i < 256; i++ {
+			next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
+			if err != nil {
+				return mouseEvent{}, err
+			}
+			if !ok || !next.isMotion() {
+				return latest, nil
+			}
+			if _, err := reader.Discard(size); err != nil {
+				return mouseEvent{}, err
+			}
+			latest = next
+		}
+		return latest, nil
+	}
+
+	dir, ok := event.verticalWheelDirection()
+	if !ok {
 		return event, nil
 	}
 	latest := event
-	timeoutUsec := int64(0)
-	if event.noButtonsDown() {
-		timeoutUsec = passiveMotionCoalesceWait
-	}
+	count := event.count()
+	latest.repeat = count
 	for i := 0; i < 256; i++ {
-		next, size, ok, err := peekMouseEvent(reader, stdin, timeoutUsec)
+		next, size, ok, err := peekMouseEvent(reader, stdin, wheelCoalesceWait)
 		if err != nil {
 			return mouseEvent{}, err
 		}
-		if !ok || !next.isMotion() {
+		if !ok {
+			return latest, nil
+		}
+		nextDir, nextWheel := next.verticalWheelDirection()
+		if !nextWheel || nextDir != dir || next.x != latest.x || next.y != latest.y {
 			return latest, nil
 		}
 		if _, err := reader.Discard(size); err != nil {
 			return mouseEvent{}, err
 		}
+		count += next.count()
 		latest = next
+		latest.repeat = count
 	}
 	return latest, nil
 }
@@ -377,25 +432,27 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 		overlay.close()
 		return true
 	}
-	switch event.button {
-	case 64:
-		for i := 0; i < 3; i++ {
-			next := prevVisualRowStart(state.text, state.origin)
-			if next == state.origin {
-				break
+	if dir, ok := event.verticalWheelDirection(); ok {
+		prevOrigin := state.origin
+		lines := 3 * event.count()
+		if dir < 0 {
+			for i := 0; i < lines; i++ {
+				next := prevVisualRowStart(state.text, state.origin)
+				if next == state.origin {
+					break
+				}
+				state.origin = next
 			}
-			state.origin = next
-		}
-		return true
-	case 65:
-		for i := 0; i < 3; i++ {
-			next := nextVisualRowStart(state.text, state.origin)
-			if next == state.origin {
-				break
+		} else {
+			for i := 0; i < lines; i++ {
+				next := nextVisualRowStart(state.text, state.origin)
+				if next == state.origin {
+					break
+				}
+				state.origin = next
 			}
-			state.origin = next
 		}
-		return true
+		return state.origin != prevOrigin
 	}
 	pos, ok := screenToPos(state, overlay, event.y, event.x)
 	if !ok {

@@ -23,6 +23,21 @@ type renderScheduler struct {
 	req     renderRequest
 }
 
+func renderRequestForLayers(class redrawClass, invalidation renderInvalidation) renderRequest {
+	return renderRequest{
+		class:        class,
+		invalidation: invalidation,
+	}
+}
+
+func fullRenderRequest(class redrawClass) renderRequest {
+	return renderRequest{
+		class:        class,
+		forceFull:    true,
+		invalidation: renderInvalidateAllLayers,
+	}
+}
+
 func (s *renderScheduler) Request(req renderRequest) {
 	if s == nil {
 		return

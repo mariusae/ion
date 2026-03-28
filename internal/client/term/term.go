@@ -406,20 +406,44 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return err
 	}
 
-	redraw := func(class redrawClass) error {
-		renderQueue.Request(buildRenderRequest(class, false, buffer, overlay, menu, focused))
+	redraw := func(req renderRequest) error {
+		renderQueue.Request(req)
 		if reader.Buffered() == 0 {
 			return flushRender("idle")
 		}
 		return nil
 	}
 
+	bufferRedraw := func(class redrawClass) error {
+		return redraw(buildRenderRequest(class, false, buffer, overlay, menu, focused))
+	}
+
+	classifiedBufferRedraw := func(previous *bufferState) error {
+		return redraw(classifyBufferRenderRequest(previous, buffer, overlay, menu, focused))
+	}
+
+	menuRedraw := func(class redrawClass) error {
+		return redraw(renderRequestForLayers(class, renderInvalidateMenu))
+	}
+
+	overlayHistoryRedraw := func(class redrawClass) error {
+		return redraw(renderRequestForLayers(class, renderInvalidateOverlayHistory))
+	}
+
+	overlayInputRedraw := func(class redrawClass) error {
+		return redraw(renderRequestForLayers(class, renderInvalidateOverlayInput))
+	}
+
+	overlaySurfaceRedraw := func(class redrawClass) error {
+		return redraw(renderRequestForLayers(class, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
+	}
+
+	allLayersRedraw := func(class redrawClass) error {
+		return redraw(renderRequestForLayers(class, renderInvalidateAllLayers))
+	}
+
 	fullRedraw := func(class redrawClass) error {
-		renderQueue.Request(buildRenderRequest(class, true, buffer, overlay, menu, focused))
-		if reader.Buffered() == 0 {
-			return flushRender("idle")
-		}
-		return nil
+		return redraw(fullRenderRequest(class))
 	}
 
 	stopMenuLostReleaseTimer := func() {
@@ -455,18 +479,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if overlay == nil || !overlay.visible || !overlay.running {
 			return nil
 		}
-		lines := overlay.renderLines(overlayHistoryRows(overlay))
-		row := overlayRunningLineRow(overlay, lines)
-		for _, line := range lines {
-			if !line.running {
-				continue
-			}
-			if err := drawOverlayHistoryLine(stdout, row, line, overlay, theme); err != nil {
-				return err
-			}
-			return positionTerminalCursor(stdout, buffer, overlay, menu, focused)
-		}
-		return nil
+		return overlayHistoryRedraw(redrawOverlayHistory)
 	}
 
 	flashBufferSelection := func() error {
@@ -474,13 +487,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return nil
 		}
 		buffer.flashSelection = true
-		if err := redraw(redrawBufferSelection); err != nil {
+		if err := bufferRedraw(redrawBufferSelection); err != nil {
 			buffer.flashSelection = false
 			return err
 		}
 		time.Sleep(80 * time.Millisecond)
 		buffer.flashSelection = false
-		return redraw(redrawBufferSelection)
+		return bufferRedraw(redrawBufferSelection)
 	}
 
 	flashOverlaySelection := func() error {
@@ -488,13 +501,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return nil
 		}
 		overlay.flashSelection = true
-		if err := redraw(redrawOverlayHistory); err != nil {
+		if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 			overlay.flashSelection = false
 			return err
 		}
 		time.Sleep(80 * time.Millisecond)
 		overlay.flashSelection = false
-		return redraw(redrawOverlayHistory)
+		return overlayHistoryRedraw(redrawOverlayHistory)
 	}
 
 	clearTransientStatus := func() {
@@ -598,7 +611,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 		}
 		overlay.setRunning(true)
-		if err := redraw(redrawOverlayHistory); err != nil {
+		if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 			return false, err
 		}
 
@@ -626,7 +639,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return err
 			}
 			overlay.addOutput("^C")
-			return redraw(redrawOverlayHistory)
+			return overlayHistoryRedraw(redrawOverlayHistory)
 		}
 
 		go func() {
@@ -649,7 +662,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			select {
 			case <-queue.notify:
 				drainOverlayLines()
-				if err := redraw(redrawOverlayHistory); err != nil {
+				if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 					overlay.setRunning(false)
 					return false, err
 				}
@@ -673,7 +686,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return false, err
 					}
 				}
-				if err := redraw(redrawOverlayHistory); err != nil {
+				if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 					return false, err
 				}
 				return result.done, nil
@@ -694,7 +707,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		menu = buildContextMenu(buffer, files, nav, clickX, clickY, menuSticky)
 		clearMenuLostRelease()
 		menuSawHover = menu.hover >= 0
-		return redraw(redrawMenuOpen)
+		return menuRedraw(redrawMenuOpen)
 	}
 
 	executeMenuItem := func(item menuItem) (bool, error) {
@@ -819,7 +832,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				menu.dismiss()
 			}
-			return false, redraw(redrawMenuClose)
+			return false, menuRedraw(redrawMenuClose)
 		}
 		if event.isMotion() {
 			item := menu.itemAt(event.x, event.y)
@@ -837,7 +850,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			if menu.hover != item {
 				menu.hover = item
-				return false, redraw(redrawMenuHover)
+				return false, menuRedraw(redrawMenuHover)
 			}
 			return false, nil
 		}
@@ -845,7 +858,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 			clearMenuLostRelease()
 			menuSawHover = false
-			return false, redraw(redrawMenuClose)
+			return false, menuRedraw(redrawMenuClose)
 		}
 		return false, nil
 	}
@@ -943,7 +956,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
-				return false, redraw(redrawMenuClose)
+				return false, menuRedraw(redrawMenuClose)
 			}
 			previous := snapshotBufferState(buffer)
 			buffer.markMode = false
@@ -954,14 +967,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err := syncBufferDot(); err != nil {
 				return false, err
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		}
 		if key == keyFocusIn {
 			focused = true
 			if err := refreshThemeOnFocus(); err != nil {
 				return false, err
 			}
-			return false, redraw(redrawTheme)
+			return false, allLayersRedraw(redrawTheme)
 		}
 		if key == keyFocusOut {
 			focused = false
@@ -969,9 +982,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				menu.dismiss()
 				clearMenuLostRelease()
 				menuSawHover = false
-				return false, redraw(redrawMenuClose)
+				return false, menuRedraw(redrawMenuClose)
 			}
-			return false, redraw(redrawTheme)
+			return false, allLayersRedraw(redrawTheme)
 		}
 		if key == keyMouse {
 			if mouse == nil {
@@ -1039,7 +1052,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return false, err
 						}
 					}
-					return false, redraw(redrawBufferSelection)
+					return false, bufferRedraw(redrawBufferSelection)
 				}
 				return false, nil
 			}
@@ -1070,7 +1083,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							if err := flashBufferSelection(); err != nil {
 								return false, err
 							}
-							return false, redraw(redrawBufferSelection)
+							return false, bufferRedraw(redrawBufferSelection)
 						}
 					}
 				}
@@ -1094,7 +1107,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return false, err
 					}
 				}
-				return false, redraw(classifyBufferRedraw(previous, buffer))
+				return false, classifiedBufferRedraw(previous)
 			}
 			if mouse.isWheel() {
 				if _, wheel := mouse.verticalWheelDirection(); wheel {
@@ -1112,7 +1125,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err := copyBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, redraw(redrawBufferStatus)
+			return false, bufferRedraw(redrawBufferStatus)
 		case keyPaste:
 			previous := snapshotBufferState(buffer)
 			paste, err := readBracketedPaste(reader)
@@ -1127,14 +1140,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, err
 			}
 			buffer.status = ""
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		}
 		previous := snapshotBufferState(buffer)
 		buffer, err = applyBufferKeyWithOptions(svc, buffer, key, options)
 		if err != nil {
 			return false, err
 		}
-		return false, redraw(classifyBufferRedraw(previous, buffer))
+		return false, classifiedBufferRedraw(previous)
 	}
 
 	handleBufferRune := func(r rune) (bool, error) {
@@ -1146,27 +1159,27 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err := copyBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, redraw(redrawBufferStatus)
+			return false, bufferRedraw(redrawBufferStatus)
 		case '\n':
 			overlay.reopen()
-			return false, redraw(redrawOverlayOpen)
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case 0x18:
 			previous := snapshotBufferState(buffer)
 			if err := cutBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		case 0x16, 0x19:
 			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		case 0x11:
 			dirty, err := hasDirtyFiles(svc)
 			if err != nil {
 				buffer.status = diagnosticText(err)
-				return false, redraw(redrawBufferStatus)
+				return false, bufferRedraw(redrawBufferStatus)
 			}
 			if dirty {
 				done, lines, err := executeDirect("q\n", true)
@@ -1176,27 +1189,27 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				if err != nil {
 					overlay.addOutput(diagnosticText(err))
-					return false, redraw(redrawOverlayHistory)
+					return false, overlayHistoryRedraw(redrawOverlayHistory)
 				}
 				if done {
 					return true, nil
 				}
-				return false, redraw(redrawOverlayHistory)
+				return false, overlayHistoryRedraw(redrawOverlayHistory)
 			}
 			done, _, err := executeDirect("q\n", false)
 			if err != nil {
 				buffer.status = diagnosticText(err)
-				return false, redraw(redrawBufferStatus)
+				return false, bufferRedraw(redrawBufferStatus)
 			}
 			if done {
 				return true, nil
 			}
 			buffer.status = ""
-			return false, redraw(redrawBufferStatus)
+			return false, bufferRedraw(redrawBufferStatus)
 		case 0x17:
 			if strings.TrimSpace(buffer.name) == "" {
 				overlay.open("w ")
-				return false, redraw(redrawOverlayOpen)
+				return false, overlaySurfaceRedraw(redrawOverlayOpen)
 			}
 			previous := snapshotBufferState(buffer)
 			msg, lines, err := saveWithCapture()
@@ -1205,10 +1218,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				applyStatusResult(msg, lines)
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		case 0x1f:
 			overlay.open("/")
-			return false, redraw(redrawOverlayOpen)
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case 0x0c:
 			previous := snapshotBufferState(buffer)
 			next, ok, err := lookInBuffer(svc, buffer, true)
@@ -1221,7 +1234,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				buffer.status = "?no match"
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		case 0x12:
 			previous := snapshotBufferState(buffer)
 			next, ok, err := lookInBuffer(svc, buffer, false)
@@ -1234,7 +1247,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				buffer.status = "?no match"
 			}
-			return false, redraw(classifyBufferRedraw(previous, buffer))
+			return false, classifiedBufferRedraw(previous)
 		}
 		if r == '\r' {
 			r = '\n'
@@ -1245,7 +1258,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, err
 		}
 		buffer = next
-		return false, redraw(classifyBufferRedraw(previous, buffer))
+		return false, classifiedBufferRedraw(previous)
 	}
 
 	for {
@@ -1296,7 +1309,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								if err := refreshBuffer(); err != nil {
 									return err
 								}
-								if err := redraw(redrawRefresh); err != nil {
+								if err := allLayersRedraw(redrawRefresh); err != nil {
 									return err
 								}
 							}
@@ -1311,7 +1324,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								menu.dismiss()
 								clearMenuLostRelease()
 								menuSawHover = false
-								if err := redraw(redrawMenuClose); err != nil {
+								if err := menuRedraw(redrawMenuClose); err != nil {
 									return err
 								}
 							}
@@ -1358,7 +1371,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyEsc:
 						if menu.visible {
 							menu.dismiss()
-							if err := redraw(redrawMenuClose); err != nil {
+							if err := menuRedraw(redrawMenuClose); err != nil {
 								return err
 							}
 							continue
@@ -1401,11 +1414,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							}
 							if handled {
 								overlayBoundaryWheel.clear()
-								class := redrawOverlayHistory
+								req := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 								if !overlay.visible {
-									class = redrawOverlayClose
+									req = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 								}
-								if err := redraw(class); err != nil {
+								if err := redraw(req); err != nil {
 									return err
 								}
 								continue
@@ -1422,7 +1435,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						}
 					case keyPaste:
-						overlayClass := redrawOverlayInput
 						paste, err := readBracketedPaste(reader)
 						if err != nil {
 							return err
@@ -1435,7 +1447,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							filtered = append(filtered, pr)
 						}
 						overlay.insert(filtered)
-						if err := redraw(overlayClass); err != nil {
+						if err := overlayInputRedraw(redrawOverlayInput); err != nil {
 							return err
 						}
 						continue
@@ -1470,7 +1482,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						if err := refreshThemeOnFocus(); err != nil {
 							return err
 						}
-						if err := redraw(redrawTheme); err != nil {
+						if err := allLayersRedraw(redrawTheme); err != nil {
 							return err
 						}
 						continue
@@ -1480,12 +1492,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							menu.dismiss()
 							clearMenuLostRelease()
 							menuSawHover = false
-							if err := redraw(redrawMenuClose); err != nil {
+							if err := menuRedraw(redrawMenuClose); err != nil {
 								return err
 							}
 							continue
 						}
-						if err := redraw(redrawTheme); err != nil {
+						if err := allLayersRedraw(redrawTheme); err != nil {
 							return err
 						}
 						continue
@@ -1500,15 +1512,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 						continue
 					}
-					overlayClass := redrawOverlayInput
+					overlayReq := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
 					switch key {
 					case keyUp, keyDown, keyPgUp, keyAltPageUp, keyPgDn:
-						overlayClass = redrawOverlayHistory
+						overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 					}
 					if !overlay.visible {
-						overlayClass = redrawOverlayClose
+						overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 					}
-					if err := redraw(overlayClass); err != nil {
+					if err := redraw(overlayReq); err != nil {
 						return err
 					}
 					continue
@@ -1517,7 +1529,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					menu.dismiss()
 				}
 				clearTransientStatus()
-				overlayClass := redrawOverlayInput
+				overlayReq := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
 				switch r {
 				case '\r':
 					done, err := submitOverlay()
@@ -1532,7 +1544,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 				case '\n':
 					overlay.close()
-					overlayClass = redrawOverlayClose
+					overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 				case 0x7f, 0x08:
 					overlay.backspace()
 				case 0x04:
@@ -1547,10 +1559,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					overlay.moveEnd()
 				case 0x10:
 					overlay.recallPrev()
-					overlayClass = redrawOverlayHistory
+					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 				case 0x0e:
 					overlay.recallNext()
-					overlayClass = redrawOverlayHistory
+					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 				case 0x15:
 					overlay.killToStart()
 				case 0x17:
@@ -1559,7 +1571,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					overlay.killLine()
 				case 0x16:
 					overlay.scrollNewer(5)
-					overlayClass = redrawOverlayHistory
+					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 				default:
 					if r >= 32 || r == '\t' {
 						overlay.insert([]rune{r})
@@ -1575,7 +1587,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						continue
 					}
 				}
-				if err := redraw(overlayClass); err != nil {
+				if err := redraw(overlayReq); err != nil {
 					return err
 				}
 				continue

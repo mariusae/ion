@@ -2,6 +2,7 @@ package term
 
 import (
 	"bufio"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -204,6 +205,36 @@ func TestMouseEventDismissesOverlayOutside(t *testing.T) {
 		if got := tt.event.dismissesOverlayOutside(); got != tt.want {
 			t.Fatalf("%s dismissesOverlayOutside() = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestHandleOverlayMouseEventIgnoresPassiveMotionWithoutSelection(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("alpha")
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  35,
+		x:       2,
+		y:       overlayTopRow(overlay) + 1,
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if handled {
+		t.Fatal("handleOverlayMouseEvent() handled = true, want false for passive motion with no selection")
+	}
+	if overlay.selecting {
+		t.Fatal("overlay.selecting = true, want false")
 	}
 }
 

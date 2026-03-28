@@ -841,86 +841,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleOverlayMouse := func(event mouseEvent) (bool, error) {
-		if !overlay.visible {
-			return false, nil
-		}
-		if event.y < overlayTopRow(overlay) {
-			if event.dismissesOverlayOutside() {
-				overlay.close()
-				return true, nil
-			}
-			return false, nil
-		}
-		switch event.button {
-		case 64:
-			overlay.scrollOlder(3)
-			overlay.selecting = false
-		case 65:
-			overlay.scrollNewer(3)
-			overlay.selecting = false
-		default:
-			if event.isMotion() {
-				if overlay.selecting {
-					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
-					if event.noButtonsDown() {
-						overlay.selecting = false
-						if overlay.selectBtn2 {
-							overlay.selectBtn2 = false
-							token := ""
-							start, end, ok := overlay.selectionBounds()
-							if ok && isOverlayClickSelection(start, end) {
-								token = overlay.tokenAt(start)
-							} else {
-								token = trimOverlaySelection(overlay.selectedText())
-							}
-							if token != "" {
-								if err := openTargetToken(token); err == nil {
-									return true, nil
-								}
-							}
-							return true, nil
-						}
-						_ = copyToClipboard(stdout, overlay.selectedText())
-						return true, flashOverlaySelection()
-					}
-				}
-				return true, nil
-			}
-			if btn := event.button & 3; btn == 0 || btn == 2 {
-				if event.pressed {
-					pos := overlay.screenToPos(event.y, event.x)
-					if pos.line >= 0 {
-						overlay.selecting = true
-						overlay.selectBtn2 = btn == 2
-						overlay.selectStart = pos
-						overlay.selectEnd = pos
-						return true, nil
-					}
-				} else if overlay.selecting {
-					overlay.selectEnd = overlay.screenToPos(event.y, event.x)
-					overlay.selecting = false
-					if overlay.selectBtn2 {
-						overlay.selectBtn2 = false
-						token := ""
-						start, end, ok := overlay.selectionBounds()
-						if ok && isOverlayClickSelection(start, end) {
-							token = overlay.tokenAt(start)
-						} else {
-							token = trimOverlaySelection(overlay.selectedText())
-						}
-						if token != "" {
-							if err := openTargetToken(token); err == nil {
-								return true, nil
-							}
-						}
-						return true, nil
-					}
-					_ = copyToClipboard(stdout, overlay.selectedText())
-					return true, flashOverlaySelection()
-				}
-			}
-		}
-		return true, nil
+		return handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection)
 	}
 
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
@@ -1952,6 +1873,96 @@ func drawBufferMode(stdout io.Writer, renderer *frameRenderer, stats *frameRende
 		return writeFullFrame(stdout, frame)
 	}
 	return renderer.Render(stdout, frame, class, forceFull, stats)
+}
+
+func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error) (bool, error) {
+	if !overlay.visible {
+		return false, nil
+	}
+	if event.y < overlayTopRow(overlay) {
+		if event.dismissesOverlayOutside() {
+			overlay.close()
+			return true, nil
+		}
+		return false, nil
+	}
+	switch event.button {
+	case 64:
+		overlay.scrollOlder(3)
+		overlay.selecting = false
+	case 65:
+		overlay.scrollNewer(3)
+		overlay.selecting = false
+	default:
+		if event.isMotion() {
+			if overlay.selecting {
+				overlay.selectEnd = overlay.screenToPos(event.y, event.x)
+				if event.noButtonsDown() {
+					overlay.selecting = false
+					if overlay.selectBtn2 {
+						overlay.selectBtn2 = false
+						token := ""
+						start, end, ok := overlay.selectionBounds()
+						if ok && isOverlayClickSelection(start, end) {
+							token = overlay.tokenAt(start)
+						} else {
+							token = trimOverlaySelection(overlay.selectedText())
+						}
+						if token != "" && openTarget != nil {
+							if err := openTarget(token); err == nil {
+								return true, nil
+							}
+						}
+						return true, nil
+					}
+					_ = copyToClipboard(stdout, overlay.selectedText())
+					if flashSelection == nil {
+						return true, nil
+					}
+					return true, flashSelection()
+				}
+				return true, nil
+			}
+			return false, nil
+		}
+		if btn := event.button & 3; btn == 0 || btn == 2 {
+			if event.pressed {
+				pos := overlay.screenToPos(event.y, event.x)
+				if pos.line >= 0 {
+					overlay.selecting = true
+					overlay.selectBtn2 = btn == 2
+					overlay.selectStart = pos
+					overlay.selectEnd = pos
+					return true, nil
+				}
+			} else if overlay.selecting {
+				overlay.selectEnd = overlay.screenToPos(event.y, event.x)
+				overlay.selecting = false
+				if overlay.selectBtn2 {
+					overlay.selectBtn2 = false
+					token := ""
+					start, end, ok := overlay.selectionBounds()
+					if ok && isOverlayClickSelection(start, end) {
+						token = overlay.tokenAt(start)
+					} else {
+						token = trimOverlaySelection(overlay.selectedText())
+					}
+					if token != "" && openTarget != nil {
+						if err := openTarget(token); err == nil {
+							return true, nil
+						}
+					}
+					return true, nil
+				}
+				_ = copyToClipboard(stdout, overlay.selectedText())
+				if flashSelection == nil {
+					return true, nil
+				}
+				return true, flashSelection()
+			}
+		}
+	}
+	return true, nil
 }
 
 func redrawNeedsFullFrame(class redrawClass) bool {

@@ -95,3 +95,60 @@ func TestGridRendererOverlayInputRedrawTouchesPromptRowOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestGridRendererMenuHoverRedrawIsIncremental(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 30
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	menu := &menuState{
+		visible: true,
+		x:       2,
+		y:       1,
+		width:   12,
+		height:  4,
+		hover:   0,
+		title:   " menu ",
+		items: []menuItem{
+			{label: " one", kind: menuCut},
+			{label: " two", kind: menuCut},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, redrawInitial, state, nil, menu, nil, true, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	out.Reset()
+	menu.hover = 1
+	if err := renderer.Draw(&out, redrawMenuHover, state, nil, menu, nil, true, false, nil); err != nil {
+		t.Fatalf("Draw(menu hover) error = %v", err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("Draw(menu hover) = %q, want no full clear", got)
+	}
+	for _, wanted := range []string{"\x1b[3;", "\x1b[4;"} {
+		if !strings.Contains(got, wanted) {
+			t.Fatalf("Draw(menu hover) = %q, want repaint for menu row %q", got, wanted)
+		}
+	}
+	for _, unwanted := range []string{"\x1b[1;", "\x1b[2;", "\x1b[5;"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("Draw(menu hover) = %q, want no repaint for unaffected row prefix %q", got, unwanted)
+		}
+	}
+}

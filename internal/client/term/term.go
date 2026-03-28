@@ -2130,7 +2130,7 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 
 func redrawNeedsFullFrame(class redrawClass) bool {
 	switch class {
-	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory:
+	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawMenuHover:
 		return false
 	default:
 		return true

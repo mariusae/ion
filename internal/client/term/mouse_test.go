@@ -403,7 +403,7 @@ func TestReadBufferEscapeCoalescesBufferedMouseMotion(t *testing.T) {
 	}
 }
 
-func TestReadBufferEscapeCoalescesBufferedMouseWheel(t *testing.T) {
+func TestReadBufferEscapeDoesNotCoalesceBufferedMouseWheel(t *testing.T) {
 	t.Parallel()
 
 	reader := bufio.NewReader(strings.NewReader("\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<0;3;3M"))
@@ -412,54 +412,16 @@ func TestReadBufferEscapeCoalescesBufferedMouseWheel(t *testing.T) {
 	}
 	key, mouse, err := readBufferEscape(reader, nil)
 	if err != nil {
-		t.Fatalf("readBufferEscape(coalesced wheel) error = %v", err)
+		t.Fatalf("readBufferEscape(buffered wheel) error = %v", err)
 	}
 	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape(coalesced wheel) = (%d, %#v), want mouse event", key, mouse)
+		t.Fatalf("readBufferEscape(buffered wheel) = (%d, %#v), want mouse event", key, mouse)
 	}
 	if got, want := mouse.button, 64; got != want {
 		t.Fatalf("mouse.button = %d, want %d", got, want)
 	}
-	if got, want := mouse.repeat, 2; got != want {
-		t.Fatalf("mouse.repeat = %d, want %d", got, want)
-	}
-	if _, _, err := reader.ReadRune(); err != nil {
-		t.Fatalf("prime reader with next ESC: %v", err)
-	}
-	key, mouse, err = readBufferEscape(reader, nil)
-	if err != nil {
-		t.Fatalf("readBufferEscape(next event after wheel coalescing) error = %v", err)
-	}
-	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape(next event after wheel coalescing) = (%d, %#v), want mouse event", key, mouse)
-	}
-	if got, want := mouse.button, 0; got != want {
-		t.Fatalf("next mouse.button = %d, want %d", got, want)
-	}
-}
-
-func TestReadBufferEscapeCapsBufferedMouseWheelBurst(t *testing.T) {
-	t.Parallel()
-
-	reader := bufio.NewReader(strings.NewReader(
-		"\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<64;3;3M\x1b[<0;3;3M",
-	))
-
-	if _, _, err := reader.ReadRune(); err != nil {
-		t.Fatalf("prime reader with first ESC: %v", err)
-	}
-	key, mouse, err := readBufferEscape(reader, nil)
-	if err != nil {
-		t.Fatalf("readBufferEscape(capped buffered wheel) error = %v", err)
-	}
-	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape(capped buffered wheel) = (%d, %#v), want mouse event", key, mouse)
-	}
-	if got, want := mouse.button, 64; got != want {
-		t.Fatalf("mouse.button = %d, want %d", got, want)
-	}
-	if got, want := mouse.repeat, maxBufferedWheelRepeat; got != want {
-		t.Fatalf("mouse.repeat = %d, want %d", got, want)
+	if got, want := mouse.count(), 1; got != want {
+		t.Fatalf("mouse.count() = %d, want %d", got, want)
 	}
 
 	if _, _, err := reader.ReadRune(); err != nil {
@@ -467,16 +429,16 @@ func TestReadBufferEscapeCapsBufferedMouseWheelBurst(t *testing.T) {
 	}
 	key, mouse, err = readBufferEscape(reader, nil)
 	if err != nil {
-		t.Fatalf("readBufferEscape(remaining buffered wheel) error = %v", err)
+		t.Fatalf("readBufferEscape(second buffered wheel) error = %v", err)
 	}
 	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape(remaining buffered wheel) = (%d, %#v), want mouse event", key, mouse)
+		t.Fatalf("readBufferEscape(second buffered wheel) = (%d, %#v), want mouse event", key, mouse)
 	}
 	if got, want := mouse.button, 64; got != want {
 		t.Fatalf("second mouse.button = %d, want %d", got, want)
 	}
-	if got, want := mouse.repeat, 2; got != want {
-		t.Fatalf("second mouse.repeat = %d, want %d", got, want)
+	if got, want := mouse.count(), 1; got != want {
+		t.Fatalf("second mouse.count() = %d, want %d", got, want)
 	}
 
 	if _, _, err := reader.ReadRune(); err != nil {
@@ -484,88 +446,12 @@ func TestReadBufferEscapeCapsBufferedMouseWheelBurst(t *testing.T) {
 	}
 	key, mouse, err = readBufferEscape(reader, nil)
 	if err != nil {
-		t.Fatalf("readBufferEscape(next event after capped wheel burst) error = %v", err)
+		t.Fatalf("readBufferEscape(next event after buffered wheel) error = %v", err)
 	}
 	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape(next event after capped wheel burst) = (%d, %#v), want mouse event", key, mouse)
+		t.Fatalf("readBufferEscape(next event after buffered wheel) = (%d, %#v), want mouse event", key, mouse)
 	}
 	if got, want := mouse.button, 0; got != want {
-		t.Fatalf("next mouse.button = %d, want %d", got, want)
-	}
-}
-
-func TestDrainWheelBurstDrainsSameDirectionBufferedBurst(t *testing.T) {
-	t.Parallel()
-
-	reader := bufio.NewReader(strings.NewReader(
-		"\x1b[<65;3;3M\x1b[<65;8;6M\x1b[<64;3;3M",
-	))
-	if _, err := reader.Peek(1); err != nil {
-		t.Fatalf("prefill reader buffer: %v", err)
-	}
-
-	drained, err := drainWheelBurst(reader, nil, mouseEvent{button: 65, x: 2, y: 2, pressed: true}, 0)
-	if err != nil {
-		t.Fatalf("drainWheelBurst() error = %v", err)
-	}
-	if got, want := drained, 2; got != want {
-		t.Fatalf("drainWheelBurst() drained = %d, want %d", got, want)
-	}
-
-	if _, _, err := reader.ReadRune(); err != nil {
-		t.Fatalf("prime reader with next ESC: %v", err)
-	}
-	key, mouse, err := readBufferEscape(reader, nil)
-	if err != nil {
-		t.Fatalf("readBufferEscape() error = %v", err)
-	}
-	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape() = (%d, %#v), want mouse event", key, mouse)
-	}
-	if got, want := mouse.button, 64; got != want {
-		t.Fatalf("next mouse.button = %d, want %d", got, want)
-	}
-}
-
-func TestDrainWheelBurstUntilDrainsTimedSameDirectionBurst(t *testing.T) {
-	t.Parallel()
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer r.Close()
-	defer w.Close()
-
-	reader := bufio.NewReader(r)
-	go func() {
-		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
-		time.Sleep(5 * time.Millisecond)
-		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
-		time.Sleep(30 * time.Millisecond)
-		_, _ = w.Write([]byte("\x1b[<65;3;3M"))
-		_ = w.Close()
-	}()
-
-	drained, err := drainWheelBurstUntil(reader, r, mouseEvent{button: 64, x: 2, y: 2, pressed: true}, time.Now().Add(50*time.Millisecond))
-	if err != nil {
-		t.Fatalf("drainWheelBurstUntil() error = %v", err)
-	}
-	if got, want := drained, 2; got != want {
-		t.Fatalf("drainWheelBurstUntil() drained = %d, want %d", got, want)
-	}
-
-	if _, _, err := reader.ReadRune(); err != nil {
-		t.Fatalf("prime reader with next ESC: %v", err)
-	}
-	key, mouse, err := readBufferEscape(reader, r)
-	if err != nil {
-		t.Fatalf("readBufferEscape() error = %v", err)
-	}
-	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape() = (%d, %#v), want mouse event", key, mouse)
-	}
-	if got, want := mouse.button, 65; got != want {
 		t.Fatalf("next mouse.button = %d, want %d", got, want)
 	}
 }
@@ -606,75 +492,6 @@ func TestPeekMouseEventWaitsForFragmentedTimedSequence(t *testing.T) {
 	}
 	if got, want := event.y, 2; got != want {
 		t.Fatalf("peekMouseEvent() y = %d, want %d", got, want)
-	}
-}
-
-func TestCoalesceTimedWheelBurstCombinesTimedSamePositionBurst(t *testing.T) {
-	t.Parallel()
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer r.Close()
-	defer w.Close()
-
-	reader := bufio.NewReader(r)
-	go func() {
-		time.Sleep(2 * time.Millisecond)
-		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
-		time.Sleep(2 * time.Millisecond)
-		_, _ = w.Write([]byte("\x1b[<64;3;3M"))
-		time.Sleep(20 * time.Millisecond)
-		_, _ = w.Write([]byte("\x1b[<65;3;3M"))
-		_ = w.Close()
-	}()
-
-	event, drained, err := coalesceTimedWheelBurst(reader, r, mouseEvent{button: 64, x: 2, y: 2, pressed: true}, time.Now().Add(10*time.Millisecond), 8)
-	if err != nil {
-		t.Fatalf("coalesceTimedWheelBurst() error = %v", err)
-	}
-	if got, want := drained, 2; got != want {
-		t.Fatalf("coalesceTimedWheelBurst() drained = %d, want %d", got, want)
-	}
-	if got, want := event.repeat, 3; got != want {
-		t.Fatalf("coalesceTimedWheelBurst() repeat = %d, want %d", got, want)
-	}
-
-	if _, _, err := reader.ReadRune(); err != nil {
-		t.Fatalf("prime reader with next ESC: %v", err)
-	}
-	key, mouse, err := readBufferEscape(reader, r)
-	if err != nil {
-		t.Fatalf("readBufferEscape() error = %v", err)
-	}
-	if key != keyMouse || mouse == nil {
-		t.Fatalf("readBufferEscape() = (%d, %#v), want mouse event", key, mouse)
-	}
-	if got, want := mouse.button, 65; got != want {
-		t.Fatalf("next mouse.button = %d, want %d", got, want)
-	}
-}
-
-func TestWheelBoundarySuppressorMatchesOnlyWithinWindow(t *testing.T) {
-	t.Parallel()
-
-	var suppressor wheelBoundarySuppressor
-	now := time.Unix(100, 0)
-	event := mouseEvent{button: 64, x: 3, y: 4, pressed: true}
-	suppressor.arm(event, now)
-
-	if !suppressor.match(event, now.Add(10*time.Millisecond)) {
-		t.Fatal("match() = false, want true within suppress window")
-	}
-	if suppressor.match(mouseEvent{button: 65, x: 3, y: 4, pressed: true}, now.Add(10*time.Millisecond)) {
-		t.Fatal("match() = true, want false for different direction")
-	}
-	if suppressor.match(mouseEvent{button: 64, x: 4, y: 4, pressed: true}, now.Add(10*time.Millisecond)) {
-		t.Fatal("match() = true, want false for different position")
-	}
-	if suppressor.match(event, now.Add(boundaryWheelSuppressWindow+time.Millisecond)) {
-		t.Fatal("match() = true, want false after suppress window")
 	}
 }
 
@@ -766,8 +583,8 @@ func TestReadBufferEscapeDoesNotWaitToCoalesceTimedMouseWheel(t *testing.T) {
 	if got, want := mouse.button, 64; got != want {
 		t.Fatalf("mouse.button = %d, want %d", got, want)
 	}
-	if got, want := mouse.repeat, 1; got != want {
-		t.Fatalf("mouse.repeat = %d, want %d", got, want)
+	if got, want := mouse.count(), 1; got != want {
+		t.Fatalf("mouse.count() = %d, want %d", got, want)
 	}
 
 	if _, _, err := reader.ReadRune(); err != nil {
@@ -783,8 +600,8 @@ func TestReadBufferEscapeDoesNotWaitToCoalesceTimedMouseWheel(t *testing.T) {
 	if got, want := mouse.button, 64; got != want {
 		t.Fatalf("second mouse.button = %d, want %d", got, want)
 	}
-	if got, want := mouse.repeat, 1; got != want {
-		t.Fatalf("second mouse.repeat = %d, want %d", got, want)
+	if got, want := mouse.count(), 1; got != want {
+		t.Fatalf("second mouse.count() = %d, want %d", got, want)
 	}
 
 	if _, _, err := reader.ReadRune(); err != nil {

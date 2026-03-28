@@ -28,6 +28,25 @@ func TestRenderSchedulerCoalescesToLatestClassAndStrongestMode(t *testing.T) {
 	}
 }
 
+func TestRenderSchedulerMergesBufferAndMenuInvalidations(t *testing.T) {
+	t.Parallel()
+
+	var scheduler renderScheduler
+	scheduler.Request(renderRequestForLayers(redrawBufferContent, renderInvalidateBuffer))
+	scheduler.Request(renderRequestForLayers(redrawMenuClose, renderInvalidateMenu))
+
+	req, ok := scheduler.Drain()
+	if !ok {
+		t.Fatalf("Drain() ok = false, want true")
+	}
+	if got, want := req.class, redrawMenuClose; got != want {
+		t.Fatalf("Drain() class = %q, want %q", got, want)
+	}
+	if got, want := req.invalidation, renderInvalidateBuffer|renderInvalidateMenu; got != want {
+		t.Fatalf("Drain() invalidation = %v, want %v", got, want)
+	}
+}
+
 func TestBufferRenderRequestCursorSkipsLayerWhenCursorNotPainted(t *testing.T) {
 	t.Parallel()
 

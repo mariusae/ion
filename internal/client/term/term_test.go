@@ -986,6 +986,33 @@ func TestDrawBufferModeShowsSelectionWhenUnfocused(t *testing.T) {
 	}
 }
 
+func TestDrawBufferModeShowsInlineStatusWithoutOverlay(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	state.status = "saved"
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), theme, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[6;1H") || !strings.Contains(got, theme.subtlePrefix()+"saved") {
+		t.Fatalf("drawBufferMode() = %q, want inline subtle status on final row", got)
+	}
+}
+
 func TestDrawBufferLineShowsDarkerCollapsedSelectionInOverlay(t *testing.T) {
 	t.Parallel()
 

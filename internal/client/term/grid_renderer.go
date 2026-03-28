@@ -114,6 +114,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	rootBuilder := newGridLineBuilder(r.root.cols)
 	composeSpans := r.rootComposeSpans(forceFull, prevRects, nextRects)
 	composeRootGrid(r.root, rootBuilder, composeSpans, r.buffer, r.hudHistory, r.hudInput, r.menu)
+	dirtyRows := dirtyRowCount(r.root, nil)
 
 	counted := &countingWriter{w: stdout}
 	backend := newTTYRenderBackend(counted, r.palette)
@@ -139,7 +140,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 			backend.ScrollRegion(op.top, op.bottom, op.delta)
 		}
 		r.emitDirtyRows(backend, r.root)
-		if len(scrollOps) > 0 || r.lastCursor != nextCursor {
+		if dirtyRows > 0 || len(scrollOps) > 0 || r.lastCursor != nextCursor {
 			backend.SetCursor(nextCursor)
 		}
 	}
@@ -158,7 +159,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	if stats != nil {
 		stats.Record(req.class, frameRenderResult{
 			full:  forceFull,
-			rows:  dirtyRowCount(r.root, scrollOps),
+			rows:  dirtyRows + absScrollDelta(scrollOps),
 			bytes: counted.count,
 		})
 	}
@@ -264,6 +265,9 @@ func (r *gridRenderer) renderBufferGrid(state *bufferState, overlay *overlayStat
 			renderBufferGridRow(builder, state, layoutRow.start, layoutRow.end, inactive, theme, r.palette)
 		}
 		builder.Flush()
+	}
+	if overlay == nil || !overlay.visible {
+		renderInlineStatusGridRow(builder, r.buffer, state, theme, r.palette)
 	}
 	r.buffer.valid = true
 }
@@ -513,6 +517,20 @@ func renderOverlayPromptGridRow(builder *GridLineBuilder, overlay *overlayState,
 	renderGridRunes(builder, 0, overlay.input, hudPrefix(theme), hudTabWidth, palette)
 }
 
+func renderInlineStatusGridRow(builder *GridLineBuilder, grid *ScreenGrid, state *bufferState, theme *uiTheme, palette *gridStylePalette) {
+	if builder == nil || grid == nil || state == nil || state.status == "" || grid.rows == 0 {
+		return
+	}
+	row := grid.rows - 1
+	builder.Start(grid, row)
+	style := ""
+	if theme != nil {
+		style = theme.subtlePrefix()
+	}
+	renderGridText(builder, 0, state.status, style, hudTabWidth, palette)
+	builder.Flush()
+}
+
 func renderGridText(builder *GridLineBuilder, col int, text, style string, tabWidth int, palette *gridStylePalette) int {
 	return renderGridRunes(builder, col, []rune(text), style, tabWidth, palette)
 }
@@ -611,6 +629,11 @@ func dirtyRowCount(grid *ScreenGrid, scrollOps []gridScrollOp) int {
 			count++
 		}
 	}
+	return count + absScrollDelta(scrollOps)
+}
+
+func absScrollDelta(scrollOps []gridScrollOp) int {
+	count := 0
 	for _, op := range scrollOps {
 		count += abs(op.delta)
 	}

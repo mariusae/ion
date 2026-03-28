@@ -300,3 +300,42 @@ func TestGridRendererBufferCursorRedrawMovesCursorOnly(t *testing.T) {
 		t.Fatalf("Draw(cursor) = %q, want %q", got, want)
 	}
 }
+
+func TestGridRendererOverlayHistoryRedrawRestoresUnchangedVisibleCursor(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	overlay := newOverlayState()
+	overlay.open(",")
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, overlay, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	overlay.addOutput("done")
+	out.Reset()
+	if err := renderer.Draw(&out, renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory), state, overlay, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(overlay history) error = %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "\x1b[?25h") {
+		t.Fatalf("Draw(overlay history) = %q, want visible terminal cursor restored after repaint", got)
+	}
+	if !strings.Contains(got, "\x1b[5;2H") {
+		t.Fatalf("Draw(overlay history) = %q, want cursor restored to overlay prompt row", got)
+	}
+}

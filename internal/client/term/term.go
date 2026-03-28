@@ -391,23 +391,23 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	flushRender := func(reason string) error {
-		class, forceFull, ok := renderQueue.Drain()
+		req, ok := renderQueue.Drain()
 		if !ok {
 			return nil
 		}
 		refreshTerminalSize()
 		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("render-flush reason=%s class=%s force=%t file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", reason, class, forceFull, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
+			renderer.trace.Printf("render-flush reason=%s class=%s force=%t invalidation=%d file=%q dirty=%t cursor=%d dot=%d:%d origin=%d overlay=%t menu=%t hover=%d", reason, req.class, req.forceFull, req.invalidation, buffer.name, buffer.dirty, buffer.cursor, buffer.dotStart, buffer.dotEnd, buffer.origin, overlay.visible, menu.visible, menu.hover)
 		}
-		err := drawBufferMode(stdout, renderer, renderStats, class, buffer, overlay, menu, theme, focused, forceFull)
+		err := drawBufferModeRequest(stdout, renderer, renderStats, req, buffer, overlay, menu, theme, focused)
 		if renderer != nil && renderer.trace != nil {
-			renderer.trace.Printf("render-flush done reason=%s class=%s err=%v", reason, class, err)
+			renderer.trace.Printf("render-flush done reason=%s class=%s err=%v", reason, req.class, err)
 		}
 		return err
 	}
 
 	redraw := func(class redrawClass) error {
-		renderQueue.Request(class, false)
+		renderQueue.Request(buildRenderRequest(class, false, buffer, overlay, menu, focused))
 		if reader.Buffered() == 0 {
 			return flushRender("idle")
 		}
@@ -415,7 +415,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	fullRedraw := func(class redrawClass) error {
-		renderQueue.Request(class, true)
+		renderQueue.Request(buildRenderRequest(class, true, buffer, overlay, menu, focused))
 		if reader.Buffered() == 0 {
 			return flushRender("idle")
 		}
@@ -2034,12 +2034,16 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 }
 
 func drawBufferMode(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool) error {
-	forceFull = forceFull || redrawNeedsFullFrame(class)
+	req := buildRenderRequest(class, forceFull || redrawNeedsFullFrame(class), state, overlay, menu, focused)
+	return drawBufferModeRequest(stdout, renderer, stats, req, state, overlay, menu, theme, focused)
+}
+
+func drawBufferModeRequest(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, req renderRequest, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {
 	if renderer == nil {
 		frame := buildBufferFrame(state, overlay, menu, theme, focused)
 		return writeFullFrame(stdout, frame)
 	}
-	return renderer.Draw(stdout, class, state, overlay, menu, theme, focused, forceFull, stats)
+	return renderer.Draw(stdout, req, state, overlay, menu, theme, focused, stats)
 }
 
 func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error) (bool, error) {

@@ -1,32 +1,80 @@
 package term
 
-type renderScheduler struct {
-	pending   bool
-	class     redrawClass
-	forceFull bool
+type renderInvalidation uint32
+
+const (
+	renderInvalidateNone   renderInvalidation = 0
+	renderInvalidateBuffer renderInvalidation = 1 << iota
+	renderInvalidateOverlayHistory
+	renderInvalidateOverlayInput
+	renderInvalidateMenu
+)
+
+const renderInvalidateAllLayers = renderInvalidateBuffer | renderInvalidateOverlayHistory | renderInvalidateOverlayInput | renderInvalidateMenu
+
+type renderRequest struct {
+	class        redrawClass
+	forceFull    bool
+	invalidation renderInvalidation
 }
 
-func (s *renderScheduler) Request(class redrawClass, forceFull bool) {
+type renderScheduler struct {
+	pending bool
+	req     renderRequest
+}
+
+func (s *renderScheduler) Request(req renderRequest) {
 	if s == nil {
 		return
 	}
 	s.pending = true
-	s.class = class
-	s.forceFull = s.forceFull || forceFull
+	s.req.class = req.class
+	s.req.forceFull = s.req.forceFull || req.forceFull
+	s.req.invalidation |= req.invalidation
 }
 
 func (s *renderScheduler) Pending() bool {
 	return s != nil && s.pending
 }
 
-func (s *renderScheduler) Drain() (redrawClass, bool, bool) {
+func (s *renderScheduler) Drain() (renderRequest, bool) {
 	if s == nil || !s.pending {
-		return "", false, false
+		return renderRequest{}, false
 	}
-	class := s.class
-	forceFull := s.forceFull
+	req := s.req
 	s.pending = false
-	s.class = ""
-	s.forceFull = false
-	return class, forceFull, true
+	s.req = renderRequest{}
+	return req, true
+}
+
+func (r renderRequest) invalidates(mask renderInvalidation) bool {
+	return r.invalidation&mask != 0
+}
+
+func buildRenderRequest(class redrawClass, forceFull bool, state *bufferState, overlay *overlayState, menu *menuState, focused bool) renderRequest {
+	req := renderRequest{
+		class:     class,
+		forceFull: forceFull,
+	}
+	switch class {
+	case redrawBufferCursor:
+		if bufferInactive(overlay, menu, focused) {
+			req.invalidation = renderInvalidateBuffer
+		}
+	case redrawBufferSelection, redrawBufferViewport, redrawBufferContent, redrawBufferStatus:
+		req.invalidation = renderInvalidateBuffer
+	case redrawOverlayInput:
+		req.invalidation = renderInvalidateOverlayInput
+	case redrawOverlayHistory:
+		req.invalidation = renderInvalidateOverlayHistory
+	case redrawOverlayOpen, redrawOverlayClose:
+		req.invalidation = renderInvalidateBuffer | renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+	case redrawMenuHover, redrawMenuOpen, redrawMenuClose:
+		req.invalidation = renderInvalidateMenu
+	case redrawTheme, redrawRefresh:
+		req.invalidation = renderInvalidateAllLayers
+	default:
+		req.invalidation = renderInvalidateAllLayers
+	}
+	return req
 }

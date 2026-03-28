@@ -53,7 +53,7 @@ func (r *gridRenderer) Reset() {
 	r.overlayAnchors = nil
 }
 
-func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, forceFull bool, stats *frameRenderStats) error {
+func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool, stats *frameRenderStats) error {
 	if state == nil {
 		return nil
 	}
@@ -63,7 +63,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	}
 	prevRects := r.layerRects()
 	rootChanged := r.ensureGrids(overlay, menu)
-	forceFull = forceFull || !r.initialized || rootChanged
+	forceFull := req.forceFull || !r.initialized || rootChanged
 
 	nextTitle := state.name
 	nextTitleDirty := state.dirty
@@ -73,14 +73,19 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	bufferAnchors := currentBufferAnchors(state, overlay, r.buffer.rows)
 	overlayAnchors := currentOverlayAnchors(overlay)
 	nextRects := r.layerRects()
+	if forceFull {
+		req.invalidation = renderInvalidateAllLayers
+	}
 
 	scrollOps := make([]gridScrollOp, 0, 2)
-	if !forceFull {
+	if !forceFull && req.invalidates(renderInvalidateBuffer) {
 		if op, ok := r.planBufferScroll(bufferAnchors, overlay, menu); ok {
 			r.buffer.Scroll(0, r.buffer.rows, op.delta)
 			r.root.Scroll(op.top, op.bottom, op.delta)
 			scrollOps = append(scrollOps, op)
 		}
+	}
+	if !forceFull && req.invalidates(renderInvalidateOverlayHistory) {
 		if op, ok := r.planOverlayHistoryScroll(overlayAnchors, overlay, menu); ok {
 			topPad := overlayTopPadRows(overlay)
 			r.hudHistory.Scroll(topPad, topPad+overlayHistoryRows(overlay), op.delta)
@@ -93,10 +98,18 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 		r.root.invalidate()
 	}
 
-	r.renderBufferGrid(state, overlay, menu, theme, focused)
-	r.renderHUDHistoryGrid(overlay, theme)
-	r.renderHUDInputGrid(overlay, theme)
-	r.renderMenuGrid(menu, theme)
+	if forceFull || req.invalidates(renderInvalidateBuffer) {
+		r.renderBufferGrid(state, overlay, menu, theme, focused)
+	}
+	if forceFull || req.invalidates(renderInvalidateOverlayHistory) {
+		r.renderHUDHistoryGrid(overlay, theme)
+	}
+	if forceFull || req.invalidates(renderInvalidateOverlayInput) {
+		r.renderHUDInputGrid(overlay, theme)
+	}
+	if forceFull || req.invalidates(renderInvalidateMenu) {
+		r.renderMenuGrid(menu, theme)
+	}
 
 	rootBuilder := newGridLineBuilder(r.root.cols)
 	composeSpans := r.rootComposeSpans(forceFull, prevRects, nextRects)
@@ -143,14 +156,14 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	r.overlayAnchors = overlayAnchors
 	r.clearGridDirty()
 	if stats != nil {
-		stats.Record(class, frameRenderResult{
+		stats.Record(req.class, frameRenderResult{
 			full:  forceFull,
 			rows:  dirtyRowCount(r.root, scrollOps),
 			bytes: counted.count,
 		})
 	}
 	if r.trace != nil {
-		r.trace.Printf("grid-render class=%s full=%t scrollOps=%d bytes=%d", class, forceFull, len(scrollOps), counted.count)
+		r.trace.Printf("grid-render class=%s full=%t invalidation=%d scrollOps=%d bytes=%d", req.class, forceFull, req.invalidation, len(scrollOps), counted.count)
 	}
 	return nil
 }

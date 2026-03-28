@@ -26,7 +26,7 @@ func TestGridRendererViewportScrollUsesScrollOperation(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := renderer.Draw(&out, redrawInitial, state, nil, newMenuState(), nil, true, true, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawInitial, true, state, nil, newMenuState(), true), state, nil, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(initial) error = %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestGridRendererViewportScrollUsesScrollOperation(t *testing.T) {
 	}, state)
 	next.origin = nextVisualRowStart(next.text, state.origin)
 
-	if err := renderer.Draw(&out, redrawBufferViewport, next, nil, newMenuState(), nil, true, false, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawBufferViewport, false, next, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(viewport) error = %v", err)
 	}
 
@@ -72,13 +72,13 @@ func TestGridRendererOverlayInputRedrawTouchesPromptRowOnly(t *testing.T) {
 	overlay.open(",")
 
 	var out bytes.Buffer
-	if err := renderer.Draw(&out, redrawInitial, state, overlay, newMenuState(), nil, true, true, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawInitial, true, state, overlay, newMenuState(), true), state, overlay, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(initial) error = %v", err)
 	}
 
 	out.Reset()
 	overlay.insert([]rune("p"))
-	if err := renderer.Draw(&out, redrawOverlayInput, state, overlay, newMenuState(), nil, true, false, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawOverlayInput, false, state, overlay, newMenuState(), true), state, overlay, newMenuState(), nil, true, nil); err != nil {
 		t.Fatalf("Draw(overlay input) error = %v", err)
 	}
 
@@ -127,13 +127,13 @@ func TestGridRendererMenuHoverRedrawIsIncremental(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := renderer.Draw(&out, redrawInitial, state, nil, menu, nil, true, true, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawInitial, true, state, nil, menu, true), state, nil, menu, nil, true, nil); err != nil {
 		t.Fatalf("Draw(initial) error = %v", err)
 	}
 
 	out.Reset()
 	menu.hover = 1
-	if err := renderer.Draw(&out, redrawMenuHover, state, nil, menu, nil, true, false, nil); err != nil {
+	if err := renderer.Draw(&out, buildRenderRequest(redrawMenuHover, false, state, nil, menu, true), state, nil, menu, nil, true, nil); err != nil {
 		t.Fatalf("Draw(menu hover) error = %v", err)
 	}
 
@@ -261,5 +261,42 @@ func TestDrawBufferModeOverlayOpenAndCloseStayIncremental(t *testing.T) {
 	}
 	if !strings.Contains(gotClose, "\x1b[6;") {
 		t.Fatalf("drawBufferMode(overlay close) = %q, want lower-screen recomposition", gotClose)
+	}
+}
+
+func TestGridRendererBufferCursorRedrawMovesCursorOnly(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, buildRenderRequest(redrawInitial, true, state, nil, newMenuState(), true), state, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	next := newBufferStateWithPrevious(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 1,
+		DotEnd:   1,
+	}, state)
+	out.Reset()
+	if err := renderer.Draw(&out, buildRenderRequest(redrawBufferCursor, false, next, nil, newMenuState(), true), next, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(cursor) error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25h\x1b[1;2H"; got != want {
+		t.Fatalf("Draw(cursor) = %q, want %q", got, want)
 	}
 }

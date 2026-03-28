@@ -47,6 +47,9 @@ func TestRedrawNeedsFullFrameAllowsViewportAndOverlayDiff(t *testing.T) {
 		redrawBufferStatus,
 		redrawOverlayInput,
 		redrawOverlayHistory,
+		redrawMenuHover,
+		redrawMenuOpen,
+		redrawMenuClose,
 	} {
 		if redrawNeedsFullFrame(class) {
 			t.Fatalf("redrawNeedsFullFrame(%q) = true, want false", class)
@@ -56,8 +59,6 @@ func TestRedrawNeedsFullFrameAllowsViewportAndOverlayDiff(t *testing.T) {
 	for _, class := range []redrawClass{
 		redrawOverlayOpen,
 		redrawOverlayClose,
-		redrawMenuOpen,
-		redrawMenuClose,
 		redrawTheme,
 	} {
 		if !redrawNeedsFullFrame(class) {

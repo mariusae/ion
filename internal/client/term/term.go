@@ -813,7 +813,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			} else {
 				menu.dismiss()
 			}
-			return false, fullRedraw(redrawMenuClose)
+			return false, redraw(redrawMenuClose)
 		}
 		if event.isMotion() {
 			item := menu.itemAt(event.x, event.y)
@@ -831,7 +831,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			if menu.hover != item {
 				menu.hover = item
-				return false, fullRedraw(redrawMenuHover)
+				return false, redraw(redrawMenuHover)
 			}
 			return false, nil
 		}
@@ -839,7 +839,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 			clearMenuLostRelease()
 			menuSawHover = false
-			return false, fullRedraw(redrawMenuClose)
+			return false, redraw(redrawMenuClose)
 		}
 		return false, nil
 	}
@@ -937,7 +937,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
-				return false, fullRedraw(redrawMenuClose)
+				return false, redraw(redrawMenuClose)
 			}
 			previous := snapshotBufferState(buffer)
 			buffer.markMode = false
@@ -963,7 +963,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				menu.dismiss()
 				clearMenuLostRelease()
 				menuSawHover = false
-				return false, fullRedraw(redrawMenuClose)
+				return false, redraw(redrawMenuClose)
 			}
 			return false, redraw(redrawTheme)
 		}
@@ -1300,7 +1300,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								menu.dismiss()
 								clearMenuLostRelease()
 								menuSawHover = false
-								if err := fullRedraw(redrawMenuClose); err != nil {
+								if err := redraw(redrawMenuClose); err != nil {
 									return err
 								}
 							}
@@ -1347,7 +1347,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyEsc:
 						if menu.visible {
 							menu.dismiss()
-							if err := fullRedraw(redrawMenuClose); err != nil {
+							if err := redraw(redrawMenuClose); err != nil {
 								return err
 							}
 							continue
@@ -1469,7 +1469,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							menu.dismiss()
 							clearMenuLostRelease()
 							menuSawHover = false
-							if err := fullRedraw(redrawMenuClose); err != nil {
+							if err := redraw(redrawMenuClose); err != nil {
 								return err
 							}
 							continue
@@ -2130,7 +2130,7 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 
 func redrawNeedsFullFrame(class redrawClass) bool {
 	switch class {
-	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawMenuHover:
+	case redrawBufferCursor, redrawBufferViewport, redrawBufferContent, redrawBufferStatus, redrawOverlayInput, redrawOverlayHistory, redrawMenuHover, redrawMenuOpen, redrawMenuClose:
 		return false
 	default:
 		return true

@@ -28,6 +28,12 @@ type gridScrollOp struct {
 	delta  int
 }
 
+type rowRange struct {
+	top    int
+	bottom int
+	ok     bool
+}
+
 func newGridRenderer() *gridRenderer {
 	return &gridRenderer{
 		trace:   newTraceLogger(),
@@ -61,6 +67,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 		frame := buildBufferFrame(state, overlay, menu, theme, focused)
 		return writeFullFrame(stdout, frame)
 	}
+	prevMenuRows := visibleGridRowRange(r.menu)
 	geometryChanged := r.ensureGrids(overlay, menu)
 	forceFull = forceFull || !r.initialized || geometryChanged
 
@@ -71,6 +78,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 
 	bufferAnchors := currentBufferAnchors(state, overlay, r.buffer.rows)
 	overlayAnchors := currentOverlayAnchors(overlay)
+	nextMenuRows := visibleGridRowRange(r.menu)
 
 	scrollOps := make([]gridScrollOp, 0, 2)
 	if !forceFull {
@@ -97,7 +105,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	r.renderMenuGrid(menu, theme)
 
 	rootBuilder := newGridLineBuilder(r.root.cols)
-	composeRows := r.rootComposeRows(forceFull)
+	composeRows := r.rootComposeRows(forceFull, prevMenuRows, nextMenuRows)
 	composeRootGrid(r.root, rootBuilder, composeRows, r.buffer, r.hudHistory, r.hudInput, r.menu)
 
 	counted := &countingWriter{w: stdout}
@@ -182,7 +190,7 @@ func (r *gridRenderer) ensureGrids(overlay *overlayState, menu *menuState) bool 
 		menuRows = menu.height
 		menuCols = menu.width
 	}
-	changed = r.ensureGrid(&r.menu, menuRows, menuCols) || changed
+	r.ensureGrid(&r.menu, menuRows, menuCols)
 	r.menu.originRow = 0
 	r.menu.originCol = 0
 	r.menu.visible = false
@@ -363,7 +371,7 @@ func (r *gridRenderer) emitDirtyRows(backend renderBackend, grid *ScreenGrid) {
 	}
 }
 
-func (r *gridRenderer) rootComposeRows(forceFull bool) []bool {
+func (r *gridRenderer) rootComposeRows(forceFull bool, prevMenuRows, nextMenuRows rowRange) []bool {
 	if r == nil || r.root == nil {
 		return nil
 	}
@@ -378,6 +386,8 @@ func (r *gridRenderer) rootComposeRows(forceFull bool) []bool {
 	for _, layer := range []*ScreenGrid{r.buffer, r.hudHistory, r.hudInput, r.menu} {
 		projectLayerDirtyRows(r.root, layer, rows)
 	}
+	markRowRange(rows, prevMenuRows)
+	markRowRange(rows, nextMenuRows)
 	return rows
 }
 
@@ -601,6 +611,34 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+func visibleGridRowRange(grid *ScreenGrid) rowRange {
+	if grid == nil || !grid.visible || grid.rows <= 0 {
+		return rowRange{}
+	}
+	return rowRange{
+		top:    grid.originRow,
+		bottom: grid.originRow + grid.rows,
+		ok:     true,
+	}
+}
+
+func markRowRange(rows []bool, rr rowRange) {
+	if !rr.ok || len(rows) == 0 {
+		return
+	}
+	top := rr.top
+	if top < 0 {
+		top = 0
+	}
+	bottom := rr.bottom
+	if bottom > len(rows) {
+		bottom = len(rows)
+	}
+	for row := top; row < bottom; row++ {
+		rows[row] = true
+	}
 }
 
 func hudPrefix(theme *uiTheme) string {

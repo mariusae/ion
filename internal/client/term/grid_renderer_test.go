@@ -152,3 +152,63 @@ func TestGridRendererMenuHoverRedrawIsIncremental(t *testing.T) {
 		}
 	}
 }
+
+func TestDrawBufferModeMenuOpenAndCloseStayIncremental(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 30
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	menu := newMenuState()
+
+	var out bytes.Buffer
+	if err := drawBufferMode(&out, renderer, nil, redrawInitial, state, nil, menu, nil, true, true); err != nil {
+		t.Fatalf("drawBufferMode(initial) error = %v", err)
+	}
+
+	menu.visible = true
+	menu.x = 2
+	menu.y = 1
+	menu.width = 12
+	menu.height = 4
+	menu.title = " menu "
+	menu.items = []menuItem{
+		{label: " one", kind: menuCut},
+		{label: " two", kind: menuCut},
+	}
+
+	out.Reset()
+	if err := drawBufferMode(&out, renderer, nil, redrawMenuOpen, state, nil, menu, nil, true, false); err != nil {
+		t.Fatalf("drawBufferMode(menu open) error = %v", err)
+	}
+	gotOpen := out.String()
+	if strings.Contains(gotOpen, "\x1b[2J") {
+		t.Fatalf("drawBufferMode(menu open) = %q, want no full clear", gotOpen)
+	}
+	if !strings.Contains(gotOpen, "\x1b[2;") {
+		t.Fatalf("drawBufferMode(menu open) = %q, want menu-area repaint", gotOpen)
+	}
+
+	menu.dismiss()
+	out.Reset()
+	if err := drawBufferMode(&out, renderer, nil, redrawMenuClose, state, nil, menu, nil, true, false); err != nil {
+		t.Fatalf("drawBufferMode(menu close) error = %v", err)
+	}
+	gotClose := out.String()
+	if strings.Contains(gotClose, "\x1b[2J") {
+		t.Fatalf("drawBufferMode(menu close) = %q, want no full clear", gotClose)
+	}
+	if !strings.Contains(gotClose, "\x1b[2;") {
+		t.Fatalf("drawBufferMode(menu close) = %q, want menu-area recomposition", gotClose)
+	}
+}

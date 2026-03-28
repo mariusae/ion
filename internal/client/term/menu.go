@@ -221,36 +221,20 @@ func writeMenuLine(stdout io.Writer, row, col int, line, prefix string, theme *u
 }
 
 func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover bool, theme *uiTheme) error {
-	content := item.label
-	if item.shortcut != "" {
-		padding := inner - len([]rune(item.label)) - len([]rune(item.shortcut)) - 1
-		if padding < 1 {
-			padding = 1
-		}
-		content += strings.Repeat(" ", padding) + item.shortcut
-	}
-	runes := []rune(content)
-	if len(runes) > inner {
-		runes = runes[len(runes)-inner:]
-	}
-	content = string(runes)
-	if pad := inner - len([]rune(content)); pad > 0 {
-		content += strings.Repeat(" ", pad)
-	}
+	line := formatMenuItemLine(item, inner)
 	if theme == nil {
 		if item.current && hover {
-			content = "\x1b[1;7m" + content + "\x1b[27;22m"
-			return writeMenuLine(stdout, row, col, "│"+content+"│", "", nil)
+			return writeMenuLine(stdout, row, col, "\x1b[1;7m"+line+"\x1b[27;22m", "", nil)
 		}
 		if hover {
-			content = "\x1b[7m" + content + "\x1b[27m"
+			return writeMenuLine(stdout, row, col, "\x1b[7m"+line+"\x1b[27m", "", nil)
 		} else if item.current {
-			content = "\x1b[1m" + content + "\x1b[22m"
+			return writeMenuLine(stdout, row, col, "\x1b[1m"+line+"\x1b[22m", "", nil)
 		}
-		return writeMenuLine(stdout, row, col, "│"+content+"│", "", nil)
+		return writeMenuLine(stdout, row, col, line, "", nil)
 	}
 	prefix := menuItemPrefix(theme, item.current, hover)
-	return writeMenuLine(stdout, row, col, "│"+content+"│", prefix, theme)
+	return writeMenuLine(stdout, row, col, line, prefix, theme)
 }
 
 func menuItemPrefix(theme *uiTheme, current, hover bool) string {
@@ -269,6 +253,29 @@ func menuItemPrefix(theme *uiTheme, current, hover bool) string {
 	}
 }
 
+func menuBorderStyle(theme *uiTheme) string {
+	if theme == nil {
+		return ""
+	}
+	return theme.subtlePrefix()
+}
+
+func menuItemStyle(theme *uiTheme, current, hover bool) string {
+	if theme != nil {
+		return menuItemPrefix(theme, current, hover)
+	}
+	switch {
+	case hover && current:
+		return "\x1b[1;7m"
+	case hover:
+		return "\x1b[7m"
+	case current:
+		return "\x1b[1m"
+	default:
+		return ""
+	}
+}
+
 func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill rune) string {
 	runes := []rune(title)
 	if len(runes) > inner {
@@ -281,6 +288,26 @@ func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill run
 		text = strings.Repeat(string(fill), leftPad) + text + strings.Repeat(string(fill), rightPad)
 	}
 	return string(leftBorder) + text + string(rightBorder)
+}
+
+func formatMenuItemLine(item menuItem, inner int) string {
+	content := item.label
+	if item.shortcut != "" {
+		padding := inner - len([]rune(item.label)) - len([]rune(item.shortcut)) - 1
+		if padding < 1 {
+			padding = 1
+		}
+		content += strings.Repeat(" ", padding) + item.shortcut
+	}
+	runes := []rune(content)
+	if len(runes) > inner {
+		runes = runes[len(runes)-inner:]
+	}
+	content = string(runes)
+	if pad := inner - len([]rune(content)); pad > 0 {
+		content += strings.Repeat(" ", pad)
+	}
+	return "│" + content + "│"
 }
 
 func (m *menuState) itemAt(x, y int) int {

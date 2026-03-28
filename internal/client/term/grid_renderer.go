@@ -335,7 +335,7 @@ func (r *gridRenderer) renderMenuGrid(menu *menuState, theme *uiTheme) {
 	inner := menu.width - 2
 	row := 0
 	builder.Start(r.menu, row)
-	renderGridText(builder, 0, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), frameMenuBorderStyle(theme), 0, r.palette)
+	renderGridText(builder, 0, formatMenuBorder(menu.title, inner, '╭', '╮', '─'), menuBorderStyle(theme), 0, r.palette)
 	builder.Flush()
 	row++
 	for i, item := range menu.items {
@@ -343,19 +343,19 @@ func (r *gridRenderer) renderMenuGrid(menu *menuState, theme *uiTheme) {
 			break
 		}
 		builder.Start(r.menu, row)
-		renderGridText(builder, 0, formatMenuItemLine(item, inner), frameMenuItemStyle(theme, item.current, menu.hover == i), 0, r.palette)
+		renderGridText(builder, 0, formatMenuItemLine(item, inner), menuItemStyle(theme, item.current, menu.hover == i), 0, r.palette)
 		builder.Flush()
 		row++
 		if item.sepAfter && i < len(menu.items)-1 && row < r.menu.rows {
 			builder.Start(r.menu, row)
-			renderGridText(builder, 0, formatMenuBorder("", inner, '├', '┤', '─'), frameMenuBorderStyle(theme), 0, r.palette)
+			renderGridText(builder, 0, formatMenuBorder("", inner, '├', '┤', '─'), menuBorderStyle(theme), 0, r.palette)
 			builder.Flush()
 			row++
 		}
 	}
 	if row < r.menu.rows {
 		builder.Start(r.menu, row)
-		renderGridText(builder, 0, formatMenuBorder("", inner, '╰', '╯', '─'), frameMenuBorderStyle(theme), 0, r.palette)
+		renderGridText(builder, 0, formatMenuBorder("", inner, '╰', '╯', '─'), menuBorderStyle(theme), 0, r.palette)
 		builder.Flush()
 	}
 	r.menu.valid = true

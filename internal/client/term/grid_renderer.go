@@ -97,7 +97,8 @@ func (r *gridRenderer) Draw(stdout io.Writer, class redrawClass, state *bufferSt
 	r.renderMenuGrid(menu, theme)
 
 	rootBuilder := newGridLineBuilder(r.root.cols)
-	composeRootGrid(r.root, rootBuilder, r.buffer, r.hudHistory, r.hudInput, r.menu)
+	composeRows := r.rootComposeRows(forceFull)
+	composeRootGrid(r.root, rootBuilder, composeRows, r.buffer, r.hudHistory, r.hudInput, r.menu)
 
 	counted := &countingWriter{w: stdout}
 	backend := newTTYRenderBackend(counted, r.palette)
@@ -360,6 +361,24 @@ func (r *gridRenderer) emitDirtyRows(backend renderBackend, grid *ScreenGrid) {
 		cells := grid.rowCells(row)
 		backend.WriteCells(row, span.start, cells[span.start:span.end])
 	}
+}
+
+func (r *gridRenderer) rootComposeRows(forceFull bool) []bool {
+	if r == nil || r.root == nil {
+		return nil
+	}
+	rows := make([]bool, r.root.rows)
+	if forceFull {
+		for row := range rows {
+			rows[row] = true
+		}
+		return rows
+	}
+	projectGridDirtyRows(r.root, rows)
+	for _, layer := range []*ScreenGrid{r.buffer, r.hudHistory, r.hudInput, r.menu} {
+		projectLayerDirtyRows(r.root, layer, rows)
+	}
+	return rows
 }
 
 func (r *gridRenderer) clearGridDirty() {

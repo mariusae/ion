@@ -69,6 +69,13 @@ func (g *ScreenGrid) clearDirty() {
 	}
 }
 
+func (g *ScreenGrid) clearRowDirty(row int) {
+	if g == nil || row < 0 || row >= len(g.dirty) {
+		return
+	}
+	g.dirty[row] = gridDirtySpan{start: g.cols}
+}
+
 func (g *ScreenGrid) markDirty(row, start, end int) {
 	if g == nil || row < 0 || row >= g.rows || g.cols == 0 {
 		return

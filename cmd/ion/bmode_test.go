@@ -189,6 +189,36 @@ func TestRunNewPaneModeFallsBackToAttachOutsideTmux(t *testing.T) {
 	}
 }
 
+func TestBootstrapAttachTargetsInitializesEmptySession(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeBModeClient{}
+	if err := bootstrapAttachTargets(client, nil); err != nil {
+		t.Fatalf("bootstrapAttachTargets() error = %v", err)
+	}
+	if got, want := client.bootstrapCalls, [][]string{nil}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestBootstrapAttachTargetsLoadsMissingFilesOnly(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeBModeClient{
+		menuFiles: []wire.MenuFile{{ID: 1, Name: "/tmp/already.txt", Current: true}},
+	}
+	targets := []clienttarget.Target{
+		{Path: "/tmp/already.txt"},
+		{Path: "/tmp/new.txt"},
+	}
+	if err := bootstrapAttachTargets(client, targets); err != nil {
+		t.Fatalf("bootstrapAttachTargets() error = %v", err)
+	}
+	if got, want := client.bootstrapCalls, [][]string{{"/tmp/new.txt"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 	t.Parallel()
 

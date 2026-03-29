@@ -68,10 +68,10 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 	defer client.Close()
 
 	service := wrapInteractiveClient(rt, paths, client)
+	if err := bootstrapAttachTargets(&wireBModeClient{client: client}, targets); err != nil {
+		return err
+	}
 	if len(targets) > 0 {
-		if err := bootstrapMissingTargets(&wireBModeClient{client: client}, targets); err != nil {
-			return err
-		}
 		if _, err := clienttarget.Open(service, cfg.files); err != nil {
 			return err
 		}
@@ -82,6 +82,13 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 		Refresh:    refresh,
 		Interrupt:  interrupt,
 	})
+}
+
+func bootstrapAttachTargets(client bModeClient, targets []clienttarget.Target) error {
+	if len(targets) == 0 {
+		return client.Bootstrap(nil)
+	}
+	return bootstrapMissingTargets(client, targets)
 }
 
 func runCommandMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {

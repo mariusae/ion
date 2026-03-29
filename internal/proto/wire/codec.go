@@ -26,6 +26,7 @@ const (
 	KindSessionListResponse
 	KindTakeSessionRequest
 	KindReturnSessionRequest
+	KindCloseSessionRequest
 	KindOpenFilesRequest
 	KindOpenTargetRequest
 	KindOKResponse
@@ -185,6 +186,9 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindReturnSessionRequest:
 		var msg ReturnSessionRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindCloseSessionRequest:
+		var msg CloseSessionRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindOpenFilesRequest:
 		var msg OpenFilesRequest

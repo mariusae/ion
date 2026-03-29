@@ -347,6 +347,10 @@ func (c *paneTrackingClient) MenuFiles() ([]wire.MenuFile, error) {
 	return c.client.MenuFiles()
 }
 
+func (c *paneTrackingClient) MenuSnapshot() (wire.MenuSnapshot, error) {
+	return c.client.MenuSnapshot()
+}
+
 func (c *paneTrackingClient) NavigationStack() (wire.NavigationStack, error) {
 	return c.client.NavigationStack()
 }

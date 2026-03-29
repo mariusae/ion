@@ -26,6 +26,12 @@ import (
 
 const lspNamespace = "lsp"
 
+var lspMenuCommands = []wire.MenuCommand{
+	{Command: ":lsp:goto", Label: "symbol"},
+	{Command: ":lsp:show", Label: "hover"},
+	{Command: ":lsp:gototype", Label: "type"},
+}
+
 func providerDoc() wire.NamespaceProviderDoc {
 	return wire.NamespaceProviderDoc{
 		Namespace: lspNamespace,
@@ -289,10 +295,11 @@ func runForeground(cfg config, ready io.WriteCloser) (err error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go manager.syncLoop(ctx, aux)
-
 	signalReady(ready, nil)
 	readySignaled = true
+	go manager.syncLoop(ctx, aux)
+	go installSharedMenuItems(cfg.socketPath, lspMenuCommands)
+	defer removeSharedMenuItems(cfg.socketPath, lspMenuCommands)
 
 	for {
 		inv, err := client.WaitInvocation()
@@ -327,6 +334,48 @@ func publishRecentStatus(client *clientsession.Client, message string) {
 		_ = client.SetSessionStatus(session.ID, message)
 		return
 	}
+}
+
+func installSharedMenuItems(socketPath string, items []wire.MenuCommand) {
+	_ = withTemporaryMenuSession(socketPath, func(session *clientsession.Session) error {
+		for _, item := range items {
+			line := ":ion:menuadd " + strings.TrimSpace(item.Command)
+			if label := strings.TrimSpace(item.Label); label != "" {
+				line += " " + strconv.Quote(label)
+			}
+			if _, err := session.Execute(line + "\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func removeSharedMenuItems(socketPath string, items []wire.MenuCommand) {
+	_ = withTemporaryMenuSession(socketPath, func(session *clientsession.Session) error {
+		for _, item := range items {
+			if _, err := session.Execute(":ion:menudel " + strings.TrimSpace(item.Command) + "\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func withTemporaryMenuSession(socketPath string, fn func(*clientsession.Session) error) error {
+	if socketPath == "" || fn == nil {
+		return nil
+	}
+	client, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	session, err := client.NewSession()
+	if err != nil {
+		return err
+	}
+	return fn(session)
 }
 
 type lspManager struct {

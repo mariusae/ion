@@ -31,6 +31,7 @@ type Server struct {
 	sessions       map[uint64]*managedSession
 	namespaces     map[string]registeredNamespace
 	invocations    map[uint64]*invocationState
+	menuCommands   []wire.MenuCommand
 }
 
 type registeredNamespace struct {
@@ -91,6 +92,7 @@ type sessionCommand struct {
 	name      string
 	sessionID uint64
 	arg       string
+	arg2      string
 }
 
 type diagnosticReporter interface {
@@ -214,6 +216,11 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			return writeError(conn, frame.RequestID, msg.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
+	case *wire.CloseSessionRequest:
+		if err := s.closeSession(msg.SessionID, state.clientID); err != nil {
+			return writeError(conn, frame.RequestID, msg.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.NamespaceRegisterRequest:
 		if err := s.registerNamespace(state.clientID, msg.Provider); err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
@@ -334,7 +341,10 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			if err != nil {
 				return false, err
 			}
-			return false, wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.MenuFilesMessage{Files: files})
+			return false, wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.MenuFilesMessage{
+				Files:    files,
+				Commands: s.menuSnapshotCommands(),
+			})
 		case *wire.NavigationStackRequest:
 			stack, err := sess.NavigationStack()
 			if err != nil {
@@ -741,6 +751,40 @@ func (s *Server) returnSession(sessionID, clientID uint64) error {
 	return nil
 }
 
+func (s *Server) closeSession(sessionID, clientID uint64) error {
+	s.mu.Lock()
+	client, ok := s.clients[clientID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("unknown client %d", clientID)
+	}
+	managed, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("unknown session %d", sessionID)
+	}
+	managed.mu.Lock()
+	defer managed.mu.Unlock()
+	defer s.mu.Unlock()
+	if managed.closed.Load() {
+		return fmt.Errorf("session %d closed", sessionID)
+	}
+	if managed.ownerClientID != clientID {
+		return fmt.Errorf("session %d not owned by client", sessionID)
+	}
+	if controller := managed.controllerClient.Load(); controller != clientID {
+		return fmt.Errorf("session %d busy", sessionID)
+	}
+	if managed.delegate != nil {
+		return fmt.Errorf("session %d busy", sessionID)
+	}
+	delete(s.sessions, sessionID)
+	client.ownedSession = removeOwnedSession(client.ownedSession, sessionID)
+	managed.closed.Store(true)
+	managed.cond.Broadcast()
+	return nil
+}
+
 func (s *Server) lookupSession(sessionID uint64) (*managedSession, error) {
 	if sessionID == 0 {
 		return nil, fmt.Errorf("missing session id")
@@ -845,6 +889,20 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 			return writeError(conn, frame.RequestID, frame.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "menuadd":
+		if err := s.addMenuCommand(wire.MenuCommand{Command: cmd.arg, Label: cmd.arg2}); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		if s.changeNotify != nil {
+			s.changeNotify()
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "menudel":
+		s.removeMenuCommand(cmd.arg)
+		if s.changeNotify != nil {
+			s.changeNotify()
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
 	default:
 		return writeError(conn, frame.RequestID, frame.SessionID, fmt.Errorf("unknown session command %q", cmd.name))
 	}
@@ -880,6 +938,18 @@ func parseSessionCommand(script string) (sessionCommand, bool, error) {
 			return sessionCommand{}, true, fmt.Errorf("bad session id %q", text)
 		}
 		return sessionCommand{name: "take", sessionID: id}, true, nil
+	case strings.HasPrefix(trimmed, ":ion:menuadd "):
+		command, label, err := parseMenuAddArgs(strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menuadd ")))
+		if err != nil {
+			return sessionCommand{}, true, err
+		}
+		return sessionCommand{name: "menuadd", arg: command, arg2: label}, true, nil
+	case strings.HasPrefix(trimmed, ":ion:menudel "):
+		command := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menudel "))
+		if !validMenuCommand(command) {
+			return sessionCommand{}, true, fmt.Errorf("bad menu command %q", command)
+		}
+		return sessionCommand{name: "menudel", arg: command}, true, nil
 	default:
 		return sessionCommand{}, false, nil
 	}
@@ -900,6 +970,91 @@ func shouldMarkActive(msg any) bool {
 	default:
 		return false
 	}
+}
+
+func parseMenuAddArgs(text string) (command string, label string, err error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", "", fmt.Errorf("menu command expected")
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "", "", fmt.Errorf("menu command expected")
+	}
+	command = fields[0]
+	if !validMenuCommand(command) {
+		return "", "", fmt.Errorf("bad menu command %q", command)
+	}
+	rest := strings.TrimSpace(text[len(command):])
+	if rest == "" {
+		return command, command, nil
+	}
+	if unquoted, unquoteErr := strconv.Unquote(rest); unquoteErr == nil {
+		label = strings.TrimSpace(unquoted)
+	} else {
+		label = strings.TrimSpace(rest)
+	}
+	if label == "" {
+		label = command
+	}
+	return command, label, nil
+}
+
+func validMenuCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	return command != "" && strings.HasPrefix(command, ":")
+}
+
+func normalizeMenuCommand(item wire.MenuCommand) (wire.MenuCommand, error) {
+	command := strings.TrimSpace(item.Command)
+	if !validMenuCommand(command) {
+		return wire.MenuCommand{}, fmt.Errorf("bad menu command %q", item.Command)
+	}
+	label := strings.TrimSpace(item.Label)
+	if label == "" {
+		label = command
+	}
+	return wire.MenuCommand{
+		Command: command,
+		Label:   label,
+	}, nil
+}
+
+func (s *Server) addMenuCommand(item wire.MenuCommand) error {
+	normalized, err := normalizeMenuCommand(item)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.menuCommands {
+		if s.menuCommands[i].Command != normalized.Command {
+			continue
+		}
+		s.menuCommands[i] = normalized
+		return nil
+	}
+	s.menuCommands = append(s.menuCommands, normalized)
+	return nil
+}
+
+func (s *Server) removeMenuCommand(command string) {
+	command = strings.TrimSpace(command)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.menuCommands {
+		if s.menuCommands[i].Command != command {
+			continue
+		}
+		s.menuCommands = append(s.menuCommands[:i], s.menuCommands[i+1:]...)
+		return
+	}
+}
+
+func (s *Server) menuSnapshotCommands() []wire.MenuCommand {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]wire.MenuCommand(nil), s.menuCommands...)
 }
 
 func normalizeNamespace(namespace string) string {
@@ -1124,6 +1279,18 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "shut down the current ion server",
 			help:    "Stops the current ion server and disconnects all attached clients.",
 		}, true
+	case ":ion:menuadd":
+		return commandHelpDoc{
+			usage:   `:ion:menuadd <command> ["label"]`,
+			summary: "add a shared custom context-menu item",
+			help:    "Registers one server-global menu item for all attached clients. The first argument is the command to run when the item is selected. The optional label defaults to the command text.",
+		}, true
+	case ":ion:menudel":
+		return commandHelpDoc{
+			usage:   ":ion:menudel <command>",
+			summary: "remove a shared custom context-menu item",
+			help:    "Removes one previously registered server-global menu item identified by its command text.",
+		}, true
 	default:
 		return commandHelpDoc{}, false
 	}
@@ -1140,6 +1307,18 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Name:    "Q",
 					Summary: "shut down the current ion server",
 					Help:    "Stops the current ion server and disconnects all attached clients.",
+				},
+				{
+					Name:    "menuadd",
+					Args:    `<command> ["label"]`,
+					Summary: "add a shared custom context-menu item",
+					Help:    "Registers one server-global menu item for all attached clients. The optional label defaults to the command text.",
+				},
+				{
+					Name:    "menudel",
+					Args:    "<command>",
+					Summary: "remove a shared custom context-menu item",
+					Help:    "Removes one previously registered server-global menu item identified by its command text.",
 				},
 			},
 		},
@@ -1302,6 +1481,19 @@ func (m *managedSession) close() {
 	m.closed.Store(true)
 	m.cond.Broadcast()
 	m.mu.Unlock()
+}
+
+func removeOwnedSession(ids []uint64, sessionID uint64) []uint64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := ids[:0]
+	for _, id := range ids {
+		if id != sessionID {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (i *invocationState) finish(errText, stdout, stderr string) {

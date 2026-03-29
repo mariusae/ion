@@ -192,6 +192,9 @@ func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 	if err := caller.Bootstrap([]string{mainGo, attachGo}); err != nil {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
+	if err := waitForMenuCommands(caller, len(lspMenuCommands), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := caller.SetAddress("/runServe/"); err != nil {
 		t.Fatalf("SetAddress(/runServe/) error = %v", err)
@@ -260,5 +263,22 @@ func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runForeground() did not exit")
+	}
+}
+
+func waitForMenuCommands(client *clientsession.Client, want int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		snapshot, err := client.MenuSnapshot()
+		if err != nil {
+			return err
+		}
+		if len(snapshot.Commands) >= want {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for lsp menu items")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

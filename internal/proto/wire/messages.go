@@ -288,6 +288,34 @@ func (m *ReturnSessionRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// CloseSessionRequest destroys one owner-backed session.
+type CloseSessionRequest struct {
+	SessionID uint64
+}
+
+func (m *CloseSessionRequest) Kind() Kind { return KindCloseSessionRequest }
+
+func (m *CloseSessionRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.SessionID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *CloseSessionRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("close-session request has trailing data")
+	}
+	m.SessionID = id
+	return nil
+}
+
 // NamespaceCommandDoc documents one command exposed by a namespace provider.
 type NamespaceCommandDoc struct {
 	Name    string
@@ -956,7 +984,8 @@ func (m *MenuFilesRequest) MarshalBinary() ([]byte, error) { return nil, nil }
 
 // MenuFilesMessage transports one full file-menu snapshot or update event.
 type MenuFilesMessage struct {
-	Files []MenuFile
+	Files    []MenuFile
+	Commands []MenuCommand
 }
 
 func (m *MenuFilesMessage) Kind() Kind { return KindMenuFilesResponse }
@@ -980,6 +1009,17 @@ func (m *MenuFilesMessage) MarshalBinary() ([]byte, error) {
 			return nil, err
 		}
 		if err := writeBool(&b, f.Current); err != nil {
+			return nil, err
+		}
+	}
+	if err := writeUint32(&b, uint32(len(m.Commands))); err != nil {
+		return nil, err
+	}
+	for _, cmd := range m.Commands {
+		if err := writeString(&b, cmd.Command); err != nil {
+			return nil, err
+		}
+		if err := writeString(&b, cmd.Label); err != nil {
 			return nil, err
 		}
 	}
@@ -1022,10 +1062,30 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 			Current: current,
 		})
 	}
+	cmdCount, err := readUint32(r)
+	if err != nil {
+		return err
+	}
+	commands := make([]MenuCommand, 0, cmdCount)
+	for i := uint32(0); i < cmdCount; i++ {
+		command, err := readString(r)
+		if err != nil {
+			return err
+		}
+		label, err := readString(r)
+		if err != nil {
+			return err
+		}
+		commands = append(commands, MenuCommand{
+			Command: command,
+			Label:   label,
+		})
+	}
 	if r.Len() != 0 {
 		return fmt.Errorf("menu files has trailing data")
 	}
 	m.Files = files
+	m.Commands = commands
 	return nil
 }
 

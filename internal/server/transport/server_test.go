@@ -797,6 +797,176 @@ func TestServerReportsUnknownNamespacedCommandToken(t *testing.T) {
 	}
 }
 
+func TestServerMenuAddAndDeleteCommandsAffectSharedMenuSnapshot(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	caller, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+	if err := caller.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	if _, err := caller.Execute(":ion:menuadd :lsp:goto \"symbol\"\n"); err != nil {
+		t.Fatalf("Execute(:ion:menuadd) error = %v", err)
+	}
+	snapshot, err := caller.MenuSnapshot()
+	if err != nil {
+		t.Fatalf("MenuSnapshot() error = %v", err)
+	}
+	if got, want := len(snapshot.Commands), 1; got != want {
+		t.Fatalf("len(snapshot.Commands) = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Commands[0].Command, ":lsp:goto"; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+	if got, want := snapshot.Commands[0].Label, "symbol"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+
+	if _, err := caller.Execute(":ion:menuadd :lsp:show\n"); err != nil {
+		t.Fatalf("Execute(:ion:menuadd default label) error = %v", err)
+	}
+	snapshot, err = caller.MenuSnapshot()
+	if err != nil {
+		t.Fatalf("MenuSnapshot() second error = %v", err)
+	}
+	if got, want := len(snapshot.Commands), 2; got != want {
+		t.Fatalf("len(snapshot.Commands) after second add = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Commands[1].Label, ":lsp:show"; got != want {
+		t.Fatalf("default label = %q, want %q", got, want)
+	}
+
+	if _, err := caller.Execute(":ion:menudel :lsp:goto\n"); err != nil {
+		t.Fatalf("Execute(:ion:menudel) error = %v", err)
+	}
+	snapshot, err = caller.MenuSnapshot()
+	if err != nil {
+		t.Fatalf("MenuSnapshot() after delete error = %v", err)
+	}
+	if got, want := len(snapshot.Commands), 1; got != want {
+		t.Fatalf("len(snapshot.Commands) after delete = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Commands[0].Command, ":lsp:show"; got != want {
+		t.Fatalf("remaining command = %q, want %q", got, want)
+	}
+}
+
+func TestServerCloseSessionRemovesOwnedSession(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	client, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix() error = %v", err)
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	summaries, err := client.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() before close error = %v", err)
+	}
+	if got, want := len(summaries), 1; got != want {
+		t.Fatalf("len(ListSessions before close) = %d, want %d", got, want)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("session.Close() error = %v", err)
+	}
+	summaries, err = client.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() after close error = %v", err)
+	}
+	if got, want := len(summaries), 0; got != want {
+		t.Fatalf("len(ListSessions after close) = %d, want %d", got, want)
+	}
+
+	if _, err := client.CurrentView(); err != nil {
+		t.Fatalf("CurrentView() after closing default session error = %v", err)
+	}
+	summaries, err = client.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() after reopening default session error = %v", err)
+	}
+	if got, want := len(summaries), 1; got != want {
+		t.Fatalf("len(ListSessions after reopening default session) = %d, want %d", got, want)
+	}
+}
+
 func errorText(err error) string {
 	if err == nil {
 		return ""

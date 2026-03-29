@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
 
 type fakeTermService struct {
 	view         wire.BufferView
 	menuFiles    []wire.MenuFile
+	menuCommands []wire.MenuCommand
 	navStack     wire.NavigationStack
 	focusID      int
 	setDotCalls  int
@@ -52,6 +54,13 @@ func (f *fakeTermService) OpenTarget(path, address string) (wire.BufferView, err
 
 func (f *fakeTermService) MenuFiles() ([]wire.MenuFile, error) {
 	return append([]wire.MenuFile(nil), f.menuFiles...), nil
+}
+
+func (f *fakeTermService) MenuSnapshot() (wire.MenuSnapshot, error) {
+	return wire.MenuSnapshot{
+		Files:    append([]wire.MenuFile(nil), f.menuFiles...),
+		Commands: append([]wire.MenuCommand(nil), f.menuCommands...),
+	}, nil
 }
 
 func (f *fakeTermService) NavigationStack() (wire.NavigationStack, error) {
@@ -1112,7 +1121,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 		DotStart: 1,
 		DotEnd:   1,
 	})
-	menu := buildContextMenu(state, nil, wire.NavigationStack{}, 5, 8, menuStickyState{})
+	menu := buildContextMenu(state, nil, nil, wire.NavigationStack{}, 5, 8, menuStickyState{})
 
 	var out bytes.Buffer
 	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, menu, theme, true); err != nil {
@@ -2063,5 +2072,31 @@ func TestExtractRawCommandAcceptsServerQuitAliases(t *testing.T) {
 				t.Fatalf("extractRawCommand() consumed = %d, want %d", consumed, len([]rune(tc.pending)))
 			}
 		})
+	}
+}
+
+func TestPrepareDirectScriptAcceptsNamespacedRawCommand(t *testing.T) {
+	t.Parallel()
+
+	parser := cmdlang.NewParserRunes(nil)
+	got, err := prepareDirectScript(parser, ":lsp:goto\n")
+	if err != nil {
+		t.Fatalf("prepareDirectScript() error = %v", err)
+	}
+	if want := ":lsp:goto\n"; got != want {
+		t.Fatalf("prepareDirectScript() = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareDirectScriptNormalizesServerQuitAlias(t *testing.T) {
+	t.Parallel()
+
+	parser := cmdlang.NewParserRunes(nil)
+	got, err := prepareDirectScript(parser, "Q\n")
+	if err != nil {
+		t.Fatalf("prepareDirectScript() error = %v", err)
+	}
+	if want := ":ion:Q\n"; got != want {
+		t.Fatalf("prepareDirectScript() = %q, want %q", got, want)
 	}
 }

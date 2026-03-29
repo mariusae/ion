@@ -23,6 +23,18 @@ type MenuFile struct {
 	Current bool
 }
 
+// MenuCommand is one shared custom menu action exposed by the server.
+type MenuCommand struct {
+	Command string
+	Label   string
+}
+
+// MenuSnapshot is the full context-menu model shared with terminal clients.
+type MenuSnapshot struct {
+	Files    []MenuFile
+	Commands []MenuCommand
+}
+
 // NavigationEntry is one formatted navigation-stack location label.
 type NavigationEntry struct {
 	Label string

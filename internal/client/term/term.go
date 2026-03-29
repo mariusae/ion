@@ -81,6 +81,10 @@ type diagnosticReporter interface {
 	Diagnostic() string
 }
 
+type menuSnapshotProvider interface {
+	MenuSnapshot() (wire.MenuSnapshot, error)
+}
+
 type Options struct {
 	AutoIndent bool
 	Refresh    <-chan struct{}
@@ -597,13 +601,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	executeDirect := func(line string, captureOutput bool) (bool, []string, error) {
-		parser.ResetRunes([]rune(line))
-		cmd, err := parser.ParseWithFinal(true)
+		script, err := prepareDirectScript(parser, line)
 		if err != nil {
-			err = clientdiag.RewriteParseError(line, err)
 			return false, nil, err
 		}
-		if cmd == nil {
+		if script == "" {
 			return false, nil, nil
 		}
 		var lines []string
@@ -612,7 +614,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				lines = append(lines, line)
 			})
 		}
-		ok, err := svc.Execute(line)
+		ok, err := svc.Execute(script)
 		if capture != nil && captureOutput {
 			capture.Stop()
 		}
@@ -722,7 +724,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	showMenu := func(clickX, clickY int) error {
 		refreshTerminalSize()
-		files, err := svc.MenuFiles()
+		snapshot, err := loadMenuSnapshot(svc)
 		if err != nil {
 			return err
 		}
@@ -730,7 +732,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		menu = buildContextMenu(buffer, files, nav, clickX, clickY, menuSticky)
+		menu = buildContextMenu(buffer, snapshot.Files, snapshot.Commands, nav, clickX, clickY, menuSticky)
 		clearMenuLostRelease()
 		menuSawHover = menu.hover >= 0
 		return menuRedraw(redrawMenuOpen)
@@ -813,6 +815,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, err
 			}
 			buffer.status = ""
+			return false, nil
+		case menuCommand:
+			done, lines, err := executeDirect(strings.TrimSpace(item.command)+"\n", true)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, nil
+			}
+			if done {
+				return true, nil
+			}
+			if err := refreshBuffer(); err != nil {
+				return false, err
+			}
+			applyStatusResult("", lines)
 			return false, nil
 		case menuPlumb:
 			token := plumbToken(buffer)
@@ -1775,6 +1791,21 @@ func normalizeRawCommandScript(script string) string {
 		return ":ion:Q\n"
 	}
 	return script
+}
+
+func prepareDirectScript(parser *cmdlang.Parser, line string) (string, error) {
+	if script, _, ok := extractRawCommand([]rune(line), true); ok {
+		return script, nil
+	}
+	parser.ResetRunes([]rune(line))
+	cmd, err := parser.ParseWithFinal(true)
+	if err != nil {
+		return "", clientdiag.RewriteParseError(line, err)
+	}
+	if cmd == nil {
+		return "", nil
+	}
+	return line, nil
 }
 
 func pumpRunningCommandInput(reader *bufio.Reader, stdin *os.File, interrupt func() error) (bool, error) {
@@ -3077,6 +3108,20 @@ func refreshCurrentBufferDirty(svc wire.TermService, state *bufferState) {
 	}
 	state.dirty = false
 	state.diskChanged = false
+}
+
+func loadMenuSnapshot(svc wire.TermService) (wire.MenuSnapshot, error) {
+	if svc == nil {
+		return wire.MenuSnapshot{}, nil
+	}
+	if provider, ok := svc.(menuSnapshotProvider); ok {
+		return provider.MenuSnapshot()
+	}
+	files, err := svc.MenuFiles()
+	if err != nil {
+		return wire.MenuSnapshot{}, err
+	}
+	return wire.MenuSnapshot{Files: files}, nil
 }
 
 func bufferWindowTitleSequence(name string, dirty, changed bool) string {

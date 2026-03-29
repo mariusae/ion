@@ -320,6 +320,36 @@ func (c *Client) Return(id uint64) error {
 	return nil
 }
 
+// CloseSession destroys one owner-backed session.
+func (c *Client) CloseSession(id uint64) error {
+	if id == 0 {
+		return fmt.Errorf("missing session id")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureConnectedLocked(); err != nil {
+		return err
+	}
+	if _, msg, err := c.roundTripLocked(0, &wire.CloseSessionRequest{SessionID: id}); err != nil {
+		return err
+	} else if _, ok := msg.(*wire.OKResponse); !ok {
+		return fmt.Errorf("close-session response type %T, want *wire.OKResponse", msg)
+	}
+	if c.sessionID == id {
+		c.sessionID = 0
+	}
+	if len(c.takeStack) != 0 {
+		stack := c.takeStack[:0]
+		for _, taken := range c.takeStack {
+			if taken != id {
+				stack = append(stack, taken)
+			}
+		}
+		c.takeStack = stack
+	}
+	return nil
+}
+
 // Bootstrap loads the initial file set.
 func (c *Client) Bootstrap(files []string) error {
 	_, msg, err := c.roundTripDefault(&wire.BootstrapRequest{Files: files})
@@ -424,15 +454,27 @@ func (c *Client) OpenTarget(path, address string) (wire.BufferView, error) {
 
 // MenuFiles returns the current file-menu snapshot.
 func (c *Client) MenuFiles() ([]wire.MenuFile, error) {
-	_, msg, err := c.roundTripDefault(&wire.MenuFilesRequest{})
+	snapshot, err := c.MenuSnapshot()
 	if err != nil {
 		return nil, err
 	}
+	return snapshot.Files, nil
+}
+
+// MenuSnapshot returns the current file-menu snapshot plus shared custom commands.
+func (c *Client) MenuSnapshot() (wire.MenuSnapshot, error) {
+	_, msg, err := c.roundTripDefault(&wire.MenuFilesRequest{})
+	if err != nil {
+		return wire.MenuSnapshot{}, err
+	}
 	resp, ok := msg.(*wire.MenuFilesMessage)
 	if !ok {
-		return nil, fmt.Errorf("menu-files response type %T, want *wire.MenuFilesMessage", msg)
+		return wire.MenuSnapshot{}, fmt.Errorf("menu-files response type %T, want *wire.MenuFilesMessage", msg)
 	}
-	return append([]wire.MenuFile(nil), resp.Files...), nil
+	return wire.MenuSnapshot{
+		Files:    append([]wire.MenuFile(nil), resp.Files...),
+		Commands: append([]wire.MenuCommand(nil), resp.Commands...),
+	}, nil
 }
 
 // NavigationStack returns the current per-client navigation history.
@@ -556,6 +598,14 @@ func (s *Session) Cancel() error {
 		return fmt.Errorf("interrupt response type %T, want *wire.OKResponse", msg)
 	}
 	return nil
+}
+
+// Close destroys the explicit owner-backed session handle.
+func (s *Session) Close() error {
+	if s == nil || s.client == nil || s.id == 0 {
+		return fmt.Errorf("nil session")
+	}
+	return s.client.CloseSession(s.id)
 }
 
 // CurrentView returns the buffer snapshot for the explicit session handle.

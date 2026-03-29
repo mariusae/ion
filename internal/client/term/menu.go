@@ -14,6 +14,7 @@ type menuItemKind int
 const (
 	menuWrite menuItemKind = iota
 	menuFile
+	menuCommand
 	menuCut
 	menuSnarf
 	menuPaste
@@ -29,6 +30,7 @@ type menuItem struct {
 	shortcut string
 	kind     menuItemKind
 	fileID   int
+	command  string
 	sepAfter bool
 	current  bool
 }
@@ -63,7 +65,7 @@ func (m *menuState) dismiss() {
 	m.hover = -1
 }
 
-func buildContextMenu(buffer *bufferState, files []wire.MenuFile, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
+func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wire.MenuCommand, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
 	menu := newMenuState()
 	if buffer == nil {
 		return menu
@@ -85,6 +87,24 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, nav wire.Navig
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
 		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp, sepAfter: true},
 	)
+	for i, cmd := range commands {
+		label := strings.TrimSpace(cmd.Label)
+		if label == "" {
+			label = strings.TrimSpace(cmd.Command)
+		}
+		if label == "" {
+			continue
+		}
+		item := menuItem{
+			label:   " " + label,
+			kind:    menuCommand,
+			command: strings.TrimSpace(cmd.Command),
+		}
+		if i == len(commands)-1 {
+			item.sepAfter = true
+		}
+		menu.items = append(menu.items, item)
+	}
 	if prev, ok := previousNavigationMenuItem(nav); ok {
 		menu.items = append(menu.items, prev)
 	}

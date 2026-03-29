@@ -127,6 +127,41 @@ func TestInterruptRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCloseSessionRequestRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := &CloseSessionRequest{SessionID: 41}
+	data, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+	var got CloseSessionRequest
+	if err := got.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, *want) {
+		t.Fatalf("round trip = %#v, want %#v", got, *want)
+	}
+	frameData, err := EncodeFrame(3, 0, want)
+	if err != nil {
+		t.Fatalf("EncodeFrame() error = %v", err)
+	}
+	frame, err := ReadFrame(bytes.NewReader(frameData))
+	if err != nil {
+		t.Fatalf("ReadFrame() error = %v", err)
+	}
+	if got, want := frame.Kind, KindCloseSessionRequest; got != want {
+		t.Fatalf("frame.Kind = %d, want %d", got, want)
+	}
+	msg, err := DecodeMessage(frame)
+	if err != nil {
+		t.Fatalf("DecodeMessage() error = %v", err)
+	}
+	if !reflect.DeepEqual(msg, want) {
+		t.Fatalf("DecodeMessage() = %#v, want %#v", msg, want)
+	}
+}
+
 func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -155,6 +190,10 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 		Files: []MenuFile{
 			{ID: 0, Name: "one.txt", Dirty: false, Current: true},
 			{ID: 1, Name: "", Dirty: true, Current: false},
+		},
+		Commands: []MenuCommand{
+			{Command: ":lsp:goto", Label: "symbol"},
+			{Command: ":lsp:show", Label: ":lsp:show"},
 		},
 	}
 	menuData, err := menu.MarshalBinary()

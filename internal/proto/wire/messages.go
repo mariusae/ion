@@ -360,6 +360,61 @@ func (m *NamespaceRegisterRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// NamespaceDocsRequest asks the server for built-in and registered namespace docs.
+type NamespaceDocsRequest struct{}
+
+func (m *NamespaceDocsRequest) Kind() Kind { return KindNamespaceDocsRequest }
+
+func (m *NamespaceDocsRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *NamespaceDocsRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("namespace-docs request has trailing data")
+	}
+	return nil
+}
+
+// NamespaceDocsResponse returns the current namespace documentation catalog.
+type NamespaceDocsResponse struct {
+	Providers []NamespaceProviderDoc
+}
+
+func (m *NamespaceDocsResponse) Kind() Kind { return KindNamespaceDocsResponse }
+
+func (m *NamespaceDocsResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint32(&b, uint32(len(m.Providers))); err != nil {
+		return nil, err
+	}
+	for _, provider := range m.Providers {
+		if err := writeNamespaceProviderDoc(&b, provider); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
+}
+
+func (m *NamespaceDocsResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	count, err := readUint32(r)
+	if err != nil {
+		return err
+	}
+	providers := make([]NamespaceProviderDoc, 0, count)
+	for i := uint32(0); i < count; i++ {
+		provider, err := readNamespaceProviderDoc(r)
+		if err != nil {
+			return err
+		}
+		providers = append(providers, provider)
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("namespace-docs response has trailing data")
+	}
+	m.Providers = providers
+	return nil
+}
+
 // InvocationWaitRequest blocks until one registered namespace invocation is ready.
 type InvocationWaitRequest struct{}
 

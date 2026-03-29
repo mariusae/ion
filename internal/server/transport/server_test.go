@@ -702,6 +702,28 @@ func TestServerNamespaceHelpCommands(t *testing.T) {
 	}
 	defer caller.Close()
 
+	docs, err := caller.NamespaceDocs()
+	if err != nil {
+		t.Fatalf("NamespaceDocs() error = %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("NamespaceDocs() returned no providers")
+	}
+	foundDemo := false
+	for _, doc := range docs {
+		if doc.Namespace != "demolsp" {
+			continue
+		}
+		foundDemo = true
+		if got, want := doc.Summary, "demo LSP commands"; got != want {
+			t.Fatalf("demolsp summary = %q, want %q", got, want)
+		}
+		break
+	}
+	if !foundDemo {
+		t.Fatalf("NamespaceDocs() missing demolsp provider: %#v", docs)
+	}
+
 	if _, err := caller.Execute(":ns:list\n"); err != nil {
 		t.Fatalf("Execute(:ns:list) error = %v", err)
 	}

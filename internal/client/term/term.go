@@ -551,6 +551,52 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return overlayHistoryRedraw(redrawOverlayHistory)
 	}
 
+	completeOverlayCommand := func() (bool, error) {
+		provider, ok := svc.(namespaceDocProvider)
+		if !ok {
+			return false, nil
+		}
+		beforeInput := string(overlay.input)
+		beforeCursor := overlay.cursor
+		handled, lines, err := completeOverlayCommandInput(provider, overlay)
+		if err != nil || !handled {
+			return handled, err
+		}
+		for _, line := range lines {
+			overlay.addOutput(line)
+		}
+		if len(lines) > 0 {
+			return true, redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
+		}
+		if beforeInput != string(overlay.input) || beforeCursor != overlay.cursor {
+			return true, overlayInputRedraw(redrawOverlayInput)
+		}
+		return true, nil
+	}
+
+	completeOverlayFiles := func() (bool, error) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return false, err
+		}
+		beforeInput := string(overlay.input)
+		beforeCursor := overlay.cursor
+		handled, lines := completeOverlayFileInput(overlay, cwd)
+		if !handled {
+			return false, nil
+		}
+		for _, line := range lines {
+			overlay.addOutput(line)
+		}
+		if len(lines) > 0 {
+			return true, redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
+		}
+		if beforeInput != string(overlay.input) || beforeCursor != overlay.cursor {
+			return true, overlayInputRedraw(redrawOverlayInput)
+		}
+		return true, nil
+	}
+
 	clearTransientStatus := func() {
 		if buffer != nil {
 			buffer.status = ""
@@ -1449,7 +1495,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				case 0x02:
 					overlay.moveLeft()
 				case 0x06:
-					overlay.moveRight()
+					handled, err := completeOverlayFiles()
+					if err != nil {
+						return err
+					}
+					if handled {
+						continue
+					}
 				case 0x01:
 					overlay.moveHome()
 				case 0x05:
@@ -1469,8 +1521,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				case 0x16:
 					overlay.scrollNewer(5)
 					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
+				case '\t':
+					handled, err := completeOverlayCommand()
+					if err != nil {
+						return err
+					}
+					if handled {
+						continue
+					}
+					overlay.insert([]rune{r})
 				default:
-					if r >= 32 || r == '\t' {
+					if r >= 32 {
 						overlay.insert([]rune{r})
 					} else {
 						overlay.close()

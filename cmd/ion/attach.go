@@ -351,6 +351,10 @@ func (c *paneTrackingClient) MenuSnapshot() (wire.MenuSnapshot, error) {
 	return c.client.MenuSnapshot()
 }
 
+func (c *paneTrackingClient) NamespaceDocs() ([]wire.NamespaceProviderDoc, error) {
+	return c.client.NamespaceDocs()
+}
+
 func (c *paneTrackingClient) NavigationStack() (wire.NavigationStack, error) {
 	return c.client.NavigationStack()
 }

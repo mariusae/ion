@@ -15,14 +15,15 @@ import (
 )
 
 type fakeTermService struct {
-	view         wire.BufferView
-	menuFiles    []wire.MenuFile
-	menuCommands []wire.MenuCommand
-	navStack     wire.NavigationStack
-	focusID      int
-	setDotCalls  int
-	lastDotStart int
-	lastDotEnd   int
+	view          wire.BufferView
+	menuFiles     []wire.MenuFile
+	menuCommands  []wire.MenuCommand
+	namespaceDocs []wire.NamespaceProviderDoc
+	navStack      wire.NavigationStack
+	focusID       int
+	setDotCalls   int
+	lastDotStart  int
+	lastDotEnd    int
 }
 
 func (f *fakeTermService) Bootstrap(files []string) error {
@@ -61,6 +62,10 @@ func (f *fakeTermService) MenuSnapshot() (wire.MenuSnapshot, error) {
 		Files:    append([]wire.MenuFile(nil), f.menuFiles...),
 		Commands: append([]wire.MenuCommand(nil), f.menuCommands...),
 	}, nil
+}
+
+func (f *fakeTermService) NamespaceDocs() ([]wire.NamespaceProviderDoc, error) {
+	return append([]wire.NamespaceProviderDoc(nil), f.namespaceDocs...), nil
 }
 
 func (f *fakeTermService) NavigationStack() (wire.NavigationStack, error) {

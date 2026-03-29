@@ -261,6 +261,10 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.InvocationCancelWaitResponse{Canceled: canceled})
+	case *wire.NamespaceDocsRequest:
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.NamespaceDocsResponse{
+			Providers: s.listNamespaceDocs(),
+		})
 	case *wire.DisconnectRequest:
 		s.releaseClient(state.clientID, state.auxiliary)
 		state.clientID = 0

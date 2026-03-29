@@ -223,6 +223,24 @@ func (c *Client) RegisterNamespaceProvider(provider wire.NamespaceProviderDoc) e
 	return nil
 }
 
+// NamespaceDocs returns the current built-in and registered namespace docs.
+func (c *Client) NamespaceDocs() ([]wire.NamespaceProviderDoc, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureConnectedLocked(); err != nil {
+		return nil, err
+	}
+	_, msg, err := c.roundTripLocked(0, &wire.NamespaceDocsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := msg.(*wire.NamespaceDocsResponse)
+	if !ok {
+		return nil, fmt.Errorf("namespace-docs response type %T, want *wire.NamespaceDocsResponse", msg)
+	}
+	return append([]wire.NamespaceProviderDoc(nil), resp.Providers...), nil
+}
+
 // WaitInvocation blocks until one delegated namespace invocation is available.
 func (c *Client) WaitInvocation() (wire.Invocation, error) {
 	c.mu.Lock()

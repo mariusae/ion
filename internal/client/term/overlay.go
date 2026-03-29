@@ -120,6 +120,26 @@ func (o *overlayState) insert(text []rune) {
 	o.cursor += len(text)
 }
 
+func (o *overlayState) replaceRange(start, end int, text []rune) {
+	if o == nil {
+		return
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if end > len(o.input) {
+		end = len(o.input)
+	}
+	next := append([]rune{}, o.input[:start]...)
+	next = append(next, text...)
+	next = append(next, o.input[end:]...)
+	o.input = next
+	o.cursor = start + len(text)
+}
+
 func (o *overlayState) backspace() {
 	if o.cursor == 0 {
 		return

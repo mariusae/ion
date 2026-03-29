@@ -564,3 +564,45 @@ This is the smallest model I know that still supports:
 - out-of-process extensions
 - `ion -B` using the same execution path as everything else
 - LSP-style navigation that can return a different file than it started with
+
+## Discussion Log
+
+### 2026-03-29: Per-Session CWD and Command Execution
+
+We revisited whether current working directory and external command execution
+should be workspace-owned or session-owned.
+
+The desired model is:
+
+- cwd is session state, not workspace state
+- external commands such as `!sleep 10` run in the live session context
+- because file leases are session-scoped, external command execution should be
+  safe in that same session context
+- lease revocation should remain voluntary and coordinated; a client should not
+  be able to "take" a busy session out from under an active command, and any
+  such take should wait for command completion
+
+Current implementation status:
+
+- the server workspace still owns one shared core `exec.Session`
+- per-session server state currently only tracks the current file
+- `cd` still uses process-global `os.Chdir` / `os.Getwd`
+- `!` commands still inherit that process-global cwd
+- `cd` also rewrites shared file names in place, which means path display and
+  lookup are still tied to shared executor state rather than true session state
+
+Conclusion from this discussion:
+
+- this is not a trivial local fix if we want the semantics to be correct
+- a smaller refactor is possible: make cwd and shell-repeat session-owned, stop
+  using process-global cwd, run `!` with per-session `Cmd.Dir`, and keep
+  workspace file names canonical while rendering relative names per session
+- a larger refactor is also possible: move command execution itself to a truly
+  session-owned model rather than rebinding session state into one shared core
+  executor
+
+Decision for now:
+
+- do not implement this yet
+- think more about whether the added complexity is worth it before changing the
+  architecture

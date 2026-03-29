@@ -197,6 +197,36 @@ func TestBufferStateFromViewRestoresSavedOriginForRevisitedFile(t *testing.T) {
 	}
 }
 
+func TestBufferStateFromViewPreservesManualScrollOriginAcrossRefresh(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	origins := make(map[int]int)
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	previous.origin = len("line1\nline2\nline3\n")
+
+	next := bufferStateFromView(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n",
+		DotStart: 0,
+		DotEnd:   0,
+	}, previous, origins)
+
+	if got, want := next.origin, previous.origin; got != want {
+		t.Fatalf("origin after refresh = %d, want preserved manual scroll origin %d", got, want)
+	}
+}
+
 func TestMovePageDownByLines(t *testing.T) {
 	t.Parallel()
 

@@ -1953,8 +1953,7 @@ func restoreBufferOrigin(state *bufferState, origin int) int {
 		return 0
 	}
 	clamped := clampIndex(origin, len(state.text))
-	rowStart := visualRowStartForPos(state.text, clamped)
-	return adjustOriginForCursor(state.text, rowStart, state.cursor, termRows)
+	return visualRowStartForPos(state.text, clamped)
 }
 
 func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {

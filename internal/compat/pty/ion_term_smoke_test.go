@@ -2,6 +2,7 @@ package pty
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -2113,6 +2114,87 @@ func TestIonTermOverlayShowsRunningIndicator(t *testing.T) {
 	}
 }
 
+func TestIonResidentAttachSlowDelegatedCommandCancelShowsCompletion(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" {
+		t.Skip("terminal mode smoke test currently only supports darwin")
+	}
+
+	moduleRoot := findModuleRoot(t)
+	ionBin := buildIonBinary(t, moduleRoot)
+	demoBin := buildIonDemoLSPBinary(t, moduleRoot)
+
+	workDir := t.TempDir()
+	readmePath := filepath.Join(workDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ionBin, "-A", "README.md")
+	cmd.Dir = workDir
+
+	sess, err := Start(ctx, cmd, 24, 100)
+	if err != nil {
+		t.Fatalf("start pty session: %v", err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+
+	if _, err := sess.WaitFor(" -. README.md", 3*time.Second); err != nil {
+		if strings.Contains(sess.Snapshot(), "openpty: Operation not permitted") {
+			t.Skip("PTY allocation is not permitted in this environment")
+		}
+		t.Fatalf("wait for resident attach startup: %v\n%s", err, sess.Snapshot())
+	}
+
+	socketPath := residentSocketPathForTest(workDir)
+	demoCmd := exec.Command(demoBin, "-socket", socketPath)
+	demoCmd.Dir = workDir
+	if out, err := demoCmd.CombinedOutput(); err != nil {
+		t.Fatalf("start ion-demolsp: %v\n%s", err, out)
+	}
+
+	if err := sess.WriteString("\x1b"); err != nil {
+		t.Fatalf("enter buffer mode: %v", err)
+	}
+	if _, err := sess.WaitFor("one", 2*time.Second); err != nil {
+		t.Fatalf("wait for README contents: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\n:demolsp:describe\r"); err != nil {
+		t.Fatalf("run describe: %v", err)
+	}
+	if _, err := sess.WaitFor("demolsp symbol demo README.md -> README.md:3:1", 3*time.Second); err != nil {
+		t.Fatalf("wait for describe output: %v\n%s", err, sess.Snapshot())
+	}
+
+	sess.ResetSnapshot()
+	if err := sess.WriteString("\n:demolsp:slow\r"); err != nil {
+		t.Fatalf("run slow command: %v", err)
+	}
+	if _, err := sess.WaitFor(" running", 3*time.Second); err != nil {
+		t.Fatalf("wait for running indicator: %v\n%s", err, sess.Snapshot())
+	}
+	if err := sess.WriteString("\x03"); err != nil {
+		t.Fatalf("send Ctrl-C: %v", err)
+	}
+	if _, err := sess.WaitFor("demolsp slow cancelled", 5*time.Second); err != nil {
+		t.Fatalf("wait for slow cancel completion: %v\n%s", err, sess.Snapshot())
+	}
+
+	if err := sess.WriteString("\n::Q\r"); err != nil {
+		t.Fatalf("send ::Q: %v", err)
+	}
+	if err := sess.WaitExit(3 * time.Second); err != nil {
+		t.Fatalf("wait for exit: %v\n%s", err, sess.Snapshot())
+	}
+}
+
 func TestIonTermOverlayPageKeysScrollHistory(t *testing.T) {
 	t.Parallel()
 
@@ -2555,4 +2637,23 @@ func buildIonBinary(t *testing.T, moduleRoot string) string {
 		t.Fatalf("go build ion binary: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func buildIonDemoLSPBinary(t *testing.T, moduleRoot string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "ion-demolsp")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ion-demolsp")
+	cmd.Dir = moduleRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build ion-demolsp binary: %v\n%s", err, out)
+	}
+	return bin
+}
+
+func residentSocketPathForTest(workDir string) string {
+	key := "cwd:" + filepath.Clean(workDir)
+	sum := sha256.Sum256([]byte(key))
+	base := fmt.Sprintf("ion-r3-%x", sum[:8])
+	return filepath.Join(os.TempDir(), "ion", base+".sock")
 }

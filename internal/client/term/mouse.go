@@ -233,7 +233,10 @@ func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
 	return waitForInputByte(stdin, escSequenceWait)
 }
 
-const escSequenceWait = 20_000 // 20ms in microseconds
+// Neovim waits a bit longer before deciding that a bare ESC is really ESC.
+// A shorter timeout lets fragmented mouse sequences leak into the buffer as
+// literal "[<...M" text when the terminal delivers the prefix late.
+const escSequenceWait = 50_000 // 50ms in microseconds
 const (
 	passiveMotionCoalesceWait = 20_000
 )

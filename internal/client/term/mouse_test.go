@@ -365,6 +365,83 @@ func TestReadBufferEscapeMouseWithFragmentedSequence(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeMouseWaitsForDelayedPrefixAfterESC(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_, _ = w.Write([]byte("[<35;12;23M"))
+		_ = w.Close()
+	}()
+
+	key, mouse, err := readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(delayed prefix) error = %v", err)
+	}
+	if key != keyMouse {
+		t.Fatalf("readBufferEscape(delayed prefix) key = %d, want keyMouse", key)
+	}
+	if mouse == nil {
+		t.Fatalf("delayed prefix mouse event = nil, want value")
+	}
+	if got, want := mouse.button, 35; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.x, 11; got != want {
+		t.Fatalf("mouse.x = %d, want %d", got, want)
+	}
+	if got, want := mouse.y, 22; got != want {
+		t.Fatalf("mouse.y = %d, want %d", got, want)
+	}
+}
+
+func TestReadBufferEscapeMouseWaitsForDelayedMouseMarkerAfterCSI(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	reader := bufio.NewReader(r)
+	go func() {
+		_, _ = w.Write([]byte("["))
+		time.Sleep(30 * time.Millisecond)
+		_, _ = w.Write([]byte("<35;12;23M"))
+		_ = w.Close()
+	}()
+
+	key, mouse, err := readBufferEscape(reader, r)
+	if err != nil {
+		t.Fatalf("readBufferEscape(delayed marker) error = %v", err)
+	}
+	if key != keyMouse {
+		t.Fatalf("readBufferEscape(delayed marker) key = %d, want keyMouse", key)
+	}
+	if mouse == nil {
+		t.Fatalf("delayed marker mouse event = nil, want value")
+	}
+	if got, want := mouse.button, 35; got != want {
+		t.Fatalf("mouse.button = %d, want %d", got, want)
+	}
+	if got, want := mouse.x, 11; got != want {
+		t.Fatalf("mouse.x = %d, want %d", got, want)
+	}
+	if got, want := mouse.y, 22; got != want {
+		t.Fatalf("mouse.y = %d, want %d", got, want)
+	}
+}
+
 func TestReadBufferEscapeCoalescesBufferedMouseMotion(t *testing.T) {
 	t.Parallel()
 

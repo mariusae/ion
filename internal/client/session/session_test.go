@@ -174,6 +174,88 @@ func TestClientInterruptStopsRunningShellCommand(t *testing.T) {
 	}
 }
 
+func TestClientsKeepIndependentCurrentFileSelections(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(fileA, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("beta\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.txt) error = %v", err)
+	}
+
+	socketPath, cleanup, err := testSocketPath()
+	if err != nil {
+		t.Fatalf("testSocketPath() error = %v", err)
+	}
+	defer cleanup()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	server := transport.New(workspace.New())
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		if err := <-serverErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	}()
+
+	client1, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(client1) error = %v", err)
+	}
+	defer client1.Close()
+	client2, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(client2) error = %v", err)
+	}
+	defer client2.Close()
+
+	if err := client1.Bootstrap([]string{fileA, fileB}); err != nil {
+		t.Fatalf("client1.Bootstrap() error = %v", err)
+	}
+	if err := client2.Bootstrap(nil); err != nil {
+		t.Fatalf("client2.Bootstrap(nil) error = %v", err)
+	}
+
+	view2, err := client2.CurrentView()
+	if err != nil {
+		t.Fatalf("client2.CurrentView() initial error = %v", err)
+	}
+	if got, want := view2.Name, fileA; got != want {
+		t.Fatalf("client2 initial current file = %q, want %q", got, want)
+	}
+
+	if _, err := client1.OpenTarget(fileB, ""); err != nil {
+		t.Fatalf("client1.OpenTarget(fileB) error = %v", err)
+	}
+
+	view1, err := client1.CurrentView()
+	if err != nil {
+		t.Fatalf("client1.CurrentView() error = %v", err)
+	}
+	if got, want := view1.Name, fileB; got != want {
+		t.Fatalf("client1 current file = %q, want %q", got, want)
+	}
+
+	view2, err = client2.CurrentView()
+	if err != nil {
+		t.Fatalf("client2.CurrentView() after client1 change error = %v", err)
+	}
+	if got, want := view2.Name, fileA; got != want {
+		t.Fatalf("client2 current file after client1 change = %q, want %q", got, want)
+	}
+}
+
 func testSocketPath() (string, func(), error) {
 	dir := "/tmp"
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {

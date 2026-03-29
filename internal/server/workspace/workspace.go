@@ -45,14 +45,19 @@ func NewWithOptions(mode exec.ShellInputMode, autoIndent bool) *Workspace {
 }
 
 // Bootstrap loads the initial file set for a download-mode client.
-func (w *Workspace) Bootstrap(files []string, stdout, stderr io.Writer) error {
+func (w *Workspace) Bootstrap(state *SessionState, files []string, stdout, stderr io.Writer) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if len(files) == 0 {
+		if len(w.session.Files) > 0 {
+			return w.session.PrintCurrentStatus()
+		}
 		d, err := text.NewDisk()
 		if err != nil {
 			return err
@@ -87,12 +92,14 @@ func (w *Workspace) Bootstrap(files []string, stdout, stderr io.Writer) error {
 }
 
 // Execute forwards one parsed command into the authoritative core session.
-func (w *Workspace) Execute(cmd *cmdlang.Cmd, stdout, stderr io.Writer) (bool, error) {
+func (w *Workspace) Execute(state *SessionState, cmd *cmdlang.Cmd, stdout, stderr io.Writer) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.session.Execute(cmd)
 }
 
@@ -106,19 +113,23 @@ func (w *Workspace) Interrupt() error {
 
 // CurrentView returns the current file text and selection state for the
 // initial terminal client.
-func (w *Workspace) CurrentView() (wire.BufferView, error) {
+func (w *Workspace) CurrentView(state *SessionState) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.currentView()
 }
 
 // OpenFiles opens one explicit file list and returns the refreshed current view.
-func (w *Workspace) OpenFiles(files []string, stdout, stderr io.Writer) (wire.BufferView, error) {
+func (w *Workspace) OpenFiles(state *SessionState, files []string, stdout, stderr io.Writer) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.OpenFilesPathsAtomic(files); err != nil {
 		return wire.BufferView{}, err
@@ -127,30 +138,36 @@ func (w *Workspace) OpenFiles(files []string, stdout, stderr io.Writer) (wire.Bu
 }
 
 // OpenFilesPaths opens one explicit file list and returns the refreshed current view.
-func (w *Workspace) OpenFilesPaths(files []string, stdout, stderr io.Writer) error {
+func (w *Workspace) OpenFilesPaths(state *SessionState, files []string, stdout, stderr io.Writer) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.session.OpenFilesPathsAtomic(files)
 }
 
 // OpenFilesPathsNoNameless opens one explicit file list while suppressing the
 // plain `B current-file` shortcut that creates a nameless buffer.
-func (w *Workspace) OpenFilesPathsNoNameless(files []string, stdout, stderr io.Writer) error {
+func (w *Workspace) OpenFilesPathsNoNameless(state *SessionState, files []string, stdout, stderr io.Writer) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.session.OpenFilesPathsAtomicNoNameless(files)
 }
 
 // MenuFiles returns the current file-menu snapshot for the terminal client.
-func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
+func (w *Workspace) MenuFiles(state *SessionState) ([]wire.MenuFile, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	files := w.session.MenuFiles()
 	out := make([]wire.MenuFile, 0, len(files))
@@ -166,9 +183,11 @@ func (w *Workspace) MenuFiles() ([]wire.MenuFile, error) {
 }
 
 // FocusFile switches the current file by stable file ID.
-func (w *Workspace) FocusFile(id int) (wire.BufferView, error) {
+func (w *Workspace) FocusFile(state *SessionState, id int) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.FocusFileID(id); err != nil {
 		return wire.BufferView{}, err
@@ -177,9 +196,11 @@ func (w *Workspace) FocusFile(id int) (wire.BufferView, error) {
 }
 
 // SetAddress resolves one sam address against the current file.
-func (w *Workspace) SetAddress(expr string) (wire.BufferView, error) {
+func (w *Workspace) SetAddress(state *SessionState, expr string) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.SetCurrentAddress(expr); err != nil {
 		return wire.BufferView{}, err
@@ -188,9 +209,11 @@ func (w *Workspace) SetAddress(expr string) (wire.BufferView, error) {
 }
 
 // SetDot updates the current selection for the terminal client.
-func (w *Workspace) SetDot(start, end int) (wire.BufferView, error) {
+func (w *Workspace) SetDot(state *SessionState, start, end int) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.SetCurrentDot(text.Posn(start), text.Posn(end)); err != nil {
 		return wire.BufferView{}, err
@@ -199,9 +222,11 @@ func (w *Workspace) SetDot(start, end int) (wire.BufferView, error) {
 }
 
 // Replace edits the current file through the server-owned core session.
-func (w *Workspace) Replace(start, end int, repl string) (wire.BufferView, error) {
+func (w *Workspace) Replace(state *SessionState, start, end int, repl string) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.ReplaceCurrent(text.Posn(start), text.Posn(end), repl); err != nil {
 		return wire.BufferView{}, err
@@ -210,9 +235,11 @@ func (w *Workspace) Replace(start, end int, repl string) (wire.BufferView, error
 }
 
 // Undo reverts the latest change in the current file.
-func (w *Workspace) Undo() (wire.BufferView, error) {
+func (w *Workspace) Undo(state *SessionState) (wire.BufferView, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 
 	if err := w.session.UndoCurrent(); err != nil {
 		return wire.BufferView{}, err
@@ -221,20 +248,24 @@ func (w *Workspace) Undo() (wire.BufferView, error) {
 }
 
 // Save writes the current file and returns the resulting status message.
-func (w *Workspace) Save() (string, error) {
+func (w *Workspace) Save(state *SessionState) (string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.session.SaveCurrent()
 }
 
 // PrintCurrentStatus writes the current file status line through the bound
 // command/session diagnostics stream.
-func (w *Workspace) PrintCurrentStatus(stdout, stderr io.Writer) error {
+func (w *Workspace) PrintCurrentStatus(state *SessionState, stdout, stderr io.Writer) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	restore := w.bindIO(stdout, stderr)
 	defer restore()
+	restoreState := w.withSessionState(state)
+	defer restoreState()
 	return w.session.PrintCurrentStatus()
 }
 

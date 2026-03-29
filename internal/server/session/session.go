@@ -18,6 +18,7 @@ var nextID atomic.Uint64
 type DownloadSession struct {
 	id      uint64
 	ws      *workspace.Workspace
+	state   *workspace.SessionState
 	stdout  io.Writer
 	stderr  io.Writer
 	parser  *cmdlang.Parser
@@ -26,9 +27,14 @@ type DownloadSession struct {
 
 // NewDownload constructs a server-side download session over one workspace.
 func NewDownload(ws *workspace.Workspace, stdout, stderr io.Writer) *DownloadSession {
+	var state *workspace.SessionState
+	if ws != nil {
+		state = ws.NewSessionState()
+	}
 	return &DownloadSession{
 		id:      nextID.Add(1),
 		ws:      ws,
+		state:   state,
 		stdout:  stdout,
 		stderr:  stderr,
 		parser:  cmdlang.NewParserRunes(nil),
@@ -46,7 +52,7 @@ func (s *DownloadSession) ID() uint64 {
 
 // Bootstrap loads the initial file set for this client.
 func (s *DownloadSession) Bootstrap(files []string) error {
-	if err := s.ws.Bootstrap(files, s.stdout, s.stderr); err != nil {
+	if err := s.ws.Bootstrap(s.state, files, s.stdout, s.stderr); err != nil {
 		return err
 	}
 	return s.recordCurrentView()
@@ -54,6 +60,16 @@ func (s *DownloadSession) Bootstrap(files []string) error {
 
 // Execute parses and forwards one command script for this client.
 func (s *DownloadSession) Execute(script string) (bool, error) {
+	if handled, view, err := s.executeDemoCommand(script); handled {
+		if err != nil {
+			return false, err
+		}
+		if view != nil {
+			s.recordView(*view)
+		}
+		return true, nil
+	}
+
 	runes := []rune(script)
 	s.parser.ResetRunes(runes)
 	cmd, err := s.parser.ParseWithFinal(true)
@@ -83,7 +99,7 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		}
 		return true, nil
 	}
-	ok, err := s.ws.Execute(cmd, s.stdout, s.stderr)
+	ok, err := s.ws.Execute(s.state, cmd, s.stdout, s.stderr)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -117,14 +133,14 @@ func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 		return false, nil
 	}
 	paths := clienttarget.Paths(targets)
-	if err := s.ws.OpenFilesPathsNoNameless(paths, s.stdout, s.stderr); err != nil {
+	if err := s.ws.OpenFilesPathsNoNameless(s.state, paths, s.stdout, s.stderr); err != nil {
 		return true, err
 	}
 	last := targets[len(targets)-1]
 	if last.Address == "" {
 		return true, nil
 	}
-	_, err := s.ws.SetAddress(last.Address)
+	_, err := s.ws.SetAddress(s.state, last.Address)
 	return true, err
 }
 
@@ -145,7 +161,7 @@ func NewTerm(ws *workspace.Workspace, stdout, stderr io.Writer) *TermSession {
 
 // CurrentView returns the current file text and selection for this client.
 func (s *TermSession) CurrentView() (wire.BufferView, error) {
-	return s.ws.CurrentView()
+	return s.ws.CurrentView(s.state)
 }
 
 // Interrupt interrupts one currently running external command in the shared workspace.
@@ -157,7 +173,7 @@ func (s *TermSession) Interrupt() error {
 // Navigation is not recorded here; the caller is expected to follow up
 // with FocusFile and/or SetAddress which handle recording.
 func (s *TermSession) OpenFiles(files []string) (wire.BufferView, error) {
-	return s.ws.OpenFiles(files, s.stdout, s.stderr)
+	return s.ws.OpenFiles(s.state, files, s.stdout, s.stderr)
 }
 
 // OpenTarget opens one file target and applies its address as one logical navigation.
@@ -167,20 +183,20 @@ func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) 
 	}
 	var view wire.BufferView
 	var err error
-	current, curErr := s.ws.CurrentView()
+	current, curErr := s.ws.CurrentView(s.state)
 	if curErr == nil && current.Name == path {
 		view = current
 	} else {
-		if err := s.ws.OpenFilesPathsNoNameless([]string{path}, s.stdout, s.stderr); err != nil {
+		if err := s.ws.OpenFilesPathsNoNameless(s.state, []string{path}, s.stdout, s.stderr); err != nil {
 			return wire.BufferView{}, err
 		}
-		view, err = s.ws.CurrentView()
+		view, err = s.ws.CurrentView(s.state)
 		if err != nil {
 			return wire.BufferView{}, err
 		}
 	}
 	if address != "" {
-		view, err = s.ws.SetAddress(address)
+		view, err = s.ws.SetAddress(s.state, address)
 		if err != nil {
 			return wire.BufferView{}, err
 		}
@@ -191,7 +207,7 @@ func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) 
 
 // MenuFiles returns the current workspace menu snapshot.
 func (s *TermSession) MenuFiles() ([]wire.MenuFile, error) {
-	return s.ws.MenuFiles()
+	return s.ws.MenuFiles(s.state)
 }
 
 // NavigationStack returns this client's navigation stack snapshot.
@@ -201,8 +217,8 @@ func (s *TermSession) NavigationStack() (wire.NavigationStack, error) {
 
 // FocusFile changes this client's current file selection.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
-	before, _ := s.ws.CurrentView()
-	view, err := s.ws.FocusFile(id)
+	before, _ := s.ws.CurrentView(s.state)
+	view, err := s.ws.FocusFile(s.state, id)
 	if err != nil {
 		return wire.BufferView{}, err
 	}
@@ -214,7 +230,7 @@ func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
 
 // SetAddress resolves one sam address against the current file.
 func (s *TermSession) SetAddress(expr string) (wire.BufferView, error) {
-	view, err := s.ws.SetAddress(expr)
+	view, err := s.ws.SetAddress(s.state, expr)
 	if err != nil {
 		return wire.BufferView{}, err
 	}
@@ -224,20 +240,20 @@ func (s *TermSession) SetAddress(expr string) (wire.BufferView, error) {
 
 // SetDot updates the current selection.
 func (s *TermSession) SetDot(start, end int) (wire.BufferView, error) {
-	return s.ws.SetDot(start, end)
+	return s.ws.SetDot(s.state, start, end)
 }
 
 // Replace applies one text edit and returns the refreshed view.
 func (s *TermSession) Replace(start, end int, text string) (wire.BufferView, error) {
-	return s.ws.Replace(start, end, text)
+	return s.ws.Replace(s.state, start, end, text)
 }
 
 // Undo reverts the most recent edit and returns the refreshed view.
 func (s *TermSession) Undo() (wire.BufferView, error) {
-	return s.ws.Undo()
+	return s.ws.Undo(s.state)
 }
 
 // Save writes the current file and returns the resulting status line.
 func (s *TermSession) Save() (string, error) {
-	return s.ws.Save()
+	return s.ws.Save(s.state)
 }

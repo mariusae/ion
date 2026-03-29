@@ -443,8 +443,8 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 	}
 	for _, call := range tmux.calls {
 		if len(call) >= 9 && call[0] == "split-window" {
-			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -A -b-serve -- '/tmp/work/a.txt'") {
-				t.Fatalf("split-window command = %q, want -A propagated to b-serve", call[8])
+			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -no-autoindent -b-serve -- '/tmp/work/a.txt'") {
+				t.Fatalf("split-window command = %q, want -no-autoindent propagated to b-serve", call[8])
 			}
 			return
 		}
@@ -702,10 +702,25 @@ func TestParseArgsRecognizesBMode(t *testing.T) {
 	}
 }
 
-func TestParseArgsDisablesAutoIndentWithAFlag(t *testing.T) {
+func TestParseArgsRecognizesAttachMode(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := parseArgs([]string{"-A", "alpha"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.attach {
+		t.Fatalf("config.attach = false, want true")
+	}
+	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsDisablesAutoIndentWithLongFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-no-autoindent", "alpha"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}

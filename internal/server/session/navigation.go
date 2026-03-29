@@ -99,7 +99,7 @@ func (s *DownloadSession) recordCurrentView() error {
 	if s == nil {
 		return nil
 	}
-	view, err := s.ws.CurrentView()
+	view, err := s.ws.CurrentView(s.state)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (s *DownloadSession) navigate(delta int) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	before, err := s.ws.CurrentView()
+	before, err := s.ws.CurrentView(s.state)
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +130,7 @@ func (s *DownloadSession) navigate(delta int) (bool, error) {
 		return false, err
 	}
 	if before.ID != after.ID || before.Name != after.Name {
-		if err := s.ws.PrintCurrentStatus(s.stdout, s.stderr); err != nil {
+		if err := s.ws.PrintCurrentStatus(s.state, s.stdout, s.stderr); err != nil {
 			return false, err
 		}
 	}
@@ -145,7 +145,7 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 	if s.stderr == nil {
 		return true, nil
 	}
-	menuFiles, err := s.ws.MenuFiles()
+	menuFiles, err := s.ws.MenuFiles(s.state)
 	if err != nil {
 		return true, err
 	}
@@ -157,7 +157,7 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 			continue
 		}
 		currentDirty = file.Dirty
-		if view, err := s.ws.CurrentView(); err == nil {
+		if view, err := s.ws.CurrentView(s.state); err == nil {
 			if point, ok := navigationPointFromView(view); ok {
 				currentPoint = point
 				hasCurrentPoint = true
@@ -212,23 +212,23 @@ func restoreNavigationPoint(s *DownloadSession, point navigationPoint) (wire.Buf
 	var view wire.BufferView
 	var err error
 	if point.fileID != 0 {
-		view, err = s.ws.FocusFile(point.fileID)
+		view, err = s.ws.FocusFile(s.state, point.fileID)
 		if err == nil {
 			if view.DotStart == point.dotStart && view.DotEnd == point.dotEnd {
 				return view, nil
 			}
-			return s.ws.SetDot(point.dotStart, point.dotEnd)
+			return s.ws.SetDot(s.state, point.dotStart, point.dotEnd)
 		}
 	}
 	if point.name == "" {
 		return wire.BufferView{}, err
 	}
-	view, err = s.ws.OpenFiles([]string{point.name}, s.stdout, s.stderr)
+	view, err = s.ws.OpenFiles(s.state, []string{point.name}, s.stdout, s.stderr)
 	if err != nil {
 		return wire.BufferView{}, err
 	}
 	if view.DotStart == point.dotStart && view.DotEnd == point.dotEnd {
 		return view, nil
 	}
-	return s.ws.SetDot(point.dotStart, point.dotEnd)
+	return s.ws.SetDot(s.state, point.dotStart, point.dotEnd)
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	clienttarget "ion/internal/client/target"
@@ -292,6 +293,84 @@ func TestTermSessionShowNavigationStackMarksDirtyCurrentEntry(t *testing.T) {
 		"'-. " + readme + ":#6,#11\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("stderr after S = %q, want %q", got, want)
+	}
+}
+
+func TestTermSessionDescribeDemoSymbol(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	caller := filepath.Join(root, "a.go")
+	target := filepath.Join(root, "b.go")
+	if err := os.WriteFile(caller, []byte("package main\n\nfunc call() {\n\tFoo()\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.go) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("package main\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.go) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stdout bytes.Buffer
+	sess := NewTerm(ws, &stdout, io.Discard)
+	if err := sess.Bootstrap([]string{caller, target}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := sess.SetAddress("/Foo/"); err != nil {
+		t.Fatalf("SetAddress(/Foo/) error = %v", err)
+	}
+	stdout.Reset()
+
+	if _, err := sess.Execute(":lsp:describe\n"); err != nil {
+		t.Fatalf("Execute(:lsp:describe) error = %v", err)
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "symbol Foo "+caller+":4:2") {
+		t.Fatalf("stdout = %q, want symbol description for call site", got)
+	}
+}
+
+func TestTermSessionGotoDemoSymbol(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	caller := filepath.Join(root, "a.go")
+	target := filepath.Join(root, "b.go")
+	if err := os.WriteFile(caller, []byte("package main\n\nfunc call() {\n\tFoo()\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.go) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("package main\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.go) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stdout bytes.Buffer
+	sess := NewTerm(ws, &stdout, io.Discard)
+	if err := sess.Bootstrap([]string{caller, target}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := sess.SetAddress("/Foo/"); err != nil {
+		t.Fatalf("SetAddress(/Foo/) error = %v", err)
+	}
+	stdout.Reset()
+
+	if _, err := sess.Execute(":lsp:goto\n"); err != nil {
+		t.Fatalf("Execute(:lsp:goto) error = %v", err)
+	}
+
+	view, err := sess.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() error = %v", err)
+	}
+	if got, want := view.Name, target; got != want {
+		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+	selected := string([]rune(view.Text)[view.DotStart:view.DotEnd])
+	if got, want := selected, "Foo"; got != want {
+		t.Fatalf("selected symbol = %q, want %q", got, want)
+	}
+	if got := stdout.String(); !strings.Contains(got, "goto Foo "+target+":3:6") {
+		t.Fatalf("stdout = %q, want goto target line", got)
 	}
 }
 

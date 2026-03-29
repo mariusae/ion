@@ -10,12 +10,13 @@ func TestBootstrapMissingFileKeepsEmptyNamedBuffer(t *testing.T) {
 	t.Parallel()
 
 	ws := New()
+	state := ws.NewSessionState()
 	missing := filepath.Join(t.TempDir(), "missing.txt")
 
-	if err := ws.Bootstrap([]string{missing}, io.Discard, io.Discard); err != nil {
+	if err := ws.Bootstrap(state, []string{missing}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
-	view, err := ws.CurrentView()
+	view, err := ws.CurrentView(state)
 	if err != nil {
 		t.Fatalf("CurrentView() error = %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 
 type config struct {
 	download   bool
+	attach     bool
 	bmode      bool
 	bserve     bool
 	rage       bool
@@ -39,6 +40,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	if cfg.download {
 		if err := runDownload(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.attach {
+		if err := runAttachMode(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
 			return 1
 		}
@@ -83,7 +92,8 @@ func parseArgs(args []string) (config, error) {
 	fs := flag.NewFlagSet("ion", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
-	fs.BoolVar(&disableAutoIndent, "A", false, "turn off autoindent mode")
+	fs.BoolVar(&cfg.attach, "A", false, "attach to a resident shared server")
+	fs.BoolVar(&disableAutoIndent, "no-autoindent", false, "turn off autoindent mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
 	fs.StringVar(&cfg.paneID, "p", "", "override the tmux pane id used for -B lookup")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
@@ -95,17 +105,32 @@ func parseArgs(args []string) (config, error) {
 	if cfg.download && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -d cannot be combined")
 	}
+	if cfg.download && cfg.attach {
+		return config{}, fmt.Errorf("-A and -d cannot be combined")
+	}
 	if cfg.download && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -d cannot be combined")
 	}
 	if cfg.rage && cfg.download {
 		return config{}, fmt.Errorf("-d and -rage cannot be combined")
 	}
+	if cfg.rage && cfg.attach {
+		return config{}, fmt.Errorf("-A and -rage cannot be combined")
+	}
 	if cfg.rage && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -rage cannot be combined")
 	}
 	if cfg.rage && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -rage cannot be combined")
+	}
+	if cfg.attach && cfg.bmode {
+		return config{}, fmt.Errorf("-A and -B cannot be combined")
+	}
+	if cfg.attach && cfg.bserve {
+		return config{}, fmt.Errorf("-A and -b-serve cannot be combined")
+	}
+	if cfg.attach && cfg.paneID != "" {
+		return config{}, fmt.Errorf("-p requires -B")
 	}
 	cfg.files = fs.Args()
 	if cfg.rage && len(cfg.files) > 0 {

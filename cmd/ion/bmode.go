@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +19,7 @@ import (
 )
 
 type tmuxContext struct {
+	SessionID    string
 	WindowID     string
 	PaneID       string
 	TargetPaneID string
@@ -269,6 +269,10 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 	if rt.getenv("TMUX") == "" {
 		return tmuxContext{}, false, nil
 	}
+	sessionID, err := tmuxDisplay(rt.tmux, "", "#{session_id}")
+	if err != nil {
+		return tmuxContext{}, false, err
+	}
 	paneID := strings.TrimSpace(rt.getenv("TMUX_PANE"))
 	targetPaneID := strings.TrimSpace(paneOverride)
 	if targetPaneID == "" {
@@ -282,6 +286,7 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 		return tmuxContext{}, false, err
 	}
 	return tmuxContext{
+		SessionID:    sessionID,
 		WindowID:     windowID,
 		PaneID:       paneID,
 		TargetPaneID: targetPaneID,
@@ -297,8 +302,7 @@ func tmuxDisplay(tmux func(args ...string) (string, error), target, format strin
 }
 
 func tmuxWindowPaths(tempDir, key string) bModePaths {
-	sum := sha256.Sum256([]byte(key))
-	base := fmt.Sprintf("ion-b-%x", sum[:8])
+	base := hashedPathBase("ion-b", key)
 	dir := filepath.Join(tempDir, "ion")
 	return bModePaths{
 		socketPath: filepath.Join(dir, base+".sock"),
@@ -381,7 +385,7 @@ func focusResidentPane(paths bModePaths, ctx tmuxContext, tmux func(args ...stri
 func buildBServeCommand(exe string, cfg config) string {
 	args := []string{shellQuote(exe)}
 	if !cfg.autoindent {
-		args = append(args, "-A")
+		args = append(args, "-no-autoindent")
 	}
 	if cfg.paneID != "" {
 		args = append(args, "-p", shellQuote(cfg.paneID))
@@ -437,7 +441,7 @@ func preloadTargetWorkspace(ws *workspace.Workspace, targets []clienttarget.Targ
 	if ws == nil {
 		return nil
 	}
-	return ws.Bootstrap(uniqueTargetPaths(targets), stdout, stderr)
+	return ws.Bootstrap(ws.NewSessionState(), uniqueTargetPaths(targets), stdout, stderr)
 }
 
 func bootstrapMissingTargets(client bModeClient, targets []clienttarget.Target) error {

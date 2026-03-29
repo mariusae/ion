@@ -1,0 +1,117 @@
+package main
+
+import (
+	"path/filepath"
+	"testing"
+
+	"ion/internal/proto/wire"
+)
+
+type fakeInvocationSession struct {
+	view    wire.BufferView
+	scripts []string
+	err     error
+}
+
+func (s *fakeInvocationSession) CurrentView() (wire.BufferView, error) {
+	return s.view, s.err
+}
+
+func (s *fakeInvocationSession) Execute(script string) (bool, error) {
+	s.scripts = append(s.scripts, script)
+	return true, s.err
+}
+
+type fakeInvocationController struct {
+	session      *fakeInvocationSession
+	takeCalls    []uint64
+	returnCalls  []uint64
+	finishID     uint64
+	finishErr    string
+	finishStdout string
+	finishStderr string
+}
+
+func (c *fakeInvocationController) Take(sessionID uint64) error {
+	c.takeCalls = append(c.takeCalls, sessionID)
+	return nil
+}
+
+func (c *fakeInvocationController) Return(sessionID uint64) error {
+	c.returnCalls = append(c.returnCalls, sessionID)
+	return nil
+}
+
+func (c *fakeInvocationController) FinishInvocation(id uint64, errText, stdout, stderr string) error {
+	c.finishID = id
+	c.finishErr = errText
+	c.finishStdout = stdout
+	c.finishStderr = stderr
+	return nil
+}
+
+func (c *fakeInvocationController) Session(sessionID uint64) invocationSession {
+	_ = sessionID
+	return c.session
+}
+
+func TestRunInvocationDescribeReportsCurrentView(t *testing.T) {
+	t.Parallel()
+
+	ctrl := &fakeInvocationController{
+		session: &fakeInvocationSession{
+			view: wire.BufferView{Name: "/tmp/start.txt"},
+		},
+	}
+	inv := wire.Invocation{ID: 7, SessionID: 11, Script: ":demolsp:describe"}
+	if err := runInvocation(ctrl, "/tmp/work", inv); err != nil {
+		t.Fatalf("runInvocation() error = %v", err)
+	}
+	if got, want := ctrl.finishStdout, "demolsp symbol demo start.txt -> README.md:3:1\n"; got != want {
+		t.Fatalf("finish stdout = %q, want %q", got, want)
+	}
+	if got, want := ctrl.takeCalls, []uint64{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Take() calls = %#v, want %#v", got, want)
+	}
+	if got, want := ctrl.returnCalls, []uint64{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Return() calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunInvocationGotoExecutesTargetOpen(t *testing.T) {
+	t.Parallel()
+
+	ctrl := &fakeInvocationController{
+		session: &fakeInvocationSession{},
+	}
+	root := "/tmp/work"
+	inv := wire.Invocation{ID: 7, SessionID: 11, Script: ":demolsp:goto"}
+	if err := runInvocation(ctrl, root, inv); err != nil {
+		t.Fatalf("runInvocation() error = %v", err)
+	}
+	wantScript := "B " + filepath.Join(root, "README.md") + ":3\n"
+	if got, want := ctrl.session.scripts, []string{wantScript}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Execute() scripts = %#v, want %#v", got, want)
+	}
+	if got, want := ctrl.finishStdout, "demolsp goto README.md:3:1\n"; got != want {
+		t.Fatalf("finish stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunInvocationSlowExecutesLongRunningCommand(t *testing.T) {
+	t.Parallel()
+
+	ctrl := &fakeInvocationController{
+		session: &fakeInvocationSession{},
+	}
+	inv := wire.Invocation{ID: 7, SessionID: 11, Script: ":demolsp:slow"}
+	if err := runInvocation(ctrl, "/tmp/work", inv); err != nil {
+		t.Fatalf("runInvocation() error = %v", err)
+	}
+	if got, want := ctrl.session.scripts, []string{"!sleep 3600\n"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Execute() scripts = %#v, want %#v", got, want)
+	}
+	if got, want := ctrl.finishStdout, "demolsp slow cancelled\n"; got != want {
+		t.Fatalf("finish stdout = %q, want %q", got, want)
+	}
+}

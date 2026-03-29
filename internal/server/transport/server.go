@@ -24,6 +24,7 @@ type Server struct {
 
 	mu             sync.Mutex
 	listener       net.Listener
+	conns          map[io.ReadWriteCloser]struct{}
 	nextClient     uint64
 	nextInvocation uint64
 	clients        map[uint64]*serverClient
@@ -100,6 +101,7 @@ func NewWithNotifier(ws *workspace.Workspace, notify func()) *Server {
 	return &Server{
 		ws:           ws,
 		changeNotify: notify,
+		conns:        make(map[io.ReadWriteCloser]struct{}),
 		clients:      make(map[uint64]*serverClient),
 		sessions:     make(map[uint64]*managedSession),
 		namespaces:   make(map[string]uint64),
@@ -136,6 +138,8 @@ func (s *Server) Serve(listener net.Listener) error {
 // ServeConn handles requests for one transport connection.
 func (s *Server) ServeConn(conn io.ReadWriteCloser) error {
 	defer conn.Close()
+	s.trackConn(conn)
+	defer s.untrackConn(conn)
 
 	state := &connState{}
 	stdout := &eventWriter{conn: conn, kind: wire.KindStdoutEvent}
@@ -894,11 +898,41 @@ func (m *managedSession) summary(clientID uint64) wire.SessionSummary {
 func (s *Server) Shutdown() error {
 	s.mu.Lock()
 	listener := s.listener
-	s.mu.Unlock()
-	if listener == nil {
-		return nil
+	conns := make([]io.ReadWriteCloser, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
 	}
-	return listener.Close()
+	s.mu.Unlock()
+	var shutdownErr error
+	if listener != nil {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			shutdownErr = err
+		}
+	}
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) && shutdownErr == nil {
+			shutdownErr = err
+		}
+	}
+	return shutdownErr
+}
+
+func (s *Server) trackConn(conn io.ReadWriteCloser) {
+	if s == nil || conn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.conns[conn] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) untrackConn(conn io.ReadWriteCloser) {
+	if s == nil || conn == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.conns, conn)
+	s.mu.Unlock()
 }
 
 type eventWriter struct {

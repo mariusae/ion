@@ -265,10 +265,6 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 	if rt.getenv("TMUX") == "" {
 		return tmuxContext{}, false, nil
 	}
-	sessionID, err := tmuxDisplay(rt.tmux, "", "#{session_id}")
-	if err != nil {
-		return tmuxContext{}, false, err
-	}
 	paneID := strings.TrimSpace(rt.getenv("TMUX_PANE"))
 	targetPaneID := strings.TrimSpace(paneOverride)
 	if targetPaneID == "" {
@@ -276,6 +272,10 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 	}
 	if targetPaneID == "" {
 		return tmuxContext{}, false, fmt.Errorf("TMUX_PANE not set")
+	}
+	sessionID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{session_id}")
+	if err != nil {
+		return tmuxContext{}, false, err
 	}
 	windowID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{window_id}")
 	if err != nil {

@@ -125,7 +125,55 @@ func runForeground(socketPath string) error {
 	}
 }
 
+type invocationSession interface {
+	CurrentView() (wire.BufferView, error)
+	Execute(script string) (bool, error)
+}
+
+type invocationController interface {
+	Take(sessionID uint64) error
+	Return(sessionID uint64) error
+	FinishInvocation(id uint64, errText, stdout, stderr string) error
+	Session(sessionID uint64) invocationSession
+}
+
+type wireInvocationController struct {
+	client *clientsession.Client
+}
+
+func (c wireInvocationController) Take(sessionID uint64) error {
+	return c.client.Take(sessionID)
+}
+
+func (c wireInvocationController) Return(sessionID uint64) error {
+	return c.client.Return(sessionID)
+}
+
+func (c wireInvocationController) FinishInvocation(id uint64, errText, stdout, stderr string) error {
+	return c.client.FinishInvocation(id, errText, stdout, stderr)
+}
+
+func (c wireInvocationController) Session(sessionID uint64) invocationSession {
+	return wireInvocationSession{session: c.client.Session(sessionID)}
+}
+
+type wireInvocationSession struct {
+	session *clientsession.Session
+}
+
+func (s wireInvocationSession) CurrentView() (wire.BufferView, error) {
+	return s.session.CurrentView()
+}
+
+func (s wireInvocationSession) Execute(script string) (bool, error) {
+	return s.session.Execute(script)
+}
+
 func handleInvocation(client *clientsession.Client, root string, inv wire.Invocation) error {
+	return runInvocation(wireInvocationController{client: client}, root, inv)
+}
+
+func runInvocation(client invocationController, root string, inv wire.Invocation) error {
 	script := strings.TrimSpace(inv.Script)
 	finishErr := ""
 	finishStdout := ""
@@ -142,9 +190,10 @@ func handleInvocation(client *clientsession.Client, root string, inv wire.Invoca
 		}
 	}()
 
+	session := client.Session(inv.SessionID)
 	switch script {
 	case ":demolsp:describe":
-		view, err := client.Session(inv.SessionID).CurrentView()
+		view, err := session.CurrentView()
 		if err != nil {
 			finishErr = err.Error()
 			break
@@ -152,11 +201,17 @@ func handleInvocation(client *clientsession.Client, root string, inv wire.Invoca
 		finishStdout = fmt.Sprintf("demolsp symbol demo %s -> README.md:3:1\n", filepath.Base(view.Name))
 	case ":demolsp:goto":
 		target := filepath.Join(root, "README.md")
-		if _, err := client.Session(inv.SessionID).Execute("B " + target + ":3\n"); err != nil {
+		if _, err := session.Execute("B " + target + ":3\n"); err != nil {
 			finishErr = err.Error()
 			break
 		}
 		finishStdout = "demolsp goto README.md:3:1\n"
+	case ":demolsp:slow":
+		if _, err := session.Execute("!sleep 3600\n"); err != nil {
+			finishErr = err.Error()
+			break
+		}
+		finishStdout = "demolsp slow cancelled\n"
 	default:
 		finishErr = fmt.Sprintf("unknown demo lsp command %q", script)
 	}

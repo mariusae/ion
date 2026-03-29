@@ -17,7 +17,7 @@ func TestResidentAttachKeyUsesTmuxSessionWhenAvailable(t *testing.T) {
 	t.Parallel()
 
 	tmux := &fakeTmux{sessionID: "$7"}
-	key, err := residentAttachKey(residentRuntime{
+	key, err := residentAttachKey(config{}, residentRuntime{
 		getenv: func(name string) string {
 			if name == "TMUX" {
 				return "/tmp/tmux.sock"
@@ -37,10 +37,39 @@ func TestResidentAttachKeyUsesTmuxSessionWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestResidentAttachKeyUsesPaneOverrideSessionWhenProvided(t *testing.T) {
+	t.Parallel()
+
+	tmux := &fakeTmux{
+		sessionID: "$7",
+		paneSessions: map[string]string{
+			"%54": "$54",
+		},
+	}
+	key, err := residentAttachKey(config{paneID: "%54"}, residentRuntime{
+		getenv: func(name string) string {
+			if name == "TMUX" {
+				return "/tmp/tmux.sock"
+			}
+			return ""
+		},
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		tempDir:    t.TempDir,
+		tmux:       tmux.run,
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+	})
+	if err != nil {
+		t.Fatalf("residentAttachKey() error = %v", err)
+	}
+	if got, want := key, "tmux-session:$54"; got != want {
+		t.Fatalf("residentAttachKey() = %q, want %q", got, want)
+	}
+}
+
 func TestResidentAttachKeyFallsBackToWorkingDirectory(t *testing.T) {
 	t.Parallel()
 
-	key, err := residentAttachKey(residentRuntime{
+	key, err := residentAttachKey(config{}, residentRuntime{
 		getenv:     func(string) string { return "" },
 		getwd:      func() (string, error) { return "/tmp/work/dir", nil },
 		tempDir:    t.TempDir,
@@ -58,7 +87,7 @@ func TestResidentAttachKeyFallsBackToWorkingDirectory(t *testing.T) {
 func TestResidentPathsUseSharedPrefix(t *testing.T) {
 	t.Parallel()
 
-	paths, err := residentPathsForRuntime(residentRuntime{
+	paths, err := residentPathsForRuntime(config{}, residentRuntime{
 		getenv: func(name string) string {
 			if name == "TMUX" {
 				return "/tmp/tmux.sock"

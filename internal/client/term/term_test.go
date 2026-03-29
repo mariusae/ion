@@ -136,6 +136,31 @@ func TestRestoreBufferOriginKeepsPerFileScrollPosition(t *testing.T) {
 	}
 }
 
+func TestBufferStateFromViewPreservesTransientStatus(t *testing.T) {
+	t.Parallel()
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	previous.status = "saved"
+
+	next := bufferStateFromView(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	}, previous, map[int]int{})
+
+	if got, want := next.status, "saved"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
 func TestBufferStateFromViewRestoresSavedOriginForRevisitedFile(t *testing.T) {
 	t.Parallel()
 
@@ -489,6 +514,31 @@ func TestPositionTerminalCursorHidesCursorWhenUnfocused(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := positionTerminalCursor(&out, newBufferState(wire.BufferView{}), nil, newMenuState(), false); err != nil {
+		t.Fatalf("positionTerminalCursor() error = %v", err)
+	}
+	if got, want := out.String(), "\x1b[?25l"; got != want {
+		t.Fatalf("positionTerminalCursor() = %q, want %q", got, want)
+	}
+}
+
+func TestPositionTerminalCursorHidesCursorWhenBufferCursorIsOffscreen(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: len("line1\nline2\nline3\nline4\nline5\n"),
+		DotEnd:   len("line1\nline2\nline3\nline4\nline5\n"),
+	})
+	state.origin = len("line1\n")
+
+	var out bytes.Buffer
+	if err := positionTerminalCursor(&out, state, nil, newMenuState(), true); err != nil {
 		t.Fatalf("positionTerminalCursor() error = %v", err)
 	}
 	if got, want := out.String(), "\x1b[?25l"; got != want {

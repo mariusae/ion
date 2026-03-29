@@ -211,6 +211,68 @@ func TestServerQuitCommandStopsServeLoop(t *testing.T) {
 	}
 }
 
+func TestServerQuitCommandClosesExistingClients(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+
+	owner, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(owner) error = %v", err)
+	}
+	defer owner.Close()
+	if err := owner.Bootstrap(nil); err != nil {
+		t.Fatalf("owner.Bootstrap() error = %v", err)
+	}
+
+	other, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(other) error = %v", err)
+	}
+	defer other.Close()
+	if err := other.Bootstrap(nil); err != nil {
+		t.Fatalf("other.Bootstrap() error = %v", err)
+	}
+
+	if _, err := owner.Execute(":ion:Q\n"); err != nil {
+		t.Fatalf("owner.Execute(:ion:Q) error = %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve() did not return after :ion:Q")
+	}
+
+	if _, err := other.CurrentView(); err == nil {
+		t.Fatal("other.CurrentView() error = nil, want closed connection after :ion:Q")
+	}
+}
+
 func TestServerQuitAliasStopsServeLoop(t *testing.T) {
 	t.Parallel()
 
@@ -399,6 +461,19 @@ func TestServerDelegatesNamespaceGotoAndDescribe(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "demolsp goto README.md:3:1\n") {
 		t.Fatalf("stdout after goto = %q", got)
+	}
+	stack, err := caller.NavigationStack()
+	if err != nil {
+		t.Fatalf("caller.NavigationStack() error = %v", err)
+	}
+	if got, want := len(stack.Entries), 3; got != want {
+		t.Fatalf("len(stack.Entries) = %d, want %d (%#v)", got, want, stack.Entries)
+	}
+	if got, want := stack.Current, 2; got != want {
+		t.Fatalf("stack.Current = %d, want %d", got, want)
+	}
+	if got, want := stack.Entries[2].Label, readme+":#8,#14"; got != want {
+		t.Fatalf("stack.Entries[2] = %q, want %q", got, want)
 	}
 
 	select {

@@ -1821,6 +1821,9 @@ func rememberBufferOrigin(origins map[int]int, state *bufferState) {
 func bufferStateFromView(view wire.BufferView, previous *bufferState, origins map[int]int) *bufferState {
 	rememberBufferOrigin(origins, previous)
 	next := newBufferStateWithPrevious(view, previous)
+	if previous != nil {
+		next.status = previous.status
+	}
 	if origin, ok := origins[next.fileID]; ok {
 		next.origin = restoreBufferOrigin(next, origin)
 	}
@@ -2604,6 +2607,10 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 		_, err := io.WriteString(stdout, "\x1b[?25l")
 		return err
 	}
+	if !terminalCursorVisible(state, overlay) {
+		_, err := io.WriteString(stdout, "\x1b[?25l")
+		return err
+	}
 	row, col := terminalCursorPosition(state, overlay)
 	if row < 0 {
 		row = 0
@@ -2619,6 +2626,26 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 	}
 	_, err := fmt.Fprintf(stdout, "\x1b[?25h\x1b[%d;%dH", row+1, col+1)
 	return err
+}
+
+func terminalCursorVisible(state *bufferState, overlay *overlayState) bool {
+	if overlay != nil && overlay.visible {
+		return true
+	}
+	if state == nil {
+		return true
+	}
+	layout := state.visibleLayout(overlay)
+	if layout == nil || len(layout.rows) == 0 {
+		return false
+	}
+	cursorRow := visualCursorRowStartForPos(state.text, state.cursor)
+	for _, layoutRow := range layout.rows {
+		if layoutRow.start == cursorRow {
+			return true
+		}
+	}
+	return false
 }
 
 func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {

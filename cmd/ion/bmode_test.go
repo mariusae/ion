@@ -104,11 +104,12 @@ func (c *fakeBModeClient) ExecuteSession(id uint64, script string) (bool, error)
 }
 
 type fakeTmux struct {
-	sessionID   string
-	windowID    string
-	paneWindows map[string]string
-	splitPane   string
-	calls       [][]string
+	sessionID    string
+	windowID     string
+	paneSessions map[string]string
+	paneWindows  map[string]string
+	splitPane    string
+	calls        [][]string
 }
 
 func (t *fakeTmux) run(args ...string) (string, error) {
@@ -124,6 +125,11 @@ func (t *fakeTmux) run(args ...string) (string, error) {
 		}
 		switch args[len(args)-1] {
 		case "#{session_id}":
+			if target != "" && t.paneSessions != nil {
+				if sessionID, ok := t.paneSessions[target]; ok {
+					return sessionID + "\n", nil
+				}
+			}
 			return t.sessionID + "\n", nil
 		case "#{window_id}":
 			if target != "" && t.paneWindows != nil {
@@ -264,7 +270,7 @@ func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	wantCalls := [][]string{
-		{"display-message", "-p", "#{session_id}"},
+		{"display-message", "-p", "-t", "%4", "#{session_id}"},
 		{"display-message", "-p", "-t", "%4", "#{window_id}"},
 		{"display-message", "-p", "-t", "%9", "#{window_id}"},
 		{"select-window", "-t", "@7"},
@@ -295,6 +301,10 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 	tmux := &fakeTmux{
 		sessionID: "$1",
 		windowID:  "@2",
+		paneSessions: map[string]string{
+			"%4":  "$1",
+			"%54": "$54",
+		},
 		paneWindows: map[string]string{
 			"%4":  "@2",
 			"%54": "@54",
@@ -314,7 +324,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 		tempDir:    func() string { return tempDir },
 		executable: func() (string, error) { return "/tmp/bin/ion", nil },
 		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "tmux-session:$1").socketPath
+			want := tmuxWindowPaths(tempDir, "tmux-session:$54").socketPath
 			if path != want {
 				t.Fatalf("dial path = %q, want %q", path, want)
 			}
@@ -325,7 +335,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 		tmux:    tmux.run,
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "tmux-session:$1")
+	paths := tmuxWindowPaths(tempDir, "tmux-session:$54")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -336,7 +346,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := tmux.calls[0], []string{"display-message", "-p", "#{session_id}"}; !reflect.DeepEqual(got, want) {
+	if got, want := tmux.calls[0], []string{"display-message", "-p", "-t", "%54", "#{session_id}"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("first tmux call = %#v, want %#v", got, want)
 	}
 }
@@ -479,6 +489,10 @@ func TestRunBModeSplitUsesPaneOverride(t *testing.T) {
 	tmux := &fakeTmux{
 		sessionID: "$1",
 		windowID:  "@2",
+		paneSessions: map[string]string{
+			"%4":  "$1",
+			"%54": "$54",
+		},
 		paneWindows: map[string]string{
 			"%4":  "@2",
 			"%54": "@54",

@@ -156,9 +156,10 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	return server.Serve(listener)
 }
 
-func residentAttachKey(rt residentRuntime) (string, error) {
+func residentAttachKey(cfg config, rt residentRuntime) (string, error) {
 	if rt.getenv != nil && rt.getenv("TMUX") != "" {
-		sessionID, err := tmuxDisplay(rt.tmux, "", "#{session_id}")
+		targetPaneID := strings.TrimSpace(cfg.paneID)
+		sessionID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{session_id}")
 		if err != nil {
 			return "", err
 		}
@@ -173,8 +174,8 @@ func residentAttachKey(rt residentRuntime) (string, error) {
 	return "cwd:" + filepath.Clean(wd), nil
 }
 
-func residentPathsForRuntime(rt residentRuntime) (residentPaths, error) {
-	key, err := residentAttachKey(rt)
+func residentPathsForRuntime(cfg config, rt residentRuntime) (residentPaths, error) {
+	key, err := residentAttachKey(cfg, rt)
 	if err != nil {
 		return residentPaths{}, err
 	}
@@ -187,7 +188,7 @@ func residentPathsForRuntime(rt residentRuntime) (residentPaths, error) {
 }
 
 func ensureResidentServer(cfg config, rt residentRuntime) (residentPaths, error) {
-	paths, err := residentPathsForRuntime(rt)
+	paths, err := residentPathsForRuntime(cfg, rt)
 	if err != nil {
 		return residentPaths{}, err
 	}

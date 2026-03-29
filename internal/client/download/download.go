@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"ion/internal/client/commanddiag"
 	"ion/internal/core/cmdlang"
@@ -38,6 +39,18 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 
 	executePending := func() (bool, error) {
 		for {
+			if script, consumed, ok := extractRawCommand(pending, false); ok {
+				pending = pending[consumed:]
+				done, err := execute(script)
+				if err != nil {
+					return false, err
+				}
+				if done {
+					return true, nil
+				}
+				continue
+			}
+
 			parser.ResetRunes(pending)
 			cmd, err := parser.ParseWithFinal(false)
 			if err != nil {
@@ -86,6 +99,16 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 			if !errors.Is(err, io.EOF) {
 				return err
 			}
+			if script, consumed, ok := extractRawCommand(pending, true); ok {
+				pending = pending[consumed:]
+				done, err := execute(script)
+				if err != nil {
+					return err
+				}
+				if done {
+					return nil
+				}
+			}
 			pending = nil
 			_, err = execute("q\n")
 			return err
@@ -119,4 +142,47 @@ func discardFailedCommand(pending []rune) []rune {
 		}
 	}
 	return nil
+}
+
+func extractRawCommand(pending []rune, final bool) (string, int, bool) {
+	if len(pending) == 0 {
+		return "", 0, false
+	}
+	for i, r := range pending {
+		if r != '\n' {
+			continue
+		}
+		script := string(pending[:i+1])
+		if !isRawCommandScript(script) {
+			return "", 0, false
+		}
+		return normalizeRawCommandScript(script), i + 1, true
+	}
+	script := string(pending)
+	if !isRawCommandScript(script) {
+		return "", 0, false
+	}
+	if !final {
+		return "", 0, false
+	}
+	script = normalizeRawCommandScript(script)
+	if strings.HasSuffix(script, "\n") {
+		return script, len(pending), true
+	}
+	return script + "\n", len(pending), true
+}
+
+func isRawCommandScript(script string) bool {
+	if strings.HasPrefix(script, ":") {
+		return true
+	}
+	trimmed := strings.TrimSpace(script)
+	return trimmed == "Q" || trimmed == ":ion:Q"
+}
+
+func normalizeRawCommandScript(script string) string {
+	if trimmed := strings.TrimSpace(script); trimmed == "Q" || trimmed == ":ion:Q" {
+		return ":ion:Q\n"
+	}
+	return script
 }

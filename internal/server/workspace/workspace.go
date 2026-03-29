@@ -44,6 +44,16 @@ func NewWithOptions(mode exec.ShellInputMode, autoIndent bool) *Workspace {
 	return &Workspace{session: sess}
 }
 
+// SetShellEnv appends fixed shell environment entries for commands run in this workspace.
+func (w *Workspace) SetShellEnv(env []string) {
+	if w == nil || w.session == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.session.ShellEnv = append([]string(nil), env...)
+}
+
 // Bootstrap loads the initial file set for a download-mode client.
 func (w *Workspace) Bootstrap(state *SessionState, files []string, stdout, stderr io.Writer) error {
 	w.mu.Lock()

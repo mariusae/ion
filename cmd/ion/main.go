@@ -19,11 +19,15 @@ import (
 type config struct {
 	download   bool
 	attach     bool
+	nmode      bool
 	bmode      bool
+	cmode      bool
 	bserve     bool
+	serve      bool
 	rage       bool
 	autoindent bool
 	paneID     string
+	socketPath string
 	files      []string
 }
 
@@ -54,6 +58,22 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
+	if cfg.nmode {
+		if err := runNewPaneMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.cmode {
+		if err := runCommandMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	if cfg.bserve {
 		if err := runBServe(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
@@ -64,6 +84,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	if cfg.bmode {
 		if err := runBMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.serve {
+		if err := runServe(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
 			return 1
 		}
@@ -93,10 +121,14 @@ func parseArgs(args []string) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
 	fs.BoolVar(&cfg.attach, "A", false, "attach to a resident shared server")
+	fs.BoolVar(&cfg.nmode, "N", false, "create a new tmux pane attached to a resident shared server")
+	fs.BoolVar(&cfg.cmode, "C", false, "connect to a resident server and execute one command")
 	fs.BoolVar(&disableAutoIndent, "no-autoindent", false, "turn off autoindent mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
 	fs.StringVar(&cfg.paneID, "p", "", "override the tmux pane id used for -B lookup")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
+	fs.BoolVar(&cfg.serve, "serve", false, "internal: serve one resident daemon")
+	fs.StringVar(&cfg.socketPath, "socket", "", "internal: socket path for resident daemon")
 	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -108,14 +140,29 @@ func parseArgs(args []string) (config, error) {
 	if cfg.download && cfg.attach {
 		return config{}, fmt.Errorf("-A and -d cannot be combined")
 	}
+	if cfg.download && cfg.nmode {
+		return config{}, fmt.Errorf("-N and -d cannot be combined")
+	}
+	if cfg.download && cfg.cmode {
+		return config{}, fmt.Errorf("-C and -d cannot be combined")
+	}
 	if cfg.download && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -d cannot be combined")
+	}
+	if cfg.download && cfg.serve {
+		return config{}, fmt.Errorf("-serve and -d cannot be combined")
 	}
 	if cfg.rage && cfg.download {
 		return config{}, fmt.Errorf("-d and -rage cannot be combined")
 	}
 	if cfg.rage && cfg.attach {
 		return config{}, fmt.Errorf("-A and -rage cannot be combined")
+	}
+	if cfg.rage && cfg.nmode {
+		return config{}, fmt.Errorf("-N and -rage cannot be combined")
+	}
+	if cfg.rage && cfg.cmode {
+		return config{}, fmt.Errorf("-C and -rage cannot be combined")
 	}
 	if cfg.rage && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -rage cannot be combined")
@@ -126,15 +173,66 @@ func parseArgs(args []string) (config, error) {
 	if cfg.attach && cfg.bmode {
 		return config{}, fmt.Errorf("-A and -B cannot be combined")
 	}
+	if cfg.attach && cfg.nmode {
+		return config{}, fmt.Errorf("-A and -N cannot be combined")
+	}
+	if cfg.attach && cfg.cmode {
+		return config{}, fmt.Errorf("-A and -C cannot be combined")
+	}
 	if cfg.attach && cfg.bserve {
 		return config{}, fmt.Errorf("-A and -b-serve cannot be combined")
 	}
+	if cfg.attach && cfg.serve {
+		return config{}, fmt.Errorf("-A and -serve cannot be combined")
+	}
 	if cfg.attach && cfg.paneID != "" {
-		return config{}, fmt.Errorf("-p requires -B")
+		return config{}, fmt.Errorf("-p requires -B or -N")
+	}
+	if cfg.nmode && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -N cannot be combined")
+	}
+	if cfg.nmode && cfg.cmode {
+		return config{}, fmt.Errorf("-C and -N cannot be combined")
+	}
+	if cfg.nmode && cfg.bserve {
+		return config{}, fmt.Errorf("-N and -b-serve cannot be combined")
+	}
+	if cfg.nmode && cfg.serve {
+		return config{}, fmt.Errorf("-N and -serve cannot be combined")
+	}
+	if cfg.cmode && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -C cannot be combined")
+	}
+	if cfg.cmode && cfg.bserve {
+		return config{}, fmt.Errorf("-C and -b-serve cannot be combined")
+	}
+	if cfg.cmode && cfg.serve {
+		return config{}, fmt.Errorf("-C and -serve cannot be combined")
+	}
+	if cfg.cmode && cfg.paneID != "" {
+		return config{}, fmt.Errorf("-p requires -B or -N")
+	}
+	if cfg.serve && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -serve cannot be combined")
+	}
+	if cfg.serve && cfg.bserve {
+		return config{}, fmt.Errorf("-b-serve and -serve cannot be combined")
+	}
+	if cfg.serve && cfg.paneID != "" {
+		return config{}, fmt.Errorf("-p requires -B or -N")
+	}
+	if cfg.serve && cfg.socketPath == "" {
+		return config{}, fmt.Errorf("-serve requires -socket")
 	}
 	cfg.files = fs.Args()
 	if cfg.rage && len(cfg.files) > 0 {
 		return config{}, fmt.Errorf("-rage does not take file arguments")
+	}
+	if cfg.cmode && len(cfg.files) == 0 {
+		return config{}, fmt.Errorf("-C requires a command")
+	}
+	if cfg.serve && len(cfg.files) > 0 {
+		return config{}, fmt.Errorf("-serve does not take file arguments")
 	}
 	return cfg, nil
 }
@@ -162,6 +260,7 @@ func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClien
 		return err
 	}
 	defer cleanup()
+	ws.SetShellEnv([]string{"ION_SOCKET=" + socketPath})
 	return withServerSocket(server, socketPath, stdout, stderr, runClient)
 }
 
@@ -172,6 +271,7 @@ func withLocalServerClients(ws *workspace.Workspace, stdout, stderr io.Writer, r
 		return err
 	}
 	defer cleanup()
+	ws.SetShellEnv([]string{"ION_SOCKET=" + socketPath})
 	return withServerSocketClients(server, socketPath, stdout, stderr, runClient)
 }
 

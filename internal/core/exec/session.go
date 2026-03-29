@@ -32,6 +32,7 @@ type Session struct {
 	QuitOK        bool
 	LastShellCmd  string
 	ShellInput    ShellInputMode
+	ShellEnv      []string
 	closeOK       map[*text.File]bool
 	fileIDs       map[*text.File]int
 	nextFileID    int
@@ -2298,7 +2299,7 @@ func (s *Session) resolveShellCommand(token *text.String) (string, error) {
 func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captureStdout bool) (shellResult, error) {
 	c := osexec.Command("/bin/sh", "-c", cmd)
 	c.Args[0] = "sh"
-	c.Env = append(os.Environ(), shellEnv(f)...)
+	c.Env = append(os.Environ(), shellEnv(f, s.ShellEnv)...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var shellStdin *os.File
 	var err error
@@ -2386,15 +2387,16 @@ func (s *Session) shellStdin() (*os.File, error) {
 	}
 }
 
-func shellEnv(f *text.File) []string {
+func shellEnv(f *text.File, extra []string) []string {
 	name := ""
 	if f != nil {
 		name = trimToken(f.Name.UTF8())
 	}
-	return []string{
+	env := []string{
 		"samfile=" + name,
 		"%=" + name,
 	}
+	return append(env, extra...)
 }
 
 func (s *Session) writeShellWarnings(res shellResult, warnOnExit bool) error {

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,17 +20,21 @@ type fakeBModeClient struct {
 	openTargets    []clienttarget.Target
 	focusCalls     []int
 	addresses      []string
-	nextID         int
+	sessionList    []wire.SessionSummary
+	takeCalls      []uint64
+	returnCalls    []uint64
+	executeCalls   []struct {
+		id     uint64
+		script string
+	}
+	nextID int
 }
 
 func (c *fakeBModeClient) Bootstrap(files []string) error {
 	c.bootstrapCalls = append(c.bootstrapCalls, append([]string(nil), files...))
-	if len(files) == 0 {
-		if len(c.menuFiles) == 0 {
-			c.nextID++
-			c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Current: true})
-		}
-		return nil
+	if len(files) == 0 && len(c.menuFiles) == 0 {
+		c.nextID++
+		c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Current: true})
 	}
 	for _, name := range files {
 		seen := false
@@ -57,21 +61,11 @@ func (c *fakeBModeClient) MenuFiles() ([]wire.MenuFile, error) {
 
 func (c *fakeBModeClient) FocusFile(id int) (wire.BufferView, error) {
 	c.focusCalls = append(c.focusCalls, id)
-	for i := range c.menuFiles {
-		c.menuFiles[i].Current = c.menuFiles[i].ID == id
-	}
 	return wire.BufferView{}, nil
 }
 
 func (c *fakeBModeClient) OpenFiles(files []string) (wire.BufferView, error) {
 	c.openCalls = append(c.openCalls, append([]string(nil), files...))
-	for _, name := range files {
-		c.nextID++
-		for i := range c.menuFiles {
-			c.menuFiles[i].Current = false
-		}
-		c.menuFiles = append(c.menuFiles, wire.MenuFile{ID: c.nextID, Name: name, Current: true})
-	}
 	return wire.BufferView{}, nil
 }
 
@@ -86,6 +80,28 @@ func (c *fakeBModeClient) SetAddress(expr string) (wire.BufferView, error) {
 }
 
 func (c *fakeBModeClient) Close() error { return nil }
+
+func (c *fakeBModeClient) ListSessions() ([]wire.SessionSummary, error) {
+	return append([]wire.SessionSummary(nil), c.sessionList...), nil
+}
+
+func (c *fakeBModeClient) Take(id uint64) error {
+	c.takeCalls = append(c.takeCalls, id)
+	return nil
+}
+
+func (c *fakeBModeClient) Return(id uint64) error {
+	c.returnCalls = append(c.returnCalls, id)
+	return nil
+}
+
+func (c *fakeBModeClient) ExecuteSession(id uint64, script string) (bool, error) {
+	c.executeCalls = append(c.executeCalls, struct {
+		id     uint64
+		script string
+	}{id: id, script: script})
+	return true, nil
+}
 
 type fakeTmux struct {
 	sessionID   string
@@ -119,7 +135,7 @@ func (t *fakeTmux) run(args ...string) (string, error) {
 		}
 	case "split-window":
 		return t.splitPane + "\n", nil
-	case "select-window", "select-pane":
+	case "select-window", "select-pane", "send-keys":
 		return "", nil
 	}
 	return "", nil
@@ -149,12 +165,45 @@ func TestRunBModeFallsBackToTerminalOutsideTmux(t *testing.T) {
 	}
 }
 
-func TestRunBModePlumbsToResidentPane(t *testing.T) {
+func TestRunNewPaneModeFallsBackToAttachOutsideTmux(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	rt := bModeRuntime{
+		getenv:  func(string) string { return "" },
+		tempDir: t.TempDir,
+		runAttach: func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+			if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("runAttach files = %#v, want %#v", got, want)
+			}
+			called = true
+			return nil
+		},
+	}
+
+	if err := runNewPaneModeWith(config{nmode: true, files: []string{"alpha"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runNewPaneModeWith() error = %v", err)
+	}
+	if !called {
+		t.Fatal("runAttach was not called outside tmux")
+	}
+}
+
+func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	client := &fakeBModeClient{}
+	tmux := &fakeTmux{
+		sessionID: "$1",
+		windowID:  "@2",
+		paneWindows: map[string]string{
+			"%9": "@7",
+		},
+		splitPane: "%11",
+	}
+	client := &fakeBModeClient{
+		sessionList: []wire.SessionSummary{{ID: 77, CurrentFile: "/tmp/work/todo.txt"}},
+	}
 	rt := bModeRuntime{
 		getenv: func(key string) string {
 			switch key {
@@ -166,20 +215,14 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 				return ""
 			}
 		},
-		tempDir: func() string { return tempDir },
-		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "@2").socketPath
-			if path != want {
-				t.Fatalf("dial path = %q, want %q", path, want)
-			}
-			return client, nil
-		},
-		tmux: func(args ...string) (string, error) {
-			return tmux.run(args...)
-		},
-		runTerm: runTermWithTargets,
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		tempDir:    func() string { return tempDir },
+		dial:       func(string) (bModeClient, error) { return client, nil },
+		tmux:       tmux.run,
+		runTerm:    runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "@2")
+	paths := tmuxWindowPaths(tempDir, "tmux-session:$1")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -187,24 +230,31 @@ func TestRunBModePlumbsToResidentPane(t *testing.T) {
 		t.Fatalf("writeResidentPaneID() error = %v", err)
 	}
 
-	if err := runBModeWith(config{bmode: true, files: []string{"a.txt", "b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, files: []string{"a.txt", "b.txt:12"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := client.bootstrapCalls, [][]string{{"a.txt", "b.txt"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	wantCalls := [][]string{
+		{"display-message", "-p", "#{session_id}"},
+		{"display-message", "-p", "-t", "%4", "#{window_id}"},
+		{"display-message", "-p", "-t", "%9", "#{window_id}"},
+		{"select-window", "-t", "@7"},
+		{"select-pane", "-t", "%9"},
 	}
-	if got, want := client.openCalls, [][]string(nil); !reflect.DeepEqual(got, want) {
-		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
+	if got := tmux.calls; !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("tmux calls = %#v, want %#v", got, wantCalls)
 	}
-	if got, want := client.focusCalls, []int{2}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	if got, want := client.takeCalls, []uint64{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Take() calls = %#v, want %#v", got, want)
 	}
-	if len(client.addresses) != 0 {
-		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
+	if got, want := client.returnCalls, []uint64{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Return() calls = %#v, want %#v", got, want)
 	}
-	lastTwo := tmux.calls[len(tmux.calls)-2:]
-	if !reflect.DeepEqual(lastTwo, [][]string{{"select-window", "-t", "@2"}, {"select-pane", "-t", "%9"}}) {
-		t.Fatalf("focus calls = %#v, want select-window/select-pane", lastTwo)
+	wantExec := []struct {
+		id     uint64
+		script string
+	}{{id: 77, script: "B /tmp/work/a.txt /tmp/work/b.txt:12\n"}}
+	if got := client.executeCalls; !reflect.DeepEqual(got, wantExec) {
+		t.Fatalf("ExecuteSession() calls = %#v, want %#v", got, wantExec)
 	}
 }
 
@@ -219,9 +269,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 			"%4":  "@2",
 			"%54": "@54",
 		},
-		splitPane: "%9",
 	}
-	client := &fakeBModeClient{}
 	rt := bModeRuntime{
 		getenv: func(key string) string {
 			switch key {
@@ -233,18 +281,21 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 				return ""
 			}
 		},
-		tempDir: func() string { return tempDir },
+		tempDir:    func() string { return tempDir },
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
 		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "@54").socketPath
+			want := tmuxWindowPaths(tempDir, "tmux-session:$1").socketPath
 			if path != want {
 				t.Fatalf("dial path = %q, want %q", path, want)
 			}
-			return client, nil
+			return &fakeBModeClient{
+				sessionList: []wire.SessionSummary{{ID: 77}},
+			}, nil
 		},
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
+		tmux:    tmux.run,
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "@54")
+	paths := tmuxWindowPaths(tempDir, "tmux-session:$1")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -252,122 +303,18 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 		t.Fatalf("writeResidentPaneID() error = %v", err)
 	}
 
-	if err := runBModeWith(config{bmode: true, autoindent: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := client.bootstrapCalls, [][]string{{"a.txt"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
+	if got, want := tmux.calls[0], []string{"display-message", "-p", "#{session_id}"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first tmux call = %#v, want %#v", got, want)
 	}
 }
 
-func TestRunBModePlumbsAddressedTargetToResidentPane(t *testing.T) {
+func TestRunBModeSplitsNewAttachPaneWhenNoResidentExists(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	client := &fakeBModeClient{}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			case "TMUX_PANE":
-				return "%4"
-			default:
-				return ""
-			}
-		},
-		tempDir: func() string { return tempDir },
-		dial:    func(string) (bModeClient, error) { return client, nil },
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-	paths := tmuxWindowPaths(tempDir, "@2")
-	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
-		t.Fatalf("writeResidentPaneID() error = %v", err)
-	}
-
-	if err := runBModeWith(config{bmode: true, files: []string{"README.md:12:4"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
-	if got, want := client.bootstrapCalls, [][]string{{"README.md"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
-	}
-	if got, want := client.openCalls, [][]string(nil); !reflect.DeepEqual(got, want) {
-		t.Fatalf("OpenFiles() calls = %#v, want %#v", got, want)
-	}
-	if got, want := client.openTargets, []clienttarget.Target{{Path: "README.md", Address: "12+#3"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("OpenTarget() calls = %#v, want %#v", got, want)
-	}
-	if len(client.focusCalls) != 0 {
-		t.Fatalf("FocusFile() calls = %#v, want none", client.focusCalls)
-	}
-	if len(client.addresses) != 0 {
-		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
-	}
-}
-
-func TestRunBModeFocusesExistingResidentFileInsteadOfOpeningNameless(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	client := &fakeBModeClient{
-		menuFiles: []wire.MenuFile{
-			{ID: 7, Name: "todo.txt", Current: true},
-		},
-		nextID: 7,
-	}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			case "TMUX_PANE":
-				return "%4"
-			default:
-				return ""
-			}
-		},
-		tempDir: func() string { return tempDir },
-		dial:    func(string) (bModeClient, error) { return client, nil },
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-	paths := tmuxWindowPaths(tempDir, "@2")
-	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
-		t.Fatalf("writeResidentPaneID() error = %v", err)
-	}
-
-	if err := runBModeWith(config{bmode: true, files: []string{"todo.txt:/unicode"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
-	if len(client.bootstrapCalls) != 0 {
-		t.Fatalf("Bootstrap() calls = %#v, want none", client.bootstrapCalls)
-	}
-	if len(client.openCalls) != 0 {
-		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
-	}
-	if got, want := client.openTargets, []clienttarget.Target{{Path: "todo.txt", Address: "/unicode"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("OpenTarget() calls = %#v, want %#v", got, want)
-	}
-	if len(client.focusCalls) != 0 {
-		t.Fatalf("FocusFile() calls = %#v, want none", client.focusCalls)
-	}
-	if len(client.addresses) != 0 {
-		t.Fatalf("SetAddress() calls = %#v, want none", client.addresses)
-	}
-}
-
-func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
-	t.Parallel()
-
+	tempDir := shortTempDir(t)
 	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
 	rt := bModeRuntime{
 		getenv: func(key string) string {
@@ -382,69 +329,23 @@ func TestRunBModeSplitsNewPaneWhenNoResidentExists(t *testing.T) {
 		},
 		getwd:      func() (string, error) { return "/tmp/work", nil },
 		executable: func() (string, error) { return "/tmp/bin/ion", nil },
-		tempDir:    t.TempDir,
-		dial: func(string) (bModeClient, error) {
-			return nil, errors.New("dial unix: connect: no such file or directory")
-		},
-		tmux: func(args ...string) (string, error) {
-			return tmux.run(args...)
-		},
-		runTerm: runTermWithTargets,
+		tempDir:    func() string { return tempDir },
+		spawn:      testResidentSpawn(t),
+		dial:       func(string) (bModeClient, error) { return nil, os.ErrNotExist },
+		tmux:       func(args ...string) (string, error) { return tmux.run(args...) },
+		runTerm:    runTermWithTargets,
 	}
 
 	if err := runBModeWith(config{bmode: true, autoindent: true, files: []string{"a.txt", "b b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	foundSplit := false
-	for _, call := range tmux.calls {
-		if len(call) < 9 || call[0] != "split-window" {
-			continue
-		}
-		foundSplit = true
-		if got, want := call[1:8], []string{"-t", "%4", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("split-window args = %#v, want %#v", got, want)
-		}
-		if got := call[8]; !strings.Contains(got, "exec '/tmp/bin/ion' -b-serve -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
-			t.Fatalf("split-window command = %q, want hidden b-serve exec", got)
-		}
-	}
-	if !foundSplit {
-		t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
-	}
-}
-
-func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
-	t.Parallel()
-
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			case "TMUX_PANE":
-				return "%4"
-			default:
-				return ""
-			}
-		},
-		getwd:      func() (string, error) { return "/tmp/work", nil },
-		executable: func() (string, error) { return "/tmp/bin/ion", nil },
-		tempDir:    t.TempDir,
-		dial: func(string) (bModeClient, error) {
-			return nil, errors.New("dial unix: connect: no such file or directory")
-		},
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-
-	if err := runBModeWith(config{bmode: true, autoindent: false, files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
 	for _, call := range tmux.calls {
 		if len(call) >= 9 && call[0] == "split-window" {
-			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -no-autoindent -b-serve -- '/tmp/work/a.txt'") {
-				t.Fatalf("split-window command = %q, want -no-autoindent propagated to b-serve", call[8])
+			if got, want := call[1:8], []string{"-t", "%4", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("split-window args = %#v, want %#v", got, want)
+			}
+			if got := call[8]; !strings.Contains(got, "exec '/tmp/bin/ion' -A -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
+				t.Fatalf("split-window command = %q, want attach exec", got)
 			}
 			return
 		}
@@ -452,9 +353,99 @@ func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
 	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 }
 
-func TestRunBModeSplitPassesPaneOverride(t *testing.T) {
+func TestRunNewPaneModeAlwaysSplitsNewAttachPane(t *testing.T) {
 	t.Parallel()
 
+	tempDir := shortTempDir(t)
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		tempDir:    func() string { return tempDir },
+		spawn:      testResidentSpawn(t),
+		tmux:       func(args ...string) (string, error) { return tmux.run(args...) },
+	}
+
+	if err := runNewPaneModeWith(config{nmode: true, autoindent: true, files: []string{"a.txt", "b b.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runNewPaneModeWith() error = %v", err)
+	}
+	for _, call := range tmux.calls {
+		if len(call) >= 9 && call[0] == "split-window" {
+			if got, want := call[1:8], []string{"-t", "%4", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("split-window args = %#v, want %#v", got, want)
+			}
+			if got := call[8]; !strings.Contains(got, "exec '/tmp/bin/ion' -A -- '/tmp/work/a.txt' '/tmp/work/b b.txt'") {
+				t.Fatalf("split-window command = %q, want attach exec", got)
+			}
+			return
+		}
+	}
+	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
+}
+
+func TestBuildAttachCommandPropagatesAutoIndentSetting(t *testing.T) {
+	t.Parallel()
+
+	got := buildAttachCommand("/tmp/bin/ion", config{autoindent: false, files: []string{"/tmp/work/a.txt"}})
+	want := "exec '/tmp/bin/ion' -A -no-autoindent -- '/tmp/work/a.txt'"
+	if got != want {
+		t.Fatalf("buildAttachCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestRunBModeSplitPassesAutoIndentFlagWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	tempDir := shortTempDir(t)
+	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		tempDir:    func() string { return tempDir },
+		spawn:      testResidentSpawn(t),
+		dial:       func(string) (bModeClient, error) { return nil, os.ErrNotExist },
+		tmux:       func(args ...string) (string, error) { return tmux.run(args...) },
+		runTerm:    runTermWithTargets,
+	}
+
+	if err := runBModeWith(config{bmode: true, autoindent: false, files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	for _, call := range tmux.calls {
+		if len(call) >= 9 && call[0] == "split-window" {
+			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -A -no-autoindent -- '/tmp/work/a.txt'") {
+				t.Fatalf("split-window command = %q, want -no-autoindent in attach exec", call[8])
+			}
+			return
+		}
+	}
+	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
+}
+
+func TestRunBModeSplitUsesPaneOverride(t *testing.T) {
+	t.Parallel()
+
+	tempDir := shortTempDir(t)
 	tmux := &fakeTmux{
 		sessionID: "$1",
 		windowID:  "@2",
@@ -477,15 +468,14 @@ func TestRunBModeSplitPassesPaneOverride(t *testing.T) {
 		},
 		getwd:      func() (string, error) { return "/tmp/work", nil },
 		executable: func() (string, error) { return "/tmp/bin/ion", nil },
-		tempDir:    t.TempDir,
-		dial: func(string) (bModeClient, error) {
-			return nil, errors.New("dial unix: connect: no such file or directory")
-		},
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
+		tempDir:    func() string { return tempDir },
+		spawn:      testResidentSpawn(t),
+		dial:       func(string) (bModeClient, error) { return nil, os.ErrNotExist },
+		tmux:       func(args ...string) (string, error) { return tmux.run(args...) },
+		runTerm:    runTermWithTargets,
 	}
 
-	if err := runBModeWith(config{bmode: true, autoindent: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
+	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	for _, call := range tmux.calls {
@@ -493,157 +483,17 @@ func TestRunBModeSplitPassesPaneOverride(t *testing.T) {
 			if got, want := call[1:8], []string{"-t", "%54", "-c", "/tmp/work", "-P", "-F", "#{pane_id}"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("split-window args = %#v, want %#v", got, want)
 			}
-			if !strings.Contains(call[8], "exec '/tmp/bin/ion' -p '%54' -b-serve -- '/tmp/work/a.txt'") {
-				t.Fatalf("split-window command = %q, want -p propagated to b-serve", call[8])
-			}
 			return
 		}
 	}
 	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 }
 
-func TestRunBModeUsesPaneOverrideWithoutTMUXPANE(t *testing.T) {
+func TestBuildBModeScriptPreservesWhitespaceTargets(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	tmux := &fakeTmux{
-		sessionID: "$1",
-		windowID:  "@2",
-		paneWindows: map[string]string{
-			"%54": "@54",
-		},
-		splitPane: "%9",
-	}
-	client := &fakeBModeClient{}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			default:
-				return ""
-			}
-		},
-		tempDir: func() string { return tempDir },
-		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "@54").socketPath
-			if path != want {
-				t.Fatalf("dial path = %q, want %q", path, want)
-			}
-			return client, nil
-		},
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-	paths := tmuxWindowPaths(tempDir, "@54")
-	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
-		t.Fatalf("writeResidentPaneID() error = %v", err)
-	}
-
-	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
-	if got, want := client.bootstrapCalls, [][]string{{"a.txt"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
-	}
-}
-
-func TestRunBModeBootstrapsMissingResidentFileBeforeFocus(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	client := &fakeBModeClient{
-		menuFiles: []wire.MenuFile{
-			{ID: 7, Name: "todo.txt", Current: true},
-		},
-		nextID: 7,
-	}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			case "TMUX_PANE":
-				return "%4"
-			default:
-				return ""
-			}
-		},
-		tempDir: func() string { return tempDir },
-		dial:    func(string) (bModeClient, error) { return client, nil },
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-	paths := tmuxWindowPaths(tempDir, "@2")
-	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
-		t.Fatalf("writeResidentPaneID() error = %v", err)
-	}
-
-	if err := runBModeWith(config{bmode: true, files: []string{"missing.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
-	if got, want := client.bootstrapCalls, [][]string{{"missing.txt"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
-	}
-	if got, want := client.focusCalls, []int{8}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
-	}
-	if len(client.openCalls) != 0 {
-		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
-	}
-}
-
-func TestRunBModeResolvesRelativeTargetsAgainstCallerCWDForResidentPane(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	callerWD := filepath.Join(tempDir, "dir2")
-	if err := os.MkdirAll(callerWD, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	tmux := &fakeTmux{sessionID: "$1", windowID: "@2", splitPane: "%9"}
-	client := &fakeBModeClient{}
-	rt := bModeRuntime{
-		getenv: func(key string) string {
-			switch key {
-			case "TMUX":
-				return "/tmp/tmux.sock"
-			case "TMUX_PANE":
-				return "%4"
-			default:
-				return ""
-			}
-		},
-		getwd:   func() (string, error) { return callerWD, nil },
-		tempDir: func() string { return tempDir },
-		dial:    func(string) (bModeClient, error) { return client, nil },
-		tmux:    func(args ...string) (string, error) { return tmux.run(args...) },
-		runTerm: runTermWithTargets,
-	}
-	paths := tmuxWindowPaths(tempDir, "@2")
-	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
-		t.Fatalf("writeResidentPaneID() error = %v", err)
-	}
-
-	if err := runBModeWith(config{bmode: true, files: []string{"other.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
-		t.Fatalf("runBModeWith() error = %v", err)
-	}
-	wantPath := filepath.Join(callerWD, "other.txt")
-	if got, want := client.bootstrapCalls, [][]string{{wantPath}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Bootstrap() calls = %#v, want %#v", got, want)
-	}
-	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
+	if got, want := buildBModeScript([]string{"/tmp/work/a b.txt"}), "B /tmp/work/a b.txt\n"; got != want {
+		t.Fatalf("buildBModeScript() = %q, want %q", got, want)
 	}
 }
 
@@ -664,9 +514,6 @@ func TestBootstrapTargetSessionKeepsMissingTargetsFocusable(t *testing.T) {
 	}
 	if got, want := client.focusCalls, []int{1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("FocusFile() calls = %#v, want %#v", got, want)
-	}
-	if len(client.openCalls) != 0 {
-		t.Fatalf("OpenFiles() calls = %#v, want none", client.openCalls)
 	}
 }
 
@@ -694,7 +541,7 @@ func TestParseArgsRecognizesBMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if !cfg.bmode || cfg.download || cfg.bserve {
+	if !cfg.bmode || cfg.download || cfg.bserve || cfg.cmode || cfg.nmode || cfg.serve {
 		t.Fatalf("config = %#v, want bmode only", cfg)
 	}
 	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
@@ -712,7 +559,34 @@ func TestParseArgsRecognizesAttachMode(t *testing.T) {
 	if !cfg.attach {
 		t.Fatalf("config.attach = false, want true")
 	}
+}
+
+func TestParseArgsRecognizesNewPaneMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-N", "alpha"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.nmode {
+		t.Fatalf("config.nmode = false, want true")
+	}
 	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsRecognizesCommandMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-C", "Q"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.cmode {
+		t.Fatalf("config.cmode = false, want true")
+	}
+	if got, want := cfg.files, []string{"Q"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("files = %#v, want %#v", got, want)
 	}
 }
@@ -726,9 +600,6 @@ func TestParseArgsDisablesAutoIndentWithLongFlag(t *testing.T) {
 	}
 	if cfg.autoindent {
 		t.Fatalf("config.autoindent = true, want false")
-	}
-	if got, want := cfg.files, []string{"alpha"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("files = %#v, want %#v", got, want)
 	}
 }
 
@@ -745,4 +616,67 @@ func TestParseArgsRecognizesPaneOverride(t *testing.T) {
 	if !cfg.bmode {
 		t.Fatalf("config.bmode = false, want true")
 	}
+}
+
+func TestParseArgsRecognizesPaneOverrideForNewPaneMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-p", "%54", "-N", "alpha"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if got, want := cfg.paneID, "%54"; got != want {
+		t.Fatalf("config.paneID = %q, want %q", got, want)
+	}
+	if !cfg.nmode {
+		t.Fatalf("config.nmode = false, want true")
+	}
+}
+
+func testResidentSpawn(t *testing.T) func(config, string) error {
+	t.Helper()
+
+	return func(cfg config, socketPath string) error {
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+			return err
+		}
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			return err
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.Close()
+			}
+		}()
+		t.Cleanup(func() {
+			_ = listener.Close()
+			<-done
+			_ = os.Remove(socketPath)
+		})
+		return nil
+	}
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+
+	base := "/tmp"
+	if info, err := os.Stat(base); err != nil || !info.IsDir() {
+		base = os.TempDir()
+	}
+	dir, err := os.MkdirTemp(base, "ion-b-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return dir
 }

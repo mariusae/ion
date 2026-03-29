@@ -1,5 +1,7 @@
 package wire
 
+import "time"
+
 // BufferView is the server-owned text and current selection state presented to
 // the terminal client.
 type BufferView struct {
@@ -27,6 +29,30 @@ type NavigationEntry struct {
 type NavigationStack struct {
 	Entries []NavigationEntry
 	Current int
+}
+
+// SessionSummary describes one live server-managed session.
+type SessionSummary struct {
+	ID               uint64
+	Owner            bool
+	Controlled       bool
+	Taken            bool
+	CurrentFile      string
+	LastActiveUnixMs int64
+}
+
+// Invocation describes one delegated extension command invocation.
+type Invocation struct {
+	ID        uint64
+	SessionID uint64
+	Script    string
+}
+
+func (s SessionSummary) LastActive() time.Time {
+	if s.LastActiveUnixMs == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(s.LastActiveUnixMs)
 }
 
 // TermService is the initial server-side surface needed by the terminal client.

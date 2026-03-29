@@ -14,7 +14,6 @@ import (
 	clienttarget "ion/internal/client/target"
 	"ion/internal/client/term"
 	"ion/internal/proto/wire"
-	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
 
@@ -26,7 +25,7 @@ type tmuxContext struct {
 }
 
 func (c tmuxContext) Key() string {
-	return c.WindowID
+	return "tmux-session:" + c.SessionID
 }
 
 type bModePaths struct {
@@ -41,6 +40,10 @@ type bModeClient interface {
 	OpenFiles(files []string) (wire.BufferView, error)
 	OpenTarget(path, address string) (wire.BufferView, error)
 	SetAddress(expr string) (wire.BufferView, error)
+	ListSessions() ([]wire.SessionSummary, error)
+	Take(id uint64) error
+	Return(id uint64) error
+	ExecuteSession(id uint64, script string) (bool, error)
 	Close() error
 }
 
@@ -76,13 +79,31 @@ func (c *wireBModeClient) Close() error {
 	return c.client.Close()
 }
 
+func (c *wireBModeClient) ListSessions() ([]wire.SessionSummary, error) {
+	return c.client.ListSessions()
+}
+
+func (c *wireBModeClient) Take(id uint64) error {
+	return c.client.Take(id)
+}
+
+func (c *wireBModeClient) Return(id uint64) error {
+	return c.client.Return(id)
+}
+
+func (c *wireBModeClient) ExecuteSession(id uint64, script string) (bool, error) {
+	return c.client.Session(id).Execute(script)
+}
+
 type bModeRuntime struct {
 	getenv     func(string) string
 	getwd      func() (string, error)
 	executable func() (string, error)
 	tempDir    func() string
+	spawn      func(config, string) error
 	dial       func(path string) (bModeClient, error)
 	tmux       func(args ...string) (string, error)
+	runAttach  func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
 	runTerm    func(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
@@ -99,13 +120,18 @@ func defaultBModeRuntime() bModeRuntime {
 			}
 			return &wireBModeClient{client: client}, nil
 		},
-		tmux:    runTmuxCommand,
-		runTerm: runTermWithTargets,
+		tmux:      runTmuxCommand,
+		runAttach: runAttachMode,
+		runTerm:   runTermWithTargets,
 	}
 }
 
 func runBMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	return runBModeWith(cfg, stdin, stdout, stderr, defaultBModeRuntime())
+}
+
+func runNewPaneMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	return runNewPaneModeWith(cfg, stdin, stdout, stderr, defaultBModeRuntime())
 }
 
 func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bModeRuntime) error {
@@ -129,39 +155,56 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	client, err := rt.dial(paths.socketPath)
 	if err == nil {
 		defer client.Close()
-		if len(effectiveCfg.files) > 0 {
-			targets := clienttarget.ParseAll(effectiveCfg.files)
-			if err := bootstrapMissingTargets(client, targets); err != nil {
-				return err
-			}
-			if _, err := clienttarget.Open(client, effectiveCfg.files); err != nil {
-				return err
-			}
+		if len(effectiveCfg.files) == 0 {
+			return focusResidentPane(paths, ctx, rt.tmux)
+		}
+		sessionID, ok := selectBModeSession(client)
+		if !ok {
+			return splitAttachPane(ctx, effectiveCfg, rt)
+		}
+		if err := client.Take(sessionID); err != nil {
+			return splitAttachPane(ctx, effectiveCfg, rt)
+		}
+		defer func() {
+			_ = client.Return(sessionID)
+		}()
+		if _, err := client.ExecuteSession(sessionID, buildBModeScript(effectiveCfg.files)); err != nil {
+			return err
 		}
 		return focusResidentPane(paths, ctx, rt.tmux)
 	}
-	cleanupBModePaths(paths)
+	if !isRetryableResidentDialError(err) {
+		return err
+	}
+	if _, err := ensureResidentServer(cfg, residentRuntimeFromBMode(rt)); err != nil {
+		return err
+	}
+	return splitAttachPane(ctx, effectiveCfg, rt)
+}
 
-	exe, err := rt.executable()
+func runNewPaneModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bModeRuntime) error {
+	ctx, ok, err := detectTmuxContext(rt, cfg.paneID)
 	if err != nil {
 		return err
 	}
-	wd, err := rt.getwd()
-	if err != nil {
-		return err
+	if !ok {
+		if rt.runAttach == nil {
+			return runAttachMode(cfg, stdin, stdout, stderr)
+		}
+		return rt.runAttach(cfg, stdin, stdout, stderr)
 	}
-	cmd := buildBServeCommand(exe, effectiveCfg)
-	paneID, err := rt.tmux("split-window", "-t", ctx.TargetPaneID, "-c", wd, "-P", "-F", "#{pane_id}", cmd)
-	if err != nil {
-		return err
-	}
-	paneID = strings.TrimSpace(paneID)
-	if paneID != "" {
-		if _, err := rt.tmux("select-pane", "-t", paneID); err != nil {
+	effectiveCfg := cfg
+	if rt.getwd != nil {
+		wd, err := rt.getwd()
+		if err != nil {
 			return err
 		}
+		effectiveCfg.files = resolveBModeTargets(cfg.files, wd)
 	}
-	return nil
+	if _, err := ensureResidentServer(cfg, residentRuntimeFromBMode(rt)); err != nil {
+		return err
+	}
+	return splitAttachPane(ctx, effectiveCfg, rt)
 }
 
 func resolveBModeTargets(args []string, cwd string) []string {
@@ -215,54 +258,7 @@ func formatResolvedNumericAddress(addr string) (line int, colPlusOne int, ok boo
 }
 
 func runBServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
-	rt := defaultBModeRuntime()
-	ctx, ok, err := detectTmuxContext(rt, cfg.paneID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("-b-serve requires tmux")
-	}
-	paths := tmuxWindowPaths(rt.tempDir(), ctx.Key())
-	cleanupBModePaths(paths)
-	if err := os.MkdirAll(filepath.Dir(paths.socketPath), 0o700); err != nil {
-		return err
-	}
-	if err := writeResidentPaneID(paths.panePath, ctx.PaneID); err != nil {
-		return err
-	}
-	defer cleanupBModePaths(paths)
-
-	capture := term.NewOutputCapture(stdout, stderr)
-	ws := workspace.NewWithAutoIndent(cfg.autoindent)
-	targets := clienttarget.ParseAll(cfg.files)
-	if shouldPreloadAddressedStartup(targets) {
-		if err := preloadTargetWorkspace(ws, targets, capture.Stdout(), capture.Stderr()); err != nil {
-			return err
-		}
-	}
-	refresh := make(chan struct{}, 1)
-	server := transport.NewWithNotifier(ws, func() {
-		select {
-		case refresh <- struct{}{}:
-		default:
-		}
-	})
-	return withServerSocketClients(server, paths.socketPath, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client, interruptClient *clientsession.Client) error {
-		if !shouldPreloadAddressedStartup(targets) {
-			if err := bootstrapTargetSession(client, targets); err != nil {
-				return err
-			}
-		}
-		if _, err := clienttarget.Open(client, cfg.files); err != nil {
-			return err
-		}
-		return term.RunBootstrapped(stdin, stdout, stderr, client, capture, term.Options{
-			AutoIndent: cfg.autoindent,
-			Refresh:    refresh,
-			Interrupt:  interruptClient.Interrupt,
-		})
-	})
+	return runAttachMode(cfg, stdin, stdout, stderr)
 }
 
 func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool, error) {
@@ -294,23 +290,28 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 }
 
 func tmuxDisplay(tmux func(args ...string) (string, error), target, format string) (string, error) {
-	out, err := tmux("display-message", "-p", "-t", target, format)
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, format)
+	out, err := tmux(args...)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
 }
 
-func tmuxWindowPaths(tempDir, key string) bModePaths {
-	base := hashedPathBase("ion-b", key)
+func tmuxWindowPaths(tempDir, key string) residentPaths {
+	base := hashedPathBase(residentPathVersionPrefix, key)
 	dir := filepath.Join(tempDir, "ion")
-	return bModePaths{
+	return residentPaths{
 		socketPath: filepath.Join(dir, base+".sock"),
 		panePath:   filepath.Join(dir, base+".pane"),
 	}
 }
 
-func cleanupBModePaths(paths bModePaths) {
+func cleanupBModePaths(paths residentPaths) {
 	_ = os.Remove(paths.socketPath)
 	_ = os.Remove(paths.panePath)
 }
@@ -367,34 +368,102 @@ func writeTextFile(path, content string) error {
 	return nil
 }
 
-func focusResidentPane(paths bModePaths, ctx tmuxContext, tmux func(args ...string) (string, error)) error {
+func focusResidentPane(paths residentPaths, ctx tmuxContext, tmux func(args ...string) (string, error)) error {
 	paneID, err := readResidentPaneID(paths.panePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, err := tmux("select-window", "-t", ctx.WindowID); err != nil {
+	if paneID == "" {
+		if _, err := tmux("select-window", "-t", ctx.WindowID); err != nil {
+			return err
+		}
+		return nil
+	}
+	windowID, err := tmuxDisplay(tmux, paneID, "#{window_id}")
+	if err != nil {
 		return err
 	}
-	if paneID == "" {
-		return nil
+	if windowID == "" {
+		windowID = ctx.WindowID
+	}
+	if _, err := tmux("select-window", "-t", windowID); err != nil {
+		return err
 	}
 	_, err = tmux("select-pane", "-t", paneID)
 	return err
 }
 
-func buildBServeCommand(exe string, cfg config) string {
+func buildAttachCommand(exe string, cfg config) string {
 	args := []string{shellQuote(exe)}
+	args = append(args, "-A")
 	if !cfg.autoindent {
 		args = append(args, "-no-autoindent")
 	}
-	if cfg.paneID != "" {
-		args = append(args, "-p", shellQuote(cfg.paneID))
-	}
-	args = append(args, "-b-serve", "--")
+	args = append(args, "--")
 	for _, file := range cfg.files {
 		args = append(args, shellQuote(file))
 	}
 	return "exec " + strings.Join(args, " ")
+}
+
+func buildBModeScript(files []string) string {
+	if len(files) == 0 {
+		return "\n"
+	}
+	return "B " + strings.Join(files, " ") + "\n"
+}
+
+func selectBModeSession(client bModeClient) (uint64, bool) {
+	if client == nil {
+		return 0, false
+	}
+	sessions, err := client.ListSessions()
+	if err != nil {
+		return 0, false
+	}
+	for _, session := range sessions {
+		if session.Taken {
+			continue
+		}
+		if session.ID == 0 {
+			continue
+		}
+		return session.ID, true
+	}
+	return 0, false
+}
+
+func splitAttachPane(ctx tmuxContext, cfg config, rt bModeRuntime) error {
+	exe, err := rt.executable()
+	if err != nil {
+		return err
+	}
+	wd, err := rt.getwd()
+	if err != nil {
+		return err
+	}
+	cmd := buildAttachCommand(exe, cfg)
+	paneID, err := rt.tmux("split-window", "-t", ctx.TargetPaneID, "-c", wd, "-P", "-F", "#{pane_id}", cmd)
+	if err != nil {
+		return err
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return nil
+	}
+	_, err = rt.tmux("select-pane", "-t", paneID)
+	return err
+}
+
+func residentRuntimeFromBMode(rt bModeRuntime) residentRuntime {
+	return residentRuntime{
+		getenv:     rt.getenv,
+		getwd:      rt.getwd,
+		tempDir:    rt.tempDir,
+		tmux:       rt.tmux,
+		executable: rt.executable,
+		spawn:      rt.spawn,
+	}
 }
 
 func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -408,7 +477,7 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 	}
 	return withLocalServerClients(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client, interruptClient *clientsession.Client) error {
 		if !shouldPreloadAddressedStartup(targets) {
-			if err := bootstrapTargetSession(client, targets); err != nil {
+			if err := bootstrapTargetSession(&wireBModeClient{client: client}, targets); err != nil {
 				return err
 			}
 		}

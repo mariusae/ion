@@ -1810,3 +1810,36 @@ func TestReadBracketedPaste(t *testing.T) {
 		t.Fatalf("readBracketedPaste() = %q, want %q", string(got), want)
 	}
 }
+
+func TestExtractRawCommandAcceptsServerQuitAliases(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		pending string
+		final   bool
+		want    string
+		ok      bool
+	}{
+		{name: "plain q alias", pending: "Q\n", want: ":ion:Q\n", ok: true},
+		{name: "namespaced q", pending: ":ion:Q\n", want: ":ion:Q\n", ok: true},
+		{name: "incomplete alias", pending: "Q", final: false, ok: false},
+		{name: "ordinary command", pending: "B README.md\n", want: "", ok: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, consumed, ok := extractRawCommand([]rune(tc.pending), tc.final)
+			if ok != tc.ok {
+				t.Fatalf("extractRawCommand() ok = %v, want %v", ok, tc.ok)
+			}
+			if !ok {
+				return
+			}
+			if got != tc.want {
+				t.Fatalf("extractRawCommand() = %q, want %q", got, tc.want)
+			}
+			if consumed != len([]rune(tc.pending)) {
+				t.Fatalf("extractRawCommand() consumed = %d, want %d", consumed, len([]rune(tc.pending)))
+			}
+		})
+	}
+}

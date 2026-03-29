@@ -136,14 +136,19 @@ func TestClientInterruptStopsRunningShellCommand(t *testing.T) {
 	defer client.Close()
 
 	interruptClient, err := DialUnix(socketPath, io.Discard, io.Discard)
-	if err != nil {
-		t.Fatalf("DialUnix(interrupt) error = %v", err)
-	}
-	defer interruptClient.Close()
-
 	if err := client.Bootstrap(nil); err != nil {
 		t.Fatalf("Bootstrap(nil) error = %v", err)
 	}
+	session := client.CurrentSession()
+	if session == nil {
+		t.Fatal("CurrentSession() = nil after Bootstrap")
+	}
+	interruptClient, err = DialUnixAs(socketPath, client.ID(), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnixAs(interrupt) error = %v", err)
+	}
+	defer interruptClient.Close()
+	interruptSession := interruptClient.Session(session.ID())
 
 	done := make(chan error, 1)
 	go func() {
@@ -165,8 +170,8 @@ func TestClientInterruptStopsRunningShellCommand(t *testing.T) {
 			}
 			return
 		case <-ticker.C:
-			if err := interruptClient.Interrupt(); err != nil {
-				t.Fatalf("Interrupt() error = %v", err)
+			if err := interruptSession.Cancel(); err != nil {
+				t.Fatalf("Cancel() error = %v", err)
 			}
 		case <-deadline:
 			t.Fatal("Execute(!sleep 10) did not stop after interrupt")
@@ -253,6 +258,163 @@ func TestClientsKeepIndependentCurrentFileSelections(t *testing.T) {
 	}
 	if got, want := view2.Name, fileA; got != want {
 		t.Fatalf("client2 current file after client1 change = %q, want %q", got, want)
+	}
+}
+
+func TestClientCanTakeReturnForeignSession(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(fileA, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("beta\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.txt) error = %v", err)
+	}
+
+	socketPath, cleanup, err := testSocketPath()
+	if err != nil {
+		t.Fatalf("testSocketPath() error = %v", err)
+	}
+	defer cleanup()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	server := transport.New(workspace.New())
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		if err := <-serverErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	}()
+
+	owner, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(owner) error = %v", err)
+	}
+	defer owner.Close()
+	owned, err := owner.NewSession()
+	if err != nil {
+		t.Fatalf("owner.NewSession() error = %v", err)
+	}
+	if _, err := owned.Execute("B " + fileA + "\n"); err != nil {
+		t.Fatalf("owned.Execute(B a.txt) error = %v", err)
+	}
+
+	taker, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(taker) error = %v", err)
+	}
+	defer taker.Close()
+
+	sessions, err := taker.ListSessions()
+	if err != nil {
+		t.Fatalf("taker.ListSessions() error = %v", err)
+	}
+	found := false
+	for _, session := range sessions {
+		if session.ID != owned.ID() {
+			continue
+		}
+		found = true
+		if session.Owner {
+			t.Fatal("foreign session reported Owner=true")
+		}
+		if session.Taken {
+			t.Fatal("fresh foreign session reported Taken=true")
+		}
+	}
+	if !found {
+		t.Fatalf("owned session %d not present in session list %#v", owned.ID(), sessions)
+	}
+
+	if err := taker.Take(owned.ID()); err != nil {
+		t.Fatalf("taker.Take() error = %v", err)
+	}
+	if _, err := taker.Session(owned.ID()).Execute("B " + fileB + "\n"); err != nil {
+		t.Fatalf("foreign Execute(B b.txt) error = %v", err)
+	}
+	if err := taker.Return(owned.ID()); err != nil {
+		t.Fatalf("taker.Return() error = %v", err)
+	}
+
+	view, err := owned.CurrentView()
+	if err != nil {
+		t.Fatalf("owned.CurrentView() error = %v", err)
+	}
+	if got, want := view.Name, fileB; got != want {
+		t.Fatalf("owned current file = %q, want %q", got, want)
+	}
+}
+
+func TestClientExecuteSessionListCommand(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fileA := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(fileA, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.txt) error = %v", err)
+	}
+
+	socketPath, cleanup, err := testSocketPath()
+	if err != nil {
+		t.Fatalf("testSocketPath() error = %v", err)
+	}
+	defer cleanup()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	server := transport.New(workspace.New())
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		if err := <-serverErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	}()
+
+	owner, err := DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(owner) error = %v", err)
+	}
+	defer owner.Close()
+	owned, err := owner.NewSession()
+	if err != nil {
+		t.Fatalf("owner.NewSession() error = %v", err)
+	}
+	if _, err := owned.Execute("B " + fileA + "\n"); err != nil {
+		t.Fatalf("owned.Execute(B a.txt) error = %v", err)
+	}
+
+	var stderr bytes.Buffer
+	client, err := DialUnix(socketPath, io.Discard, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix(client) error = %v", err)
+	}
+	defer client.Close()
+
+	cont, err := client.Execute(":sess:list\n")
+	if err != nil {
+		t.Fatalf("Execute(:sess:list) error = %v", err)
+	}
+	if !cont {
+		t.Fatal("Execute(:sess:list) = stop, want continue")
+	}
+	if got := stderr.String(); !strings.Contains(got, "\t-\t"+fileA+"\n") {
+		t.Fatalf("stderr = %q, want session list entry for %q", got, fileA)
 	}
 }
 

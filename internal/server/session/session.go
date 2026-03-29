@@ -3,10 +3,11 @@ package session
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
-	clienttarget "ion/internal/client/target"
+	ionaddr "ion/internal/core/addr"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 	"ion/internal/server/workspace"
@@ -42,6 +43,26 @@ func NewDownload(ws *workspace.Workspace, stdout, stderr io.Writer) *DownloadSes
 	}
 }
 
+func (s *DownloadSession) BindIO(stdout, stderr io.Writer) func() {
+	if s == nil {
+		return func() {}
+	}
+	previousStdout := s.stdout
+	previousStderr := s.stderr
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	s.stdout = stdout
+	s.stderr = stderr
+	return func() {
+		s.stdout = previousStdout
+		s.stderr = previousStderr
+	}
+}
+
 // ID reports the server-assigned session identifier.
 func (s *DownloadSession) ID() uint64 {
 	if s == nil {
@@ -60,6 +81,9 @@ func (s *DownloadSession) Bootstrap(files []string) error {
 
 // Execute parses and forwards one command script for this client.
 func (s *DownloadSession) Execute(script string) (bool, error) {
+	if isSessionQuitCommand(script) {
+		return false, nil
+	}
 	if handled, view, err := s.executeDemoCommand(script); handled {
 		if err != nil {
 			return false, err
@@ -111,6 +135,15 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 	return ok, nil
 }
 
+func isSessionQuitCommand(script string) bool {
+	switch strings.TrimSpace(script) {
+	case "Q", ":ion:Q":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 	if s == nil || cmd == nil || cmd.Cmdc != 'B' || cmd.Text == nil {
 		return false, nil
@@ -121,7 +154,7 @@ func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 		return false, nil
 	}
 	fields := strings.Fields(rest)
-	targets := clienttarget.ParseAll(fields)
+	targets := parseSessionTargets(fields)
 	hasAddress := false
 	for _, target := range targets {
 		if target.Address != "" {
@@ -132,7 +165,13 @@ func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 	if !hasAddress || len(targets) == 0 {
 		return false, nil
 	}
-	paths := clienttarget.Paths(targets)
+	paths := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if target.Path == "" {
+			continue
+		}
+		paths = append(paths, target.Path)
+	}
 	if err := s.ws.OpenFilesPathsNoNameless(s.state, paths, s.stdout, s.stderr); err != nil {
 		return true, err
 	}
@@ -142,6 +181,118 @@ func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {
 	}
 	_, err := s.ws.SetAddress(s.state, last.Address)
 	return true, err
+}
+
+type sessionTarget struct {
+	Path    string
+	Address string
+}
+
+func parseSessionTargets(args []string) []sessionTarget {
+	targets := make([]sessionTarget, 0, len(args))
+	for _, arg := range args {
+		targets = append(targets, parseSessionTarget(arg))
+	}
+	return targets
+}
+
+func parseSessionTarget(arg string) sessionTarget {
+	if arg == "" {
+		return sessionTarget{}
+	}
+	if path, addr, ok := splitSessionTarget(arg); ok {
+		return sessionTarget{Path: path, Address: addr}
+	}
+	return sessionTarget{Path: arg}
+}
+
+func splitSessionTarget(arg string) (string, string, bool) {
+	for i := 0; i < len(arg); i++ {
+		if arg[i] != ':' {
+			continue
+		}
+		base := arg[:i]
+		suffix := arg[i+1:]
+		if base == "" || suffix == "" {
+			continue
+		}
+		addr, ok := normalizeSessionAddressSuffix(suffix)
+		if !ok {
+			continue
+		}
+		return base, addr, true
+	}
+	return "", "", false
+}
+
+func normalizeSessionAddressSuffix(suffix string) (string, bool) {
+	if suffix == "" || strings.ContainsAny(suffix, " \t\r\n") {
+		return "", false
+	}
+	if addr, ok := normalizeSessionLegacyLineColumn(suffix); ok {
+		return addr, true
+	}
+	if isValidSessionAddressExpr(suffix) {
+		return suffix, true
+	}
+	return "", false
+}
+
+func normalizeSessionLegacyLineColumn(suffix string) (string, bool) {
+	last := strings.LastIndexByte(suffix, ':')
+	if last <= 0 || last+1 >= len(suffix) {
+		if _, err := strconv.Atoi(suffix); err == nil {
+			return suffix, true
+		}
+		return "", false
+	}
+	line, err := strconv.Atoi(suffix[:last])
+	if err != nil {
+		return "", false
+	}
+	col, err := strconv.Atoi(suffix[last+1:])
+	if err != nil {
+		return "", false
+	}
+	addr := strconv.Itoa(line)
+	if col > 1 {
+		addr += "+#" + strconv.Itoa(col-1)
+	}
+	return addr, true
+}
+
+func isValidSessionAddressExpr(expr string) bool {
+	parser := cmdlang.NewParser(expr + "\n")
+	cmd, err := parser.Parse()
+	if err != nil || cmd == nil {
+		return false
+	}
+	return cmd.Cmdc == '\n' && cmd.Addr != nil && validateSessionAddr(cmd.Addr)
+}
+
+func validateSessionAddr(a *ionaddr.Addr) bool {
+	if a == nil {
+		return false
+	}
+	if a.Left != nil && !validateSessionAddr(a.Left) {
+		return false
+	}
+	if a.Next != nil && !validateSessionAddr(a.Next) {
+		return false
+	}
+	switch a.Type {
+	case '#', 'l', '.', '$', '\'', '?', '/':
+		return true
+	case ',', ';':
+		return a.Left != nil && a.Next != nil
+	case '+', '-':
+		if a.Next == nil {
+			return true
+		}
+		return validateSessionAddr(a.Next)
+	default:
+		return false
+	}
 }
 
 // TermSession extends a download session with terminal-oriented server methods.

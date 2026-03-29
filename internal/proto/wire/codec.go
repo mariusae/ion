@@ -18,6 +18,14 @@ type Kind uint16
 
 const (
 	KindBootstrapRequest Kind = iota + 1
+	KindConnectRequest
+	KindConnectResponse
+	KindNewSessionRequest
+	KindNewSessionResponse
+	KindSessionListRequest
+	KindSessionListResponse
+	KindTakeSessionRequest
+	KindReturnSessionRequest
 	KindOpenFilesRequest
 	KindOpenTargetRequest
 	KindOKResponse
@@ -42,6 +50,10 @@ const (
 	KindSaveResponse
 	KindBufferUpdateEvent
 	KindMenuUpdateEvent
+	KindNamespaceRegisterRequest
+	KindInvocationWaitRequest
+	KindInvocationWaitResponse
+	KindInvocationFinishRequest
 )
 
 // Frame is the versioned binary envelope shared by all wire messages.
@@ -146,6 +158,28 @@ func DecodeMessage(frame Frame) (any, error) {
 	case KindBootstrapRequest:
 		var msg BootstrapRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindConnectRequest:
+		var msg ConnectRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindConnectResponse:
+		var msg ConnectResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindNewSessionRequest:
+		return &NewSessionRequest{}, nil
+	case KindNewSessionResponse:
+		var msg NewSessionResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindSessionListRequest:
+		return &SessionListRequest{}, nil
+	case KindSessionListResponse:
+		var msg SessionListResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindTakeSessionRequest:
+		var msg TakeSessionRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindReturnSessionRequest:
+		var msg ReturnSessionRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindOpenFilesRequest:
 		var msg OpenFilesRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
@@ -201,6 +235,17 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &SaveRequest{}, nil
 	case KindSaveResponse:
 		var msg SaveResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindNamespaceRegisterRequest:
+		var msg NamespaceRegisterRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindInvocationWaitRequest:
+		return &InvocationWaitRequest{}, nil
+	case KindInvocationWaitResponse:
+		var msg InvocationWaitResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindInvocationFinishRequest:
+		var msg InvocationFinishRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	default:
 		return nil, fmt.Errorf("unknown frame kind %d", frame.Kind)

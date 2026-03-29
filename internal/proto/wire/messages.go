@@ -35,6 +35,402 @@ func (m *BootstrapRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// ConnectRequest binds one transport connection to a logical client id.
+// ClientID == 0 asks the server to allocate a new client.
+type ConnectRequest struct {
+	ClientID uint64
+}
+
+func (m *ConnectRequest) Kind() Kind { return KindConnectRequest }
+
+func (m *ConnectRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.ClientID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *ConnectRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("connect request has trailing data")
+	}
+	m.ClientID = id
+	return nil
+}
+
+// ConnectResponse returns the bound logical client id.
+type ConnectResponse struct {
+	ClientID uint64
+}
+
+func (m *ConnectResponse) Kind() Kind { return KindConnectResponse }
+
+func (m *ConnectResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.ClientID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *ConnectResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("connect response has trailing data")
+	}
+	m.ClientID = id
+	return nil
+}
+
+// NewSessionRequest creates one new owner-backed session for the calling client.
+type NewSessionRequest struct{}
+
+func (m *NewSessionRequest) Kind() Kind { return KindNewSessionRequest }
+
+func (m *NewSessionRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *NewSessionRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("new-session request has trailing data")
+	}
+	return nil
+}
+
+// NewSessionResponse returns the newly allocated session id.
+type NewSessionResponse struct {
+	SessionID uint64
+}
+
+func (m *NewSessionResponse) Kind() Kind { return KindNewSessionResponse }
+
+func (m *NewSessionResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.SessionID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *NewSessionResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("new-session response has trailing data")
+	}
+	m.SessionID = id
+	return nil
+}
+
+// SessionListRequest asks for visible live sessions.
+type SessionListRequest struct{}
+
+func (m *SessionListRequest) Kind() Kind { return KindSessionListRequest }
+
+func (m *SessionListRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *SessionListRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("session-list request has trailing data")
+	}
+	return nil
+}
+
+// SessionListResponse returns visible live sessions.
+type SessionListResponse struct {
+	Sessions []SessionSummary
+}
+
+func (m *SessionListResponse) Kind() Kind { return KindSessionListResponse }
+
+func (m *SessionListResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint32(&b, uint32(len(m.Sessions))); err != nil {
+		return nil, err
+	}
+	for _, sess := range m.Sessions {
+		if err := writeUint64(&b, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := writeBool(&b, sess.Owner); err != nil {
+			return nil, err
+		}
+		if err := writeBool(&b, sess.Controlled); err != nil {
+			return nil, err
+		}
+		if err := writeBool(&b, sess.Taken); err != nil {
+			return nil, err
+		}
+		if err := writeString(&b, sess.CurrentFile); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&b, binary.LittleEndian, sess.LastActiveUnixMs); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
+}
+
+func (m *SessionListResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	n, err := readUint32(r)
+	if err != nil {
+		return err
+	}
+	sessions := make([]SessionSummary, 0, n)
+	for i := uint32(0); i < n; i++ {
+		id, err := readUint64(r)
+		if err != nil {
+			return err
+		}
+		owner, err := readBool(r)
+		if err != nil {
+			return err
+		}
+		controlled, err := readBool(r)
+		if err != nil {
+			return err
+		}
+		taken, err := readBool(r)
+		if err != nil {
+			return err
+		}
+		currentFile, err := readString(r)
+		if err != nil {
+			return err
+		}
+		var lastActive int64
+		if err := binary.Read(r, binary.LittleEndian, &lastActive); err != nil {
+			return err
+		}
+		sessions = append(sessions, SessionSummary{
+			ID:               id,
+			Owner:            owner,
+			Controlled:       controlled,
+			Taken:            taken,
+			CurrentFile:      currentFile,
+			LastActiveUnixMs: lastActive,
+		})
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("session-list response has trailing data")
+	}
+	m.Sessions = sessions
+	return nil
+}
+
+// TakeSessionRequest temporarily transfers control of one owner-backed session
+// to the calling client.
+type TakeSessionRequest struct {
+	SessionID uint64
+}
+
+func (m *TakeSessionRequest) Kind() Kind { return KindTakeSessionRequest }
+
+func (m *TakeSessionRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.SessionID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *TakeSessionRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("take-session request has trailing data")
+	}
+	m.SessionID = id
+	return nil
+}
+
+// ReturnSessionRequest returns control of one taken session to its owner.
+type ReturnSessionRequest struct {
+	SessionID uint64
+}
+
+func (m *ReturnSessionRequest) Kind() Kind { return KindReturnSessionRequest }
+
+func (m *ReturnSessionRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.SessionID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *ReturnSessionRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("return-session request has trailing data")
+	}
+	m.SessionID = id
+	return nil
+}
+
+// NamespaceRegisterRequest claims one extension namespace for the calling client.
+type NamespaceRegisterRequest struct {
+	Namespace string
+}
+
+func (m *NamespaceRegisterRequest) Kind() Kind { return KindNamespaceRegisterRequest }
+
+func (m *NamespaceRegisterRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeString(&b, m.Namespace); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *NamespaceRegisterRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	namespace, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("namespace-register request has trailing data")
+	}
+	m.Namespace = namespace
+	return nil
+}
+
+// InvocationWaitRequest blocks until one registered namespace invocation is ready.
+type InvocationWaitRequest struct{}
+
+func (m *InvocationWaitRequest) Kind() Kind { return KindInvocationWaitRequest }
+
+func (m *InvocationWaitRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *InvocationWaitRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("invocation-wait request has trailing data")
+	}
+	return nil
+}
+
+// InvocationWaitResponse returns one delegated extension command invocation.
+type InvocationWaitResponse struct {
+	Invocation Invocation
+}
+
+func (m *InvocationWaitResponse) Kind() Kind { return KindInvocationWaitResponse }
+
+func (m *InvocationWaitResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.Invocation.ID); err != nil {
+		return nil, err
+	}
+	if err := writeUint64(&b, m.Invocation.SessionID); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Invocation.Script); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *InvocationWaitResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	sessionID, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	script, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("invocation-wait response has trailing data")
+	}
+	m.Invocation = Invocation{
+		ID:        id,
+		SessionID: sessionID,
+		Script:    script,
+	}
+	return nil
+}
+
+// InvocationFinishRequest completes one delegated extension invocation.
+type InvocationFinishRequest struct {
+	InvocationID uint64
+	Err          string
+	Stdout       string
+	Stderr       string
+}
+
+func (m *InvocationFinishRequest) Kind() Kind { return KindInvocationFinishRequest }
+
+func (m *InvocationFinishRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.InvocationID); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Err); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Stdout); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Stderr); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *InvocationFinishRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	invocationID, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	errText, err := readString(r)
+	if err != nil {
+		return err
+	}
+	stdout, err := readString(r)
+	if err != nil {
+		return err
+	}
+	stderr, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("invocation-finish request has trailing data")
+	}
+	m.InvocationID = invocationID
+	m.Err = errText
+	m.Stdout = stdout
+	m.Stderr = stderr
+	return nil
+}
+
 // OpenFilesRequest carries one explicit file-open list for a live terminal
 // client without reparsing shell-style whitespace.
 type OpenFilesRequest struct {
@@ -672,6 +1068,16 @@ func writeUint32(w io.Writer, n uint32) error {
 
 func readUint32(r *bytes.Reader) (uint32, error) {
 	var n uint32
+	err := binary.Read(r, binary.LittleEndian, &n)
+	return n, err
+}
+
+func writeUint64(w io.Writer, n uint64) error {
+	return binary.Write(w, binary.LittleEndian, n)
+}
+
+func readUint64(r *bytes.Reader) (uint64, error) {
+	var n uint64
 	err := binary.Read(r, binary.LittleEndian, &n)
 	return n, err
 }

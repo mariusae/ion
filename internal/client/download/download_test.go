@@ -74,3 +74,27 @@ func TestRunReportsBareUnknownCommandToken(t *testing.T) {
 		t.Fatalf("stderr = %q, want bare unknown command diagnostic", got)
 	}
 }
+
+func TestRunAcceptsServerQuitAliases(t *testing.T) {
+	t.Parallel()
+
+	for _, script := range []string{"Q\n", ":ion:Q\n"} {
+		t.Run(strings.TrimSpace(script), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "a.txt")
+			if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			svc := serversession.NewDownload(workspace.New(), &stdout, &stderr)
+
+			if err := Run([]string{path}, strings.NewReader(script), &stderr, svc); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if got := stderr.String(); strings.Contains(got, "?unknown command") {
+				t.Fatalf("stderr = %q, want quit alias accepted", got)
+			}
+		})
+	}
+}

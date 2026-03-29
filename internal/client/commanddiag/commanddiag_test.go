@@ -14,6 +14,15 @@ func TestRewriteParseErrorRewritesBareWord(t *testing.T) {
 	}
 }
 
+func TestRewriteParseErrorRewritesNamespacedWordCommand(t *testing.T) {
+	t.Parallel()
+
+	err := RewriteParseError(":client\n", fmt.Errorf("unknown command `:'"))
+	if got, want := err.Error(), "unknown command `:client'"; got != want {
+		t.Fatalf("RewriteParseError() = %q, want %q", got, want)
+	}
+}
+
 func TestRewriteParseErrorKeepsSingleRuneParserDiagnostic(t *testing.T) {
 	t.Parallel()
 
@@ -28,6 +37,15 @@ func TestRewriteParseErrorKeepsStructuredSamSyntaxErrors(t *testing.T) {
 
 	err := RewriteParseError("x/foo/\n", fmt.Errorf("pattern expected"))
 	if got, want := err.Error(), "pattern expected"; got != want {
+		t.Fatalf("RewriteParseError() = %q, want %q", got, want)
+	}
+}
+
+func TestRewriteParseErrorKeepsNamespacedCommandsWithArgsUntouched(t *testing.T) {
+	t.Parallel()
+
+	err := RewriteParseError(":help :ns\n", fmt.Errorf("unknown command `:'"))
+	if got, want := err.Error(), "unknown command `:'"; got != want {
 		t.Fatalf("RewriteParseError() = %q, want %q", got, want)
 	}
 }

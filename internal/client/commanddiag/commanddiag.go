@@ -13,7 +13,7 @@ func RewriteParseError(script string, err error) error {
 	if err == nil {
 		return nil
 	}
-	token, ok := bareWordToken(script)
+	token, ok := unknownCommandToken(script)
 	if !ok {
 		return err
 	}
@@ -31,16 +31,25 @@ func PendingScript(pending []rune) string {
 	return string(pending)
 }
 
-func bareWordToken(script string) (string, bool) {
+func unknownCommandToken(script string) (string, bool) {
 	token := strings.TrimSpace(script)
 	if utf8.RuneCountInString(token) <= 1 {
 		return "", false
+	}
+	if strings.HasPrefix(token, ":") {
+		for _, r := range token {
+			if r == ':' || r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+				continue
+			}
+			return "", false
+		}
+		return token, true
 	}
 	for _, r := range token {
 		if unicode.IsSpace(r) {
 			return "", false
 		}
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' {
 			return "", false
 		}
 	}

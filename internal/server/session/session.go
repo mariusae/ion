@@ -94,6 +94,9 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		}
 		return true, nil
 	}
+	if trimmed := strings.TrimSpace(script); strings.HasPrefix(trimmed, ":") {
+		return false, fmt.Errorf("unknown command `%s'", trimmed)
+	}
 
 	runes := []rune(script)
 	s.parser.ResetRunes(runes)

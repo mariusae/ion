@@ -67,6 +67,16 @@ func TestSessionIDsAreDistinct(t *testing.T) {
 	}
 }
 
+func TestDownloadSessionReportsUnknownNamespacedCommand(t *testing.T) {
+	t.Parallel()
+
+	ws := workspace.New()
+	sess := NewDownload(ws, io.Discard, io.Discard)
+	if _, err := sess.Execute(":client\n"); err == nil || err.Error() != "unknown command `:client'" {
+		t.Fatalf("Execute(:client) error = %v, want %q", err, "unknown command `:client'")
+	}
+}
+
 func TestTermSessionNavigationCommandsTrackFileHistory(t *testing.T) {
 	t.Parallel()
 

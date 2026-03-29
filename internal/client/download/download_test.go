@@ -75,6 +75,26 @@ func TestRunReportsBareUnknownCommandToken(t *testing.T) {
 	}
 }
 
+func TestRunReportsUnknownNamespacedCommandToken(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	svc := serversession.NewDownload(workspace.New(), &stdout, &stderr)
+
+	if err := Run([]string{path}, strings.NewReader(":client\nq\n"), &stderr, svc); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "?unknown command `:client'\n") {
+		t.Fatalf("stderr = %q, want namespaced unknown command diagnostic", got)
+	}
+}
+
 func TestRunAcceptsServerQuitAliases(t *testing.T) {
 	t.Parallel()
 

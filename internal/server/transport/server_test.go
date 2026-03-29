@@ -746,6 +746,57 @@ func TestServerNamespaceHelpCommands(t *testing.T) {
 	}
 }
 
+func TestServerReportsUnknownNamespacedCommandToken(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	caller, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+	if err := caller.Bootstrap(nil); err != nil {
+		t.Fatalf("caller.Bootstrap() error = %v", err)
+	}
+
+	if _, err := caller.Execute(":client\n"); err == nil || err.Error() != "unknown command `:client'" {
+		t.Fatalf("Execute(:client) error = %v, want %q", err, "unknown command `:client'")
+	}
+}
+
 func errorText(err error) string {
 	if err == nil {
 		return ""

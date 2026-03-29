@@ -431,6 +431,63 @@ func (m *InvocationFinishRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// InvocationCancelWaitRequest blocks until one delegated invocation is canceled
+// or otherwise completed.
+type InvocationCancelWaitRequest struct {
+	InvocationID uint64
+}
+
+func (m *InvocationCancelWaitRequest) Kind() Kind { return KindInvocationCancelWaitRequest }
+
+func (m *InvocationCancelWaitRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.InvocationID); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *InvocationCancelWaitRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	id, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("invocation-cancel-wait request has trailing data")
+	}
+	m.InvocationID = id
+	return nil
+}
+
+// InvocationCancelWaitResponse reports whether the invocation was canceled.
+type InvocationCancelWaitResponse struct {
+	Canceled bool
+}
+
+func (m *InvocationCancelWaitResponse) Kind() Kind { return KindInvocationCancelWaitResponse }
+
+func (m *InvocationCancelWaitResponse) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeBool(&b, m.Canceled); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *InvocationCancelWaitResponse) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	canceled, err := readBool(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("invocation-cancel-wait response has trailing data")
+	}
+	m.Canceled = canceled
+	return nil
+}
+
 // DisconnectRequest tells the server to tear down the current client immediately.
 type DisconnectRequest struct{}
 

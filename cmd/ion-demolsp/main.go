@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,7 +35,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if err := runForeground(cfg.socketPath); err != nil {
+	ready, err := readyWriter(cfg.readyFD)
+	if err != nil {
+		fmt.Fprintf(stderr, "ion-demolsp: %v\n", err)
+		return 1
+	}
+	if err := runForeground(cfg.socketPath, ready); err != nil {
 		fmt.Fprintf(stderr, "ion-demolsp: %v\n", err)
 		return 1
 	}
@@ -44,6 +50,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 type config struct {
 	socketPath string
 	foreground bool
+	readyFD    int
 }
 
 func parseArgs(args []string) (config, error) {
@@ -52,6 +59,7 @@ func parseArgs(args []string) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.socketPath, "socket", "", "ion server socket path")
 	fs.BoolVar(&cfg.foreground, "foreground", false, "run in the foreground")
+	fs.IntVar(&cfg.readyFD, "ready-fd", -1, "internal: daemon startup pipe fd")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -72,24 +80,49 @@ func daemonize(socketPath string) error {
 	if err != nil {
 		return err
 	}
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer readyR.Close()
+	defer readyW.Close()
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
 	defer devNull.Close()
 
-	cmd := exec.Command(exe, "-foreground", "-socket", socketPath)
+	cmd := exec.Command(exe, "-foreground", "-socket", socketPath, "-ready-fd", "3")
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+	cmd.ExtraFiles = []*os.File{readyW}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	_ = readyW.Close()
+	status, err := bufio.NewReader(readyR).ReadString('\n')
+	if err != nil {
+		_ = cmd.Wait()
+		return fmt.Errorf("startup failed")
+	}
+	switch strings.TrimSpace(status) {
+	case "ok":
+		return cmd.Process.Release()
+	default:
+		_ = cmd.Wait()
+		return errors.New(strings.TrimSpace(status))
+	}
 }
 
-func runForeground(socketPath string) error {
+func runForeground(socketPath string, ready io.WriteCloser) (err error) {
+	readySignaled := false
+	defer func() {
+		if !readySignaled {
+			signalReady(ready, err)
+		}
+	}()
 	client, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
 	if err != nil {
 		return err
@@ -97,9 +130,6 @@ func runForeground(socketPath string) error {
 	defer client.Close()
 
 	if err := client.RegisterNamespace(demoNamespace); err != nil {
-		if strings.Contains(err.Error(), "already registered") {
-			return nil
-		}
 		return err
 	}
 
@@ -107,6 +137,8 @@ func runForeground(socketPath string) error {
 	if err != nil {
 		return err
 	}
+	signalReady(ready, nil)
+	readySignaled = true
 
 	for {
 		inv, err := client.WaitInvocation()
@@ -125,6 +157,25 @@ func runForeground(socketPath string) error {
 	}
 }
 
+func signalReady(w io.WriteCloser, err error) {
+	if w == nil {
+		return
+	}
+	msg := "ok\n"
+	if err != nil {
+		msg = err.Error() + "\n"
+	}
+	_, _ = io.WriteString(w, msg)
+	_ = w.Close()
+}
+
+func readyWriter(fd int) (io.WriteCloser, error) {
+	if fd < 0 {
+		return nil, nil
+	}
+	return os.NewFile(uintptr(fd), "ion-demolsp-ready"), nil
+}
+
 type invocationSession interface {
 	CurrentView() (wire.BufferView, error)
 	Execute(script string) (bool, error)
@@ -134,6 +185,7 @@ type invocationController interface {
 	Take(sessionID uint64) error
 	Return(sessionID uint64) error
 	FinishInvocation(id uint64, errText, stdout, stderr string) error
+	WaitInvocationCancel(id uint64) (bool, error)
 	Session(sessionID uint64) invocationSession
 }
 
@@ -151,6 +203,10 @@ func (c wireInvocationController) Return(sessionID uint64) error {
 
 func (c wireInvocationController) FinishInvocation(id uint64, errText, stdout, stderr string) error {
 	return c.client.FinishInvocation(id, errText, stdout, stderr)
+}
+
+func (c wireInvocationController) WaitInvocationCancel(id uint64) (bool, error) {
+	return c.client.WaitInvocationCancel(id)
 }
 
 func (c wireInvocationController) Session(sessionID uint64) invocationSession {
@@ -179,6 +235,19 @@ func runInvocation(client invocationController, root string, inv wire.Invocation
 	finishStdout := ""
 	finishStderr := ""
 
+	if script == ":demolsp:slow" {
+		canceled, err := client.WaitInvocationCancel(inv.ID)
+		if err != nil {
+			return err
+		}
+		if canceled {
+			finishStdout = "demolsp slow cancelled\n"
+		} else {
+			finishErr = "demolsp slow ended unexpectedly"
+		}
+		return client.FinishInvocation(inv.ID, finishErr, finishStdout, finishStderr)
+	}
+
 	took := false
 	if err := client.Take(inv.SessionID); err != nil {
 		return client.FinishInvocation(inv.ID, err.Error(), "", "")
@@ -206,12 +275,6 @@ func runInvocation(client invocationController, root string, inv wire.Invocation
 			break
 		}
 		finishStdout = "demolsp goto README.md:3:1\n"
-	case ":demolsp:slow":
-		if _, err := session.Execute("!sleep 3600\n"); err != nil {
-			finishErr = err.Error()
-			break
-		}
-		finishStdout = "demolsp slow cancelled\n"
 	default:
 		finishErr = fmt.Sprintf("unknown demo lsp command %q", script)
 	}

@@ -54,6 +54,8 @@ const (
 	KindInvocationWaitRequest
 	KindInvocationWaitResponse
 	KindInvocationFinishRequest
+	KindInvocationCancelWaitRequest
+	KindInvocationCancelWaitResponse
 	KindDisconnectRequest
 )
 
@@ -247,6 +249,12 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindInvocationFinishRequest:
 		var msg InvocationFinishRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindInvocationCancelWaitRequest:
+		var msg InvocationCancelWaitRequest
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindInvocationCancelWaitResponse:
+		var msg InvocationCancelWaitResponse
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	case KindDisconnectRequest:
 		return &DisconnectRequest{}, nil

@@ -216,6 +216,24 @@ func (c *Client) FinishInvocation(id uint64, errText, stdout, stderr string) err
 	return nil
 }
 
+// WaitInvocationCancel blocks until one delegated invocation is canceled or completed.
+func (c *Client) WaitInvocationCancel(id uint64) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureConnectedLocked(); err != nil {
+		return false, err
+	}
+	_, msg, err := c.roundTripLocked(0, &wire.InvocationCancelWaitRequest{InvocationID: id})
+	if err != nil {
+		return false, err
+	}
+	resp, ok := msg.(*wire.InvocationCancelWaitResponse)
+	if !ok {
+		return false, fmt.Errorf("invocation-cancel-wait response type %T, want *wire.InvocationCancelWaitResponse", msg)
+	}
+	return resp.Canceled, nil
+}
+
 // Take temporarily transfers control of one live session to this client.
 func (c *Client) Take(id uint64) error {
 	c.mu.Lock()

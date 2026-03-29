@@ -68,12 +68,13 @@ type invocationState struct {
 	sessionID        uint64
 	script           string
 
-	mu     sync.Mutex
-	cond   *sync.Cond
-	done   bool
-	err    string
-	stdout string
-	stderr string
+	mu       sync.Mutex
+	cond     *sync.Cond
+	done     bool
+	canceled bool
+	err      string
+	stdout   string
+	stderr   string
 }
 
 type connState struct {
@@ -227,6 +228,12 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
+	case *wire.InvocationCancelWaitRequest:
+		canceled, err := s.waitInvocationCancel(state.clientID, msg.InvocationID)
+		if err != nil {
+			return writeError(conn, frame.RequestID, 0, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.InvocationCancelWaitResponse{Canceled: canceled})
 	case *wire.DisconnectRequest:
 		s.releaseClient(state.clientID, state.auxiliary)
 		state.clientID = 0
@@ -251,6 +258,7 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		return writeError(conn, frame.RequestID, frame.SessionID, err)
 	}
 	if _, ok := msg.(*wire.InterruptRequest); ok {
+		s.cancelInvocationForSession(managed.id)
 		if err := managed.term.Interrupt(); err != nil {
 			return writeError(conn, frame.RequestID, managed.id, err)
 		}
@@ -627,6 +635,43 @@ func (s *Server) finishInvocation(clientID uint64, req *wire.InvocationFinishReq
 	return nil
 }
 
+func (s *Server) waitInvocationCancel(clientID, invocationID uint64) (bool, error) {
+	s.mu.Lock()
+	inv, ok := s.invocations[invocationID]
+	s.mu.Unlock()
+	if !ok {
+		return false, fmt.Errorf("unknown invocation %d", invocationID)
+	}
+	if inv.providerClientID != clientID {
+		return false, fmt.Errorf("invocation %d not owned by client", invocationID)
+	}
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	for !inv.canceled && !inv.done {
+		inv.cond.Wait()
+	}
+	return inv.canceled, nil
+}
+
+func (s *Server) cancelInvocationForSession(sessionID uint64) bool {
+	s.mu.Lock()
+	invocations := make([]*invocationState, 0, len(s.invocations))
+	for _, inv := range s.invocations {
+		if inv.sessionID != sessionID {
+			continue
+		}
+		invocations = append(invocations, inv)
+	}
+	s.mu.Unlock()
+	canceled := false
+	for _, inv := range invocations {
+		if inv.cancel() {
+			canceled = true
+		}
+	}
+	return canceled
+}
+
 func (s *Server) takeSession(sessionID, clientID uint64) error {
 	managed, err := s.lookupSession(sessionID)
 	if err != nil {
@@ -873,6 +918,20 @@ func (i *invocationState) finish(errText, stdout, stderr string) {
 	i.stdout = stdout
 	i.stderr = stderr
 	i.cond.Broadcast()
+}
+
+func (i *invocationState) cancel() bool {
+	if i == nil {
+		return false
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.done || i.canceled {
+		return false
+	}
+	i.canceled = true
+	i.cond.Broadcast()
+	return true
 }
 
 func (m *managedSession) summary(clientID uint64) wire.SessionSummary {

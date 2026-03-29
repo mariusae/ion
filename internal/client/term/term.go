@@ -436,7 +436,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	redraw := func(req renderRequest) error {
 		renderQueue.Request(req)
-		if reader.Buffered() == 0 {
+		if reader.Buffered() == 0 || (overlay != nil && overlay.running) {
 			return flushRender("idle")
 		}
 		return nil
@@ -645,27 +645,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 
 		checkOverlayInterrupt := func() error {
-			if options.Interrupt == nil || stdin == nil {
+			canceled, err := pumpRunningCommandInput(reader, stdin, options.Interrupt)
+			if err != nil {
+				return err
+			}
+			if !canceled {
 				return nil
-			}
-			if reader.Buffered() == 0 {
-				ok, err := waitForInputByte(stdin, 0)
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return nil
-				}
-			}
-			peek, err := reader.Peek(1)
-			if err != nil || len(peek) == 0 || peek[0] != 0x03 {
-				return err
-			}
-			if _, _, err := reader.ReadRune(); err != nil {
-				return err
-			}
-			if err := options.Interrupt(); err != nil {
-				return err
 			}
 			overlay.addOutput("^C")
 			return overlayHistoryRedraw(redrawOverlayHistory)
@@ -1781,6 +1766,37 @@ func normalizeRawCommandScript(script string) string {
 		return ":ion:Q\n"
 	}
 	return script
+}
+
+func pumpRunningCommandInput(reader *bufio.Reader, stdin *os.File, interrupt func() error) (bool, error) {
+	if reader == nil || stdin == nil || interrupt == nil {
+		return false, nil
+	}
+	for {
+		if reader.Buffered() == 0 {
+			ok, err := waitForInputByte(stdin, 0)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		b, err := reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			return false, err
+		}
+		if b != 0x03 {
+			continue
+		}
+		if err := interrupt(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 }
 
 func newBufferState(view wire.BufferView) *bufferState {

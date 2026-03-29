@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1875,6 +1876,37 @@ func TestReadBufferKeyPaste(t *testing.T) {
 	}
 	if got != keyPaste {
 		t.Fatalf("readBufferKey() = %d, want keyPaste", got)
+	}
+}
+
+func TestPumpRunningCommandInputIgnoresBufferedJunkBeforeCtrlC(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if _, err := w.Write([]byte("x\x1b[I\x03")); err != nil {
+		t.Fatalf("write input = %v", err)
+	}
+
+	reader := bufio.NewReader(r)
+	interrupted := false
+	canceled, err := pumpRunningCommandInput(reader, r, func() error {
+		interrupted = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("pumpRunningCommandInput() error = %v", err)
+	}
+	if !canceled {
+		t.Fatal("pumpRunningCommandInput() canceled = false, want true")
+	}
+	if !interrupted {
+		t.Fatal("interrupt callback not invoked")
 	}
 }
 

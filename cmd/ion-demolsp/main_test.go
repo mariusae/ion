@@ -1,10 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"errors"
+	"io"
+	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/proto/wire"
+	"ion/internal/server/transport"
+	"ion/internal/server/workspace"
 )
 
 type fakeInvocationSession struct {
@@ -26,6 +35,7 @@ type fakeInvocationController struct {
 	session      *fakeInvocationSession
 	takeCalls    []uint64
 	returnCalls  []uint64
+	cancelled    bool
 	finishID     uint64
 	finishErr    string
 	finishStdout string
@@ -48,6 +58,11 @@ func (c *fakeInvocationController) FinishInvocation(id uint64, errText, stdout, 
 	c.finishStdout = stdout
 	c.finishStderr = stderr
 	return nil
+}
+
+func (c *fakeInvocationController) WaitInvocationCancel(id uint64) (bool, error) {
+	c.finishID = id
+	return c.cancelled, nil
 }
 
 func (c *fakeInvocationController) Session(sessionID uint64) invocationSession {
@@ -102,16 +117,92 @@ func TestRunInvocationSlowExecutesLongRunningCommand(t *testing.T) {
 	t.Parallel()
 
 	ctrl := &fakeInvocationController{
-		session: &fakeInvocationSession{},
+		session:   &fakeInvocationSession{},
+		cancelled: true,
 	}
 	inv := wire.Invocation{ID: 7, SessionID: 11, Script: ":demolsp:slow"}
 	if err := runInvocation(ctrl, "/tmp/work", inv); err != nil {
 		t.Fatalf("runInvocation() error = %v", err)
 	}
-	if got, want := ctrl.session.scripts, []string{"!sleep 3600\n"}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("Execute() scripts = %#v, want %#v", got, want)
+	if got := ctrl.session.scripts; len(got) != 0 {
+		t.Fatalf("Execute() scripts = %#v, want none", got)
 	}
 	if got, want := ctrl.finishStdout, "demolsp slow cancelled\n"; got != want {
 		t.Fatalf("finish stdout = %q, want %q", got, want)
+	}
+	if got := ctrl.takeCalls; len(got) != 0 {
+		t.Fatalf("Take() calls = %#v, want none", got)
+	}
+}
+
+func TestRunForegroundRejectsDuplicateNamespaceRegistration(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-demolsp-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := transport.New(workspace.New())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Shutdown()
+		select {
+		case err := <-serverDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer readyR.Close()
+
+	foregroundDone := make(chan error, 1)
+	go func() {
+		foregroundDone <- runForeground(socketPath, readyW)
+	}()
+
+	status, err := bufio.NewReader(readyR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("ReadString() error = %v", err)
+	}
+	if got, want := strings.TrimSpace(status), "ok"; got != want {
+		t.Fatalf("startup status = %q, want %q", got, want)
+	}
+
+	err = runForeground(socketPath, nil)
+	if err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("second runForeground() error = %v, want already registered", err)
+	}
+
+	_ = server.Shutdown()
+	select {
+	case err := <-foregroundDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("foreground run error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("foreground run did not exit after shutdown")
 	}
 }

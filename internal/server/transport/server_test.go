@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -483,6 +484,151 @@ func TestServerDelegatesNamespaceGotoAndDescribe(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("service loop did not finish")
+	}
+}
+
+func TestServerInterruptCancelsDelegatedSlowInvocation(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	service, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(service) error = %v", err)
+	}
+	defer service.Close()
+	if err := service.RegisterNamespace("demolsp"); err != nil {
+		t.Fatalf("RegisterNamespace() error = %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	serviceErr := make(chan error, 1)
+	go func() {
+		inv, err := service.WaitInvocation()
+		if err != nil {
+			serviceErr <- err
+			return
+		}
+		if got, want := inv.Script, ":demolsp:slow"; got != want {
+			serviceErr <- fmt.Errorf("inv.Script = %q, want %q", got, want)
+			return
+		}
+		started <- struct{}{}
+		canceled, err := service.WaitInvocationCancel(inv.ID)
+		if err != nil {
+			serviceErr <- err
+			return
+		}
+		if !canceled {
+			serviceErr <- fmt.Errorf("WaitInvocationCancel(%d) = false, want true", inv.ID)
+			return
+		}
+		serviceErr <- service.FinishInvocation(inv.ID, "", "demolsp slow cancelled\n", "")
+	}()
+
+	var stdout bytes.Buffer
+	caller, err := clientsession.DialUnix(socketPath, &stdout, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+	if err := caller.Bootstrap(nil); err != nil {
+		t.Fatalf("caller.Bootstrap() error = %v", err)
+	}
+	session := caller.CurrentSession()
+	if session == nil {
+		t.Fatal("caller.CurrentSession() = nil")
+	}
+
+	interruptClient, err := clientsession.DialUnixAs(socketPath, caller.ID(), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnixAs(interrupt) error = %v", err)
+	}
+	defer interruptClient.Close()
+	interruptSession := interruptClient.Session(session.ID())
+
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := caller.Execute(":demolsp:slow\n")
+		execDone <- err
+	}()
+
+	select {
+	case <-started:
+	case err := <-serviceErr:
+		t.Fatalf("service loop error = %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not receive slow invocation")
+	}
+
+	checker, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(checker) error = %v", err)
+	}
+	if err := checker.Bootstrap(nil); err != nil {
+		t.Fatalf("checker.Bootstrap() error = %v", err)
+	}
+	if _, err := checker.CurrentView(); err != nil {
+		t.Fatalf("checker.CurrentView() error = %v", err)
+	}
+	_ = checker.Close()
+
+	if err := interruptSession.Cancel(); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	select {
+	case err := <-execDone:
+		if err != nil {
+			t.Fatalf("caller.Execute(:demolsp:slow) error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller.Execute(:demolsp:slow) did not finish after cancel")
+	}
+
+	select {
+	case err := <-serviceErr:
+		if err != nil {
+			t.Fatalf("service loop error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("service loop did not finish after cancel")
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "demolsp slow cancelled\n") {
+		t.Fatalf("stdout after slow cancel = %q", got)
 	}
 }
 

@@ -41,28 +41,29 @@ type File struct {
 	Delta   *Buffer
 	Epsilon *Buffer
 
-	Name      String
-	Unread    bool
-	Mod       bool
-	Rescuing  bool
-	Seq       uint32
-	CleanSeq  uint32
-	HiPosn    Posn
-	Dot       Range
-	NDot      Range
-	Mark      Range
-	PrevDot   Range
-	PrevMark  Range
-	PrevSeq   uint32
-	PrevMod   bool
-	InitLine  Posn
-	InitCol   Posn
-	StatKnown bool
-	Dev       uint64
-	Inode     uint64
-	Mtime     int64
-	mergeOpen bool
-	merge     mergeState
+	Name        String
+	Unread      bool
+	Mod         bool
+	DiskChanged bool
+	Rescuing    bool
+	Seq         uint32
+	CleanSeq    uint32
+	HiPosn      Posn
+	Dot         Range
+	NDot        Range
+	Mark        Range
+	PrevDot     Range
+	PrevMark    Range
+	PrevSeq     uint32
+	PrevMod     bool
+	InitLine    Posn
+	InitCol     Posn
+	StatKnown   bool
+	Dev         uint64
+	Inode       uint64
+	Mtime       int64
+	mergeOpen   bool
+	merge       mergeState
 }
 
 // NewFile constructs an empty file backed by the provided disk.
@@ -101,6 +102,7 @@ func (f *File) IsDirty() bool {
 func (f *File) MarkClean() {
 	f.CleanSeq = f.Seq
 	f.Mod = false
+	f.DiskChanged = false
 }
 
 // SetFileInfo records the current on-disk identity and modification time.

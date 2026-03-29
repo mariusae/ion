@@ -330,8 +330,8 @@ func TestTermSessionDescribeDemoSymbol(t *testing.T) {
 	}
 	stdout.Reset()
 
-	if _, err := sess.Execute(":lsp:describe\n"); err != nil {
-		t.Fatalf("Execute(:lsp:describe) error = %v", err)
+	if _, err := sess.Execute(":demo:describe\n"); err != nil {
+		t.Fatalf("Execute(:demo:describe) error = %v", err)
 	}
 
 	got := stdout.String()
@@ -364,8 +364,8 @@ func TestTermSessionGotoDemoSymbol(t *testing.T) {
 	}
 	stdout.Reset()
 
-	if _, err := sess.Execute(":lsp:goto\n"); err != nil {
-		t.Fatalf("Execute(:lsp:goto) error = %v", err)
+	if _, err := sess.Execute(":demo:goto\n"); err != nil {
+		t.Fatalf("Execute(:demo:goto) error = %v", err)
 	}
 
 	view, err := sess.CurrentView()

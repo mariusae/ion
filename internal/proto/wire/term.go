@@ -5,11 +5,13 @@ import "time"
 // BufferView is the server-owned text and current selection state presented to
 // the terminal client.
 type BufferView struct {
-	ID       int
-	Text     string
-	Name     string
-	DotStart int
-	DotEnd   int
+	ID        int
+	Text      string
+	Name      string
+	DotStart  int
+	DotEnd    int
+	Status    string
+	StatusSeq uint64
 }
 
 // MenuFile is the server-owned file-menu entry presented to the terminal UI.
@@ -17,6 +19,7 @@ type MenuFile struct {
 	ID      int
 	Name    string
 	Dirty   bool
+	Changed bool
 	Current bool
 }
 
@@ -46,6 +49,12 @@ type Invocation struct {
 	ID        uint64
 	SessionID uint64
 	Script    string
+}
+
+// SessionStatusUpdate carries one transient session-scoped status message.
+type SessionStatusUpdate struct {
+	SessionID uint64
+	Status    string
 }
 
 func (s SessionSummary) LastActive() time.Time {

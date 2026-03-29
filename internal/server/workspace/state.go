@@ -4,7 +4,9 @@ import "ion/internal/core/text"
 
 // SessionState holds per-client workspace state while sharing the underlying files.
 type SessionState struct {
-	current *text.File
+	current   *text.File
+	status    string
+	statusSeq uint64
 }
 
 // NewSessionState allocates one per-client state object bound to the current workspace snapshot.

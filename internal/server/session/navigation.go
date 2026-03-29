@@ -150,6 +150,7 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 		return true, err
 	}
 	currentDirty := false
+	currentChanged := false
 	currentPoint := navigationPoint{}
 	hasCurrentPoint := false
 	for _, file := range menuFiles {
@@ -157,6 +158,7 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 			continue
 		}
 		currentDirty = file.Dirty
+		currentChanged = file.Changed
 		if view, err := s.ws.CurrentView(s.state); err == nil {
 			if point, ok := navigationPointFromView(view); ok {
 				currentPoint = point
@@ -169,7 +171,7 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 		if i == s.history.index {
 			mod := ' '
 			if currentDirty && (!hasCurrentPoint || sameNavigationFile(point, currentPoint)) {
-				mod = '\''
+				mod = dirtyMenuMark(currentDirty, currentChanged)
 			}
 			if _, err := fmt.Fprintf(s.stderr, "%c-. %s\n", mod, point.displayLabel()); err != nil {
 				return true, err
@@ -181,6 +183,16 @@ func (s *DownloadSession) showNavigationStack() (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func dirtyMenuMark(dirty, changed bool) rune {
+	if dirty && changed {
+		return '"'
+	}
+	if dirty {
+		return '\''
+	}
+	return ' '
 }
 
 func (p navigationPoint) displayLabel() string {

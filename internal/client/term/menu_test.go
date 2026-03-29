@@ -112,6 +112,20 @@ func TestWriteMenuItemHoverDoesNotBoldNonCurrentRow(t *testing.T) {
 	}
 }
 
+func TestDirtyMarkUsesDoubleQuoteForDirtyChangedFile(t *testing.T) {
+	t.Parallel()
+
+	if got, want := dirtyMark(true, true), '"'; got != want {
+		t.Fatalf("dirtyMark(dirty+changed) = %q, want %q", got, want)
+	}
+	if got, want := dirtyMark(true, false), '\''; got != want {
+		t.Fatalf("dirtyMark(dirty) = %q, want %q", got, want)
+	}
+	if got, want := dirtyMark(false, false), ' '; got != want {
+		t.Fatalf("dirtyMark(clean) = %q, want %q", got, want)
+	}
+}
+
 func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 	t.Parallel()
 

@@ -105,7 +105,7 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, nav wire.Navig
 			label = string(runes[len(runes)-maxName:])
 		}
 		menu.items = append(menu.items, menuItem{
-			label:   fmt.Sprintf(" %c%c %s", dirtyMark(f.Dirty), currentMark(f.Current), label),
+			label:   fmt.Sprintf(" %c%c %s", dirtyMark(f.Dirty, f.Changed), currentMark(f.Current), label),
 			kind:    menuFile,
 			fileID:  f.ID,
 			current: f.Current,
@@ -359,7 +359,10 @@ func (m *menuState) outsideDistance(x, y int) int {
 	return dy
 }
 
-func dirtyMark(dirty bool) rune {
+func dirtyMark(dirty, changed bool) rune {
+	if dirty && changed {
+		return '"'
+	}
 	if dirty {
 		return '\''
 	}

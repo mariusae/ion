@@ -219,6 +219,20 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
+	case *wire.BufferSnapshotsRequest:
+		buffers, err := s.ws.BufferSnapshots()
+		if err != nil {
+			return writeError(conn, frame.RequestID, 0, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.BufferSnapshotsMessage{Buffers: buffers})
+	case *wire.SessionStatusRequest:
+		if err := s.setSessionStatus(msg.Update.SessionID, msg.Update.Status); err != nil {
+			return writeError(conn, frame.RequestID, msg.Update.SessionID, err)
+		}
+		if s.changeNotify != nil {
+			s.changeNotify()
+		}
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.InvocationWaitRequest:
 		inv, err := s.waitInvocation(state.clientID)
 		if err != nil {
@@ -641,6 +655,15 @@ func (s *Server) finishInvocation(clientID uint64, req *wire.InvocationFinishReq
 		return fmt.Errorf("invocation %d not owned by client", req.InvocationID)
 	}
 	inv.finish(req.Err, req.Stdout, req.Stderr)
+	return nil
+}
+
+func (s *Server) setSessionStatus(sessionID uint64, status string) error {
+	managed, err := s.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	managed.term.SetSessionStatus(status)
 	return nil
 }
 

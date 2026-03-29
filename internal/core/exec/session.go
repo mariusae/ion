@@ -68,6 +68,7 @@ type MenuFileInfo struct {
 	ID      int
 	Name    string
 	Dirty   bool
+	Changed bool
 	Current bool
 }
 
@@ -1433,6 +1434,43 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	return s.printFileStatusName(f.Mod, true, name)
 }
 
+// ReloadFileFromDisk refreshes one already named file from disk without
+// emitting status output. Clean files are reloaded in place by the workspace
+// watcher when the underlying path changes.
+func (s *Session) ReloadFileFromDisk(f *text.File) error {
+	if f == nil || f.Unread {
+		return nil
+	}
+	name := trimToken(f.Name.UTF8())
+	if name == "" {
+		return nil
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return openFileError(name, err)
+	}
+	dot := clipRangeToFile(f.Dot, f)
+	mark := clipRangeToFile(f.Mark, f)
+	if err := resetFileContents(f); err != nil {
+		return err
+	}
+	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
+		return err
+	}
+	if meta, ok, err := statFile(name); err != nil {
+		return err
+	} else if ok {
+		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
+	} else {
+		f.ClearFileInfo()
+	}
+	f.Dot = clipRangeToLen(dot, text.Posn(f.B.Len()))
+	f.NDot = f.Dot
+	f.Mark = clipRangeToLen(mark, text.Posn(f.B.Len()))
+	s.syncCloseOK(f)
+	return nil
+}
+
 func (s *Session) changeDirectory(nameToken *text.String) error {
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -2029,6 +2067,7 @@ func (s *Session) MenuFiles() []MenuFileInfo {
 			ID:      s.ensureFileID(f),
 			Name:    trimToken(f.Name.UTF8()),
 			Dirty:   f.Mod,
+			Changed: f.DiskChanged,
 			Current: f == s.Current,
 		})
 	}
@@ -2529,6 +2568,7 @@ func resetFileContents(f *text.File) error {
 	}
 	f.Unread = false
 	f.Mod = false
+	f.DiskChanged = false
 	f.Seq = 0
 	f.CleanSeq = 0
 	f.HiPosn = 0
@@ -2541,6 +2581,32 @@ func resetFileContents(f *text.File) error {
 	f.PrevMod = false
 	f.ClearFileInfo()
 	return nil
+}
+
+func clipRangeToFile(r text.Range, f *text.File) text.Range {
+	if f == nil || f.B == nil {
+		return text.Range{}
+	}
+	return clipRangeToLen(r, text.Posn(f.B.Len()))
+}
+
+func clipRangeToLen(r text.Range, max text.Posn) text.Range {
+	if r.P1 < 0 {
+		r.P1 = 0
+	}
+	if r.P2 < 0 {
+		r.P2 = 0
+	}
+	if r.P1 > max {
+		r.P1 = max
+	}
+	if r.P2 > max {
+		r.P2 = max
+	}
+	if r.P2 < r.P1 {
+		r.P2 = r.P1
+	}
+	return r
 }
 
 type fileStat struct {

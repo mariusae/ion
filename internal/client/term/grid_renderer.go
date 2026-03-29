@@ -12,11 +12,12 @@ type gridRenderer struct {
 	hudInput   *ScreenGrid
 	menu       *ScreenGrid
 
-	lastTitle      string
-	lastTitleDirty bool
-	lastTerminal   frameTerminalState
-	lastCursor     frameCursor
-	initialized    bool
+	lastTitle        string
+	lastTitleDirty   bool
+	lastTitleChanged bool
+	lastTerminal     frameTerminalState
+	lastCursor       frameCursor
+	initialized      bool
 
 	bufferAnchors  []int
 	overlayAnchors []overlayAnchor
@@ -51,6 +52,7 @@ func (r *gridRenderer) Reset() {
 	r.menu = nil
 	r.lastTitle = ""
 	r.lastTitleDirty = false
+	r.lastTitleChanged = false
 	r.lastTerminal = frameTerminalState{}
 	r.lastCursor = frameCursor{}
 	r.initialized = false
@@ -72,6 +74,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 
 	nextTitle := state.name
 	nextTitleDirty := state.dirty
+	nextTitleChanged := state.diskChanged
 	nextTerminal := defaultFrameTerminalState()
 	nextCursor := buildFrameCursor(state, overlay, menu, focused)
 
@@ -124,8 +127,8 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	counted := &countingWriter{w: stdout}
 	backend := newTTYRenderBackend(counted, r.palette)
 	if forceFull {
-		if !r.initialized || r.lastTitle != nextTitle || r.lastTitleDirty != nextTitleDirty {
-			backend.SetTitle(nextTitle, nextTitleDirty)
+		if !r.initialized || r.lastTitle != nextTitle || r.lastTitleDirty != nextTitleDirty || r.lastTitleChanged != nextTitleChanged {
+			backend.SetTitle(nextTitle, nextTitleDirty, nextTitleChanged)
 		}
 		backend.HideCursor()
 		prevTerminal := frameTerminalState{}
@@ -137,8 +140,8 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 		r.emitDirtyRows(backend, r.root)
 		backend.SetCursor(nextCursor)
 	} else {
-		if r.lastTitle != nextTitle || r.lastTitleDirty != nextTitleDirty {
-			backend.SetTitle(nextTitle, nextTitleDirty)
+		if r.lastTitle != nextTitle || r.lastTitleDirty != nextTitleDirty || r.lastTitleChanged != nextTitleChanged {
+			backend.SetTitle(nextTitle, nextTitleDirty, nextTitleChanged)
 		}
 		backend.SetTerminalState(r.lastTerminal, nextTerminal)
 		for _, op := range scrollOps {
@@ -155,6 +158,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 
 	r.lastTitle = nextTitle
 	r.lastTitleDirty = nextTitleDirty
+	r.lastTitleChanged = nextTitleChanged
 	r.lastTerminal = nextTerminal
 	r.lastCursor = nextCursor
 	r.initialized = true

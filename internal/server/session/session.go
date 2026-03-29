@@ -421,3 +421,11 @@ func (s *TermSession) Undo() (wire.BufferView, error) {
 func (s *TermSession) Save() (string, error) {
 	return s.ws.Save(s.state)
 }
+
+// SetSessionStatus stores one transient status string for this session.
+func (s *TermSession) SetSessionStatus(status string) {
+	if s == nil || s.ws == nil {
+		return
+	}
+	s.ws.SetSessionStatus(s.state, status)
+}

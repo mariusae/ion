@@ -518,6 +518,118 @@ func (m *DisconnectRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// BufferSnapshotsRequest asks for the current shared buffer snapshots without
+// requiring a visible session.
+type BufferSnapshotsRequest struct{}
+
+func (m *BufferSnapshotsRequest) Kind() Kind { return KindBufferSnapshotsRequest }
+
+func (m *BufferSnapshotsRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *BufferSnapshotsRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("buffer-snapshots request has trailing data")
+	}
+	return nil
+}
+
+// BufferSnapshotsMessage transports one full shared-buffer snapshot list.
+type BufferSnapshotsMessage struct {
+	Buffers []BufferView
+}
+
+func (m *BufferSnapshotsMessage) Kind() Kind { return KindBufferSnapshotsResponse }
+
+func (m *BufferSnapshotsMessage) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint32(&b, uint32(len(m.Buffers))); err != nil {
+		return nil, err
+	}
+	for _, view := range m.Buffers {
+		if err := writeUint32(&b, uint32(view.ID)); err != nil {
+			return nil, err
+		}
+		if err := writeString(&b, view.Text); err != nil {
+			return nil, err
+		}
+		if err := writeString(&b, view.Name); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
+}
+
+func (m *BufferSnapshotsMessage) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	n, err := readUint32(r)
+	if err != nil {
+		return err
+	}
+	buffers := make([]BufferView, 0, n)
+	for i := uint32(0); i < n; i++ {
+		id, err := readUint32(r)
+		if err != nil {
+			return err
+		}
+		text, err := readString(r)
+		if err != nil {
+			return err
+		}
+		name, err := readString(r)
+		if err != nil {
+			return err
+		}
+		buffers = append(buffers, BufferView{
+			ID:   int(id),
+			Text: text,
+			Name: name,
+		})
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("buffer-snapshots response has trailing data")
+	}
+	m.Buffers = buffers
+	return nil
+}
+
+// SessionStatusRequest publishes one transient session-scoped status message.
+type SessionStatusRequest struct {
+	Update SessionStatusUpdate
+}
+
+func (m *SessionStatusRequest) Kind() Kind { return KindSessionStatusRequest }
+
+func (m *SessionStatusRequest) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeUint64(&b, m.Update.SessionID); err != nil {
+		return nil, err
+	}
+	if err := writeString(&b, m.Update.Status); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *SessionStatusRequest) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	sessionID, err := readUint64(r)
+	if err != nil {
+		return err
+	}
+	status, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("session-status request has trailing data")
+	}
+	m.Update = SessionStatusUpdate{
+		SessionID: sessionID,
+		Status:    status,
+	}
+	return nil
+}
+
 // OpenFilesRequest carries one explicit file-open list for a live terminal
 // client without reparsing shell-style whitespace.
 type OpenFilesRequest struct {
@@ -781,6 +893,12 @@ func (m *BufferViewMessage) MarshalBinary() ([]byte, error) {
 	if err := binary.Write(&b, binary.LittleEndian, int32(m.View.DotEnd)); err != nil {
 		return nil, err
 	}
+	if err := writeString(&b, m.View.Status); err != nil {
+		return nil, err
+	}
+	if err := writeUint64(&b, m.View.StatusSeq); err != nil {
+		return nil, err
+	}
 	return b.Bytes(), nil
 }
 
@@ -806,15 +924,25 @@ func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 	if err := binary.Read(r, binary.LittleEndian, &end); err != nil {
 		return err
 	}
+	status, err := readString(r)
+	if err != nil {
+		return err
+	}
+	statusSeq, err := readUint64(r)
+	if err != nil {
+		return err
+	}
 	if r.Len() != 0 {
 		return fmt.Errorf("buffer view has trailing data")
 	}
 	m.View = BufferView{
-		ID:       int(id),
-		Text:     text,
-		Name:     name,
-		DotStart: int(start),
-		DotEnd:   int(end),
+		ID:        int(id),
+		Text:      text,
+		Name:      name,
+		DotStart:  int(start),
+		DotEnd:    int(end),
+		Status:    status,
+		StatusSeq: statusSeq,
 	}
 	return nil
 }
@@ -848,6 +976,9 @@ func (m *MenuFilesMessage) MarshalBinary() ([]byte, error) {
 		if err := writeBool(&b, f.Dirty); err != nil {
 			return nil, err
 		}
+		if err := writeBool(&b, f.Changed); err != nil {
+			return nil, err
+		}
 		if err := writeBool(&b, f.Current); err != nil {
 			return nil, err
 		}
@@ -875,6 +1006,10 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return err
 		}
+		changed, err := readBool(r)
+		if err != nil {
+			return err
+		}
 		current, err := readBool(r)
 		if err != nil {
 			return err
@@ -883,6 +1018,7 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 			ID:      int(id),
 			Name:    name,
 			Dirty:   dirty,
+			Changed: changed,
 			Current: current,
 		})
 	}

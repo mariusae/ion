@@ -162,6 +162,47 @@ func (c *Client) ListSessions() ([]wire.SessionSummary, error) {
 	return append([]wire.SessionSummary(nil), resp.Sessions...), nil
 }
 
+// BufferSnapshots returns the current shared buffer contents without creating
+// or mutating a visible editor session.
+func (c *Client) BufferSnapshots() ([]wire.BufferView, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureConnectedLocked(); err != nil {
+		return nil, err
+	}
+	_, msg, err := c.roundTripLocked(0, &wire.BufferSnapshotsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := msg.(*wire.BufferSnapshotsMessage)
+	if !ok {
+		return nil, fmt.Errorf("buffer-snapshots response type %T, want *wire.BufferSnapshotsMessage", msg)
+	}
+	return append([]wire.BufferView(nil), resp.Buffers...), nil
+}
+
+// SetSessionStatus publishes one transient status message to a live session.
+func (c *Client) SetSessionStatus(sessionID uint64, status string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureConnectedLocked(); err != nil {
+		return err
+	}
+	_, msg, err := c.roundTripLocked(0, &wire.SessionStatusRequest{
+		Update: wire.SessionStatusUpdate{
+			SessionID: sessionID,
+			Status:    status,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if _, ok := msg.(*wire.OKResponse); !ok {
+		return fmt.Errorf("session-status response type %T, want *wire.OKResponse", msg)
+	}
+	return nil
+}
+
 // RegisterNamespace claims one delegated command namespace for this client.
 func (c *Client) RegisterNamespace(namespace string) error {
 	return c.RegisterNamespaceProvider(wire.NamespaceProviderDoc{Namespace: namespace})
@@ -529,6 +570,44 @@ func (s *Session) CurrentView() (wire.BufferView, error) {
 	resp, ok := msg.(*wire.BufferViewMessage)
 	if !ok {
 		return wire.BufferView{}, fmt.Errorf("current-view response type %T, want *wire.BufferViewMessage", msg)
+	}
+	return resp.View, nil
+}
+
+// OpenTarget opens one file target against the explicit session handle.
+func (s *Session) OpenTarget(path, address string) (wire.BufferView, error) {
+	if s == nil || s.client == nil || s.id == 0 {
+		return wire.BufferView{}, fmt.Errorf("nil session")
+	}
+	_, msg, err := s.client.roundTripForSession(s.id, &wire.OpenTargetRequest{
+		Path:    path,
+		Address: address,
+	})
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	resp, ok := msg.(*wire.BufferViewMessage)
+	if !ok {
+		return wire.BufferView{}, fmt.Errorf("open-target response type %T, want *wire.BufferViewMessage", msg)
+	}
+	return resp.View, nil
+}
+
+// SetDot updates the selection on the explicit session handle.
+func (s *Session) SetDot(start, end int) (wire.BufferView, error) {
+	if s == nil || s.client == nil || s.id == 0 {
+		return wire.BufferView{}, fmt.Errorf("nil session")
+	}
+	_, msg, err := s.client.roundTripForSession(s.id, &wire.SetDotRequest{
+		Start: start,
+		End:   end,
+	})
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	resp, ok := msg.(*wire.BufferViewMessage)
+	if !ok {
+		return wire.BufferView{}, fmt.Errorf("set-dot response type %T, want *wire.BufferViewMessage", msg)
 	}
 	return resp.View, nil
 }

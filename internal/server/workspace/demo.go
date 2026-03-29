@@ -52,7 +52,7 @@ func (w *Workspace) GotoDemoSymbol(state *SessionState) (wire.BufferView, DemoSy
 	targetFile.Dot = r
 	targetFile.NDot = r
 
-	view, err := w.currentView()
+	view, err := w.currentView(state)
 	if err != nil {
 		return wire.BufferView{}, DemoSymbol{}, err
 	}

@@ -162,6 +162,48 @@ func TestBufferStateFromViewPreservesTransientStatus(t *testing.T) {
 	}
 }
 
+func TestBufferStateFromViewAppliesNewRemoteStatusOnce(t *testing.T) {
+	t.Parallel()
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	previous.status = ""
+
+	next := bufferStateFromView(wire.BufferView{
+		ID:        7,
+		Name:      "alpha.txt",
+		Text:      "alpha\n",
+		DotStart:  0,
+		DotEnd:    0,
+		Status:    "lsp[gopls] ready",
+		StatusSeq: 1,
+	}, previous, map[int]int{})
+
+	if got, want := next.status, "lsp[gopls] ready"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+
+	next.status = ""
+	again := bufferStateFromView(wire.BufferView{
+		ID:        7,
+		Name:      "alpha.txt",
+		Text:      "alpha\n",
+		DotStart:  0,
+		DotEnd:    0,
+		Status:    "lsp[gopls] ready",
+		StatusSeq: 1,
+	}, next, map[int]int{})
+
+	if got := again.status; got != "" {
+		t.Fatalf("status reapplied = %q, want cleared local status to stay cleared for same sequence", got)
+	}
+}
+
 func TestBufferStateFromViewRestoresSavedOriginForRevisitedFile(t *testing.T) {
 	t.Parallel()
 
@@ -470,6 +512,31 @@ func TestDrawBufferModeMarksDirtyWindowTitle(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt'\x07") {
 		t.Fatalf("drawBufferMode() = %q, want dirty window title marker", got)
+	}
+}
+
+func TestDrawBufferModeMarksDirtyChangedWindowTitle(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/work/alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	state.dirty = true
+	state.diskChanged = true
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\"\x07") {
+		t.Fatalf("drawBufferMode() = %q, want dirty+changed window title marker", got)
 	}
 }
 

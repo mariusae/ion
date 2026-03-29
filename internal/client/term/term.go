@@ -63,6 +63,8 @@ type bufferState struct {
 	fileID         int
 	name           string
 	dirty          bool
+	diskChanged    bool
+	statusSeq      uint64
 	text           []rune
 	layout         *bufferLayout
 	cursor         int
@@ -397,6 +399,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	refreshBuffer = func() error {
+		prevChanged := false
+		if buffer != nil {
+			prevChanged = buffer.diskChanged
+		}
 		view, err := svc.CurrentView()
 		if err != nil {
 			if overlay.visible {
@@ -406,6 +412,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		applyBufferView(view)
+		if buffer != nil && buffer.dirty && buffer.diskChanged && !prevChanged {
+			buffer.status = "?warning: file changed on disk"
+		}
 		return nil
 	}
 
@@ -1813,13 +1822,14 @@ func newBufferStateWithPrevious(view wire.BufferView, previous *bufferState) *bu
 	dotEnd := clampIndex(view.DotEnd, len(text))
 	origin := visualRowStartForPos(text, cursor)
 	state := &bufferState{
-		fileID:   view.ID,
-		name:     view.Name,
-		text:     text,
-		cursor:   cursor,
-		origin:   origin,
-		dotStart: clampIndex(view.DotStart, len(text)),
-		dotEnd:   dotEnd,
+		fileID:    view.ID,
+		name:      view.Name,
+		statusSeq: view.StatusSeq,
+		text:      text,
+		cursor:    cursor,
+		origin:    origin,
+		dotStart:  clampIndex(view.DotStart, len(text)),
+		dotEnd:    dotEnd,
 	}
 	if reused && reusePrevious != nil {
 		state.layout = reusePrevious.layout
@@ -1839,6 +1849,9 @@ func bufferStateFromView(view wire.BufferView, previous *bufferState, origins ma
 	next := newBufferStateWithPrevious(view, previous)
 	if previous != nil {
 		next.status = previous.status
+	}
+	if strings.TrimSpace(view.Status) != "" && (previous == nil || view.StatusSeq != previous.statusSeq) {
+		next.status = strings.TrimSpace(view.Status)
 	}
 	if origin, ok := origins[next.fileID]; ok {
 		next.origin = restoreBufferOrigin(next, origin)
@@ -3059,12 +3072,14 @@ func refreshCurrentBufferDirty(svc wire.TermService, state *bufferState) {
 			continue
 		}
 		state.dirty = file.Dirty
+		state.diskChanged = file.Changed
 		return
 	}
 	state.dirty = false
+	state.diskChanged = false
 }
 
-func bufferWindowTitleSequence(name string, dirty bool) string {
+func bufferWindowTitleSequence(name string, dirty, changed bool) string {
 	title := filepath.Base(strings.TrimSpace(name))
 	if title == "." || title == string(filepath.Separator) {
 		title = ""
@@ -3079,7 +3094,9 @@ func bufferWindowTitleSequence(name string, dirty bool) string {
 	if title == "" {
 		title = "ion"
 	}
-	if dirty {
+	if dirty && changed {
+		title += `"`
+	} else if dirty {
 		title += "'"
 	}
 	return "\x1b]2;" + title + "\x07"

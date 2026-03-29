@@ -7,7 +7,7 @@ import (
 )
 
 type renderBackend interface {
-	SetTitle(name string, dirty bool)
+	SetTitle(name string, dirty, changed bool)
 	SetTerminalState(prev, next frameTerminalState)
 	HideCursor()
 	ClearAll()
@@ -67,11 +67,11 @@ func newTTYRenderBackend(out io.Writer, palette *gridStylePalette) *ttyRenderBac
 	}
 }
 
-func (b *ttyRenderBackend) SetTitle(name string, dirty bool) {
+func (b *ttyRenderBackend) SetTitle(name string, dirty, changed bool) {
 	if b == nil {
 		return
 	}
-	b.buf.WriteString(bufferWindowTitleSequence(name, dirty))
+	b.buf.WriteString(bufferWindowTitleSequence(name, dirty, changed))
 }
 
 func (b *ttyRenderBackend) SetTerminalState(prev, next frameTerminalState) {

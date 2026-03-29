@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	clientsession "ion/internal/client/session"
 	"ion/internal/proto/wire"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
@@ -204,5 +206,152 @@ func TestRunForegroundRejectsDuplicateNamespaceRegistration(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("foreground run did not exit after shutdown")
+	}
+}
+
+func TestRunForegroundSlowInvocationCancelFinishesCaller(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	readmePath := filepath.Join(workDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	f, err := os.CreateTemp("", "ion-demolsp-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := transport.New(workspace.New())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Shutdown()
+		select {
+		case err := <-serverDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer readyR.Close()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir(workDir) error = %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	foregroundDone := make(chan error, 1)
+	go func() {
+		foregroundDone <- runForeground(socketPath, readyW)
+	}()
+
+	status, err := bufio.NewReader(readyR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("ReadString() error = %v", err)
+	}
+	if got, want := strings.TrimSpace(status), "ok"; got != want {
+		t.Fatalf("startup status = %q, want %q", got, want)
+	}
+
+	var stdout bytes.Buffer
+	caller, err := clientsession.DialUnix(socketPath, &stdout, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+	if err := caller.Bootstrap(nil); err != nil {
+		t.Fatalf("caller.Bootstrap() error = %v", err)
+	}
+	session := caller.CurrentSession()
+	if session == nil {
+		t.Fatal("caller.CurrentSession() = nil")
+	}
+
+	interruptClient, err := clientsession.DialUnixAs(socketPath, caller.ID(), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnixAs(interrupt) error = %v", err)
+	}
+	defer interruptClient.Close()
+	interruptSession := interruptClient.Session(session.ID())
+
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := caller.Execute(":demolsp:slow\n")
+		execDone <- err
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+
+	if err := interruptSession.Cancel(); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	select {
+	case err := <-execDone:
+		if err != nil {
+			t.Fatalf("caller.Execute(:demolsp:slow) error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller.Execute(:demolsp:slow) did not finish after cancel")
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "demolsp slow cancelled\n") {
+		t.Fatalf("stdout after slow cancel = %q", got)
+	}
+
+	_ = server.Shutdown()
+	select {
+	case err := <-foregroundDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("foreground run error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("foreground run did not exit after shutdown")
+	}
+}
+
+func TestDemoProviderDocIncludesCommandHelp(t *testing.T) {
+	t.Parallel()
+
+	doc := demoProviderDoc()
+	if got, want := doc.Namespace, demoNamespace; got != want {
+		t.Fatalf("Namespace = %q, want %q", got, want)
+	}
+	if got, want := len(doc.Commands), 3; got != want {
+		t.Fatalf("len(Commands) = %d, want %d", got, want)
+	}
+	for _, cmd := range doc.Commands {
+		if strings.TrimSpace(cmd.Name) == "" || strings.TrimSpace(cmd.Summary) == "" || strings.TrimSpace(cmd.Help) == "" {
+			t.Fatalf("command doc = %#v, want name/summary/help populated", cmd)
+		}
 	}
 }

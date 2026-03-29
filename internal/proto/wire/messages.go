@@ -288,16 +288,32 @@ func (m *ReturnSessionRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// NamespaceCommandDoc documents one command exposed by a namespace provider.
+type NamespaceCommandDoc struct {
+	Name    string
+	Args    string
+	Summary string
+	Help    string
+}
+
+// NamespaceProviderDoc documents one namespace provider and its commands.
+type NamespaceProviderDoc struct {
+	Namespace string
+	Summary   string
+	Help      string
+	Commands  []NamespaceCommandDoc
+}
+
 // NamespaceRegisterRequest claims one extension namespace for the calling client.
 type NamespaceRegisterRequest struct {
-	Namespace string
+	Provider NamespaceProviderDoc
 }
 
 func (m *NamespaceRegisterRequest) Kind() Kind { return KindNamespaceRegisterRequest }
 
 func (m *NamespaceRegisterRequest) MarshalBinary() ([]byte, error) {
 	var b bytes.Buffer
-	if err := writeString(&b, m.Namespace); err != nil {
+	if err := writeNamespaceProviderDoc(&b, m.Provider); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
@@ -305,14 +321,14 @@ func (m *NamespaceRegisterRequest) MarshalBinary() ([]byte, error) {
 
 func (m *NamespaceRegisterRequest) UnmarshalBinary(data []byte) error {
 	r := bytes.NewReader(data)
-	namespace, err := readString(r)
+	provider, err := readNamespaceProviderDoc(r)
 	if err != nil {
 		return err
 	}
 	if r.Len() != 0 {
 		return fmt.Errorf("namespace-register request has trailing data")
 	}
-	m.Namespace = namespace
+	m.Provider = provider
 	return nil
 }
 
@@ -1203,4 +1219,84 @@ func readStringSlice(r *bytes.Reader) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+func writeNamespaceProviderDoc(w io.Writer, doc NamespaceProviderDoc) error {
+	if err := writeString(w, doc.Namespace); err != nil {
+		return err
+	}
+	if err := writeString(w, doc.Summary); err != nil {
+		return err
+	}
+	if err := writeString(w, doc.Help); err != nil {
+		return err
+	}
+	if err := writeUint32(w, uint32(len(doc.Commands))); err != nil {
+		return err
+	}
+	for _, cmd := range doc.Commands {
+		if err := writeString(w, cmd.Name); err != nil {
+			return err
+		}
+		if err := writeString(w, cmd.Args); err != nil {
+			return err
+		}
+		if err := writeString(w, cmd.Summary); err != nil {
+			return err
+		}
+		if err := writeString(w, cmd.Help); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readNamespaceProviderDoc(r *bytes.Reader) (NamespaceProviderDoc, error) {
+	namespace, err := readString(r)
+	if err != nil {
+		return NamespaceProviderDoc{}, err
+	}
+	summary, err := readString(r)
+	if err != nil {
+		return NamespaceProviderDoc{}, err
+	}
+	help, err := readString(r)
+	if err != nil {
+		return NamespaceProviderDoc{}, err
+	}
+	n, err := readUint32(r)
+	if err != nil {
+		return NamespaceProviderDoc{}, err
+	}
+	commands := make([]NamespaceCommandDoc, 0, n)
+	for i := uint32(0); i < n; i++ {
+		name, err := readString(r)
+		if err != nil {
+			return NamespaceProviderDoc{}, err
+		}
+		args, err := readString(r)
+		if err != nil {
+			return NamespaceProviderDoc{}, err
+		}
+		summary, err := readString(r)
+		if err != nil {
+			return NamespaceProviderDoc{}, err
+		}
+		help, err := readString(r)
+		if err != nil {
+			return NamespaceProviderDoc{}, err
+		}
+		commands = append(commands, NamespaceCommandDoc{
+			Name:    name,
+			Args:    args,
+			Summary: summary,
+			Help:    help,
+		})
+	}
+	return NamespaceProviderDoc{
+		Namespace: namespace,
+		Summary:   summary,
+		Help:      help,
+		Commands:  commands,
+	}, nil
 }

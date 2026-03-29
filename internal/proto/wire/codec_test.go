@@ -170,6 +170,43 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamespaceRegisterRequestRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := &NamespaceRegisterRequest{
+		Provider: NamespaceProviderDoc{
+			Namespace: "demolsp",
+			Summary:   "demo LSP commands",
+			Help:      "Synthetic LSP-like commands for smoke testing.",
+			Commands: []NamespaceCommandDoc{
+				{
+					Name:    "goto",
+					Args:    "",
+					Summary: "jump to the demo target",
+					Help:    "Opens the README demo target in the caller's session.",
+				},
+				{
+					Name:    "symbol",
+					Args:    "<query>",
+					Summary: "look up a symbol",
+					Help:    "Resolves one synthetic symbol name.",
+				},
+			},
+		},
+	}
+	data, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+	var got NamespaceRegisterRequest
+	if err := got.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, *want) {
+		t.Fatalf("round trip = %#v, want %#v", got, *want)
+	}
+}
+
 func TestReadFrameRejectsBadMagic(t *testing.T) {
 	t.Parallel()
 

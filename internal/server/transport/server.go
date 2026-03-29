@@ -29,8 +29,13 @@ type Server struct {
 	nextInvocation uint64
 	clients        map[uint64]*serverClient
 	sessions       map[uint64]*managedSession
-	namespaces     map[string]uint64
+	namespaces     map[string]registeredNamespace
 	invocations    map[uint64]*invocationState
+}
+
+type registeredNamespace struct {
+	clientID uint64
+	doc      wire.NamespaceProviderDoc
 }
 
 type serverClient struct {
@@ -85,6 +90,7 @@ type connState struct {
 type sessionCommand struct {
 	name      string
 	sessionID uint64
+	arg       string
 }
 
 type diagnosticReporter interface {
@@ -105,7 +111,7 @@ func NewWithNotifier(ws *workspace.Workspace, notify func()) *Server {
 		conns:        make(map[io.ReadWriteCloser]struct{}),
 		clients:      make(map[uint64]*serverClient),
 		sessions:     make(map[uint64]*managedSession),
-		namespaces:   make(map[string]uint64),
+		namespaces:   make(map[string]registeredNamespace),
 		invocations:  make(map[uint64]*invocationState),
 	}
 }
@@ -209,7 +215,7 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.NamespaceRegisterRequest:
-		if err := s.registerNamespace(state.clientID, msg.Namespace); err != nil {
+		if err := s.registerNamespace(state.clientID, msg.Provider); err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
@@ -492,10 +498,13 @@ func (s *Server) listSessions(clientID uint64) ([]wire.SessionSummary, error) {
 	return out, nil
 }
 
-func (s *Server) registerNamespace(clientID uint64, namespace string) error {
-	namespace = normalizeNamespace(namespace)
-	if namespace == "" {
-		return fmt.Errorf("missing namespace")
+func (s *Server) registerNamespace(clientID uint64, provider wire.NamespaceProviderDoc) error {
+	doc, err := normalizeNamespaceProviderDoc(provider)
+	if err != nil {
+		return err
+	}
+	if isBuiltinNamespace(doc.Namespace) {
+		return fmt.Errorf("namespace %q is reserved", doc.Namespace)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -503,11 +512,11 @@ func (s *Server) registerNamespace(clientID uint64, namespace string) error {
 	if !ok {
 		return fmt.Errorf("unknown client %d", clientID)
 	}
-	if owner, ok := s.namespaces[namespace]; ok && owner != clientID {
-		return fmt.Errorf("namespace %q already registered", namespace)
+	if owner, ok := s.namespaces[doc.Namespace]; ok && owner.clientID != clientID {
+		return fmt.Errorf("namespace %q already registered", doc.Namespace)
 	}
-	s.namespaces[namespace] = clientID
-	client.namespaces[namespace] = struct{}{}
+	s.namespaces[doc.Namespace] = registeredNamespace{clientID: clientID, doc: doc}
+	client.namespaces[doc.Namespace] = struct{}{}
 	return nil
 }
 
@@ -536,11 +545,11 @@ func (s *Server) beginInvocation(clientID, sessionID uint64, script string) (*in
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	providerID, ok := s.namespaces[namespace]
+	provider, ok := s.namespaces[namespace]
 	if !ok {
 		return nil, false, nil
 	}
-	if _, ok := s.clients[providerID]; !ok {
+	if _, ok := s.clients[provider.clientID]; !ok {
 		delete(s.namespaces, namespace)
 		return nil, false, nil
 	}
@@ -551,13 +560,13 @@ func (s *Server) beginInvocation(clientID, sessionID uint64, script string) (*in
 	s.nextInvocation++
 	inv := &invocationState{
 		id:               s.nextInvocation,
-		providerClientID: providerID,
+		providerClientID: provider.clientID,
 		sessionID:        sessionID,
 		script:           strings.TrimSpace(script),
 	}
 	inv.cond = sync.NewCond(&inv.mu)
 	s.invocations[inv.id] = inv
-	client := s.clients[providerID]
+	client := s.clients[provider.clientID]
 	client.pending = append(client.pending, inv)
 	client.cond.Broadcast()
 	managed.mu.Lock()
@@ -767,6 +776,21 @@ func (s *Server) markSessionActive(sessionID uint64) {
 
 func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, stderr *eventWriter, frame wire.Frame, cmd sessionCommand) error {
 	switch cmd.name {
+	case "help":
+		if err := s.writeHelp(stderr, cmd.arg); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "ns-list":
+		if err := s.writeNamespaceList(stderr); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "ns-show":
+		if err := s.writeNamespaceShow(stderr, cmd.arg); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
 	case "list":
 		summaries, err := s.listSessions(clientID)
 		if err != nil {
@@ -806,6 +830,22 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 func parseSessionCommand(script string) (sessionCommand, bool, error) {
 	trimmed := strings.TrimSpace(script)
 	switch {
+	case trimmed == ":help":
+		return sessionCommand{name: "help"}, true, nil
+	case strings.HasPrefix(trimmed, ":help "):
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":help "))
+		if target == "" {
+			return sessionCommand{}, true, fmt.Errorf("help topic expected")
+		}
+		return sessionCommand{name: "help", arg: target}, true, nil
+	case trimmed == ":ns:list":
+		return sessionCommand{name: "ns-list"}, true, nil
+	case strings.HasPrefix(trimmed, ":ns:show "):
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ns:show "))
+		if target == "" {
+			return sessionCommand{}, true, fmt.Errorf("namespace expected")
+		}
+		return sessionCommand{name: "ns-show", arg: target}, true, nil
 	case trimmed == ":sess:list":
 		return sessionCommand{name: "list"}, true, nil
 	case trimmed == ":sess:return":
@@ -867,6 +907,343 @@ func parseNamespace(script string) string {
 		return ""
 	}
 	return normalizeNamespace(rest[:i])
+}
+
+type commandHelpDoc struct {
+	usage    string
+	summary  string
+	help     string
+	commands []wire.NamespaceCommandDoc
+}
+
+func (s *Server) writeHelp(w io.Writer, target string) error {
+	doc, err := s.lookupHelp(strings.TrimSpace(target))
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, doc.usage); err != nil {
+		return err
+	}
+	if doc.summary != "" {
+		if _, err := fmt.Fprintf(w, "Summary: %s\n", doc.summary); err != nil {
+			return err
+		}
+	}
+	if doc.help != "" {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w, doc.help); err != nil {
+			return err
+		}
+	}
+	if len(doc.commands) > 0 {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w, "Commands:"); err != nil {
+			return err
+		}
+		for _, cmd := range doc.commands {
+			if _, err := fmt.Fprintf(w, ":%s\t%s\n", doc.usage[1:]+":"+cmd.Name, cmd.Summary); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) writeNamespaceList(w io.Writer) error {
+	for _, doc := range s.listNamespaceDocs() {
+		if _, err := fmt.Fprintf(w, "%s\t%s\n", doc.Namespace, doc.Summary); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) writeNamespaceShow(w io.Writer, target string) error {
+	namespace := normalizeNamespaceQuery(target)
+	if namespace == "" {
+		return fmt.Errorf("bad namespace %q", target)
+	}
+	doc, ok := s.lookupNamespaceDoc(namespace)
+	if !ok {
+		return fmt.Errorf("unknown namespace %q", namespace)
+	}
+	if _, err := fmt.Fprintf(w, "%s\t%s\n", doc.Namespace, doc.Summary); err != nil {
+		return err
+	}
+	for _, cmd := range doc.Commands {
+		if _, err := fmt.Fprintf(w, ":%s:%s\t%s\n", doc.Namespace, cmd.Name, cmd.Summary); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) lookupHelp(target string) (commandHelpDoc, error) {
+	if target == "" || target == ":help" {
+		return builtinHelpRootDoc(), nil
+	}
+	target = normalizeCommandAlias(target)
+	if doc, ok := builtinCommandDoc(target); ok {
+		return doc, nil
+	}
+	namespace, command, ok := parseCommandReference(target)
+	if ok {
+		provider, ok := s.lookupNamespaceDoc(namespace)
+		if !ok {
+			return commandHelpDoc{}, fmt.Errorf("unknown help topic %q", target)
+		}
+		for _, cmd := range provider.Commands {
+			if cmd.Name != command {
+				continue
+			}
+			usage := ":" + provider.Namespace + ":" + cmd.Name
+			if args := strings.TrimSpace(cmd.Args); args != "" {
+				usage += " " + args
+			}
+			return commandHelpDoc{
+				usage:   usage,
+				summary: cmd.Summary,
+				help:    cmd.Help,
+			}, nil
+		}
+		return commandHelpDoc{}, fmt.Errorf("unknown help topic %q", target)
+	}
+	if namespace := normalizeNamespaceQuery(target); namespace != "" {
+		if provider, ok := s.lookupNamespaceDoc(namespace); ok {
+			return commandHelpDoc{
+				usage:    ":" + provider.Namespace,
+				summary:  provider.Summary,
+				help:     provider.Help,
+				commands: append([]wire.NamespaceCommandDoc(nil), provider.Commands...),
+			}, nil
+		}
+	}
+	return commandHelpDoc{}, fmt.Errorf("unknown help topic %q", target)
+}
+
+func (s *Server) lookupNamespaceDoc(namespace string) (wire.NamespaceProviderDoc, bool) {
+	for _, doc := range builtinNamespaceDocs() {
+		if doc.Namespace == namespace {
+			return doc, true
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	registered, ok := s.namespaces[namespace]
+	if !ok {
+		return wire.NamespaceProviderDoc{}, false
+	}
+	return registered.doc, true
+}
+
+func (s *Server) listNamespaceDocs() []wire.NamespaceProviderDoc {
+	docs := builtinNamespaceDocs()
+	s.mu.Lock()
+	for _, registered := range s.namespaces {
+		docs = append(docs, registered.doc)
+	}
+	s.mu.Unlock()
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].Namespace < docs[j].Namespace
+	})
+	return docs
+}
+
+func builtinHelpRootDoc() commandHelpDoc {
+	return commandHelpDoc{
+		usage:   ":help [command]",
+		summary: "show detailed help for a command",
+		help:    "Displays the long-form help text for one built-in or provider command. Use :ns:list to see available namespaces, then :ns:show <namespace> to list commands.",
+	}
+}
+
+func builtinCommandDoc(target string) (commandHelpDoc, bool) {
+	switch target {
+	case ":help":
+		return builtinHelpRootDoc(), true
+	case ":ns:list":
+		return commandHelpDoc{
+			usage:   ":ns:list",
+			summary: "list registered namespaces",
+			help:    "Prints each built-in or provider namespace together with its short description.",
+		}, true
+	case ":ns:show":
+		return commandHelpDoc{
+			usage:   ":ns:show <namespace>",
+			summary: "list commands in one namespace",
+			help:    "Prints the namespace summary followed by each documented command in that namespace and its short description. The namespace argument may be plain like demolsp or prefixed like :demolsp.",
+		}, true
+	case ":sess:list":
+		return commandHelpDoc{
+			usage:   ":sess:list",
+			summary: "list live sessions",
+			help:    "Prints the visible live sessions, including ownership/control flags and the current file for each session.",
+		}, true
+	case ":sess:take":
+		return commandHelpDoc{
+			usage:   ":sess:take <session-id>",
+			summary: "take temporary control of a session",
+			help:    "Transfers control of one live session to the current client until :sess:return is used.",
+		}, true
+	case ":sess:return":
+		return commandHelpDoc{
+			usage:   ":sess:return",
+			summary: "return a taken session to its owner",
+			help:    "Returns control of the current taken session to its owner and restores the previous session selection on the client.",
+		}, true
+	case ":ion:Q":
+		return commandHelpDoc{
+			usage:   ":ion:Q",
+			summary: "shut down the current ion server",
+			help:    "Stops the current ion server and disconnects all attached clients.",
+		}, true
+	default:
+		return commandHelpDoc{}, false
+	}
+}
+
+func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
+	return []wire.NamespaceProviderDoc{
+		{
+			Namespace: "ion",
+			Summary:   "core ion server commands",
+			Help:      "Built-in commands implemented directly by the ion server.",
+			Commands: []wire.NamespaceCommandDoc{
+				{
+					Name:    "Q",
+					Summary: "shut down the current ion server",
+					Help:    "Stops the current ion server and disconnects all attached clients.",
+				},
+			},
+		},
+		{
+			Namespace: "ns",
+			Summary:   "namespace discovery commands",
+			Help:      "Built-in commands for discovering registered namespaces and their documented commands.",
+			Commands: []wire.NamespaceCommandDoc{
+				{
+					Name:    "list",
+					Summary: "list registered namespaces",
+					Help:    "Prints each built-in or provider namespace together with its short description.",
+				},
+				{
+					Name:    "show",
+					Args:    "<namespace>",
+					Summary: "list commands in one namespace",
+					Help:    "Prints the namespace summary followed by each documented command in that namespace and its short description.",
+				},
+			},
+		},
+		{
+			Namespace: "sess",
+			Summary:   "session inspection and control",
+			Help:      "Built-in commands for listing sessions and taking or returning session control.",
+			Commands: []wire.NamespaceCommandDoc{
+				{
+					Name:    "list",
+					Summary: "list live sessions",
+					Help:    "Prints the visible live sessions, including ownership/control flags and the current file for each session.",
+				},
+				{
+					Name:    "take",
+					Args:    "<session-id>",
+					Summary: "take temporary control of a session",
+					Help:    "Transfers control of one live session to the current client until :sess:return is used.",
+				},
+				{
+					Name:    "return",
+					Summary: "return a taken session to its owner",
+					Help:    "Returns control of the current taken session to its owner and restores the previous session selection on the client.",
+				},
+			},
+		},
+	}
+}
+
+func isBuiltinNamespace(namespace string) bool {
+	for _, doc := range builtinNamespaceDocs() {
+		if doc.Namespace == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeNamespaceProviderDoc(doc wire.NamespaceProviderDoc) (wire.NamespaceProviderDoc, error) {
+	doc.Namespace = normalizeNamespace(doc.Namespace)
+	if doc.Namespace == "" {
+		return wire.NamespaceProviderDoc{}, fmt.Errorf("missing namespace")
+	}
+	seen := make(map[string]struct{}, len(doc.Commands))
+	for i := range doc.Commands {
+		name := strings.TrimSpace(doc.Commands[i].Name)
+		if !validCommandToken(name) {
+			return wire.NamespaceProviderDoc{}, fmt.Errorf("bad command name %q", doc.Commands[i].Name)
+		}
+		if _, ok := seen[name]; ok {
+			return wire.NamespaceProviderDoc{}, fmt.Errorf("duplicate command name %q", name)
+		}
+		seen[name] = struct{}{}
+		doc.Commands[i].Name = name
+		doc.Commands[i].Args = strings.TrimSpace(doc.Commands[i].Args)
+		doc.Commands[i].Summary = strings.TrimSpace(doc.Commands[i].Summary)
+		doc.Commands[i].Help = strings.TrimSpace(doc.Commands[i].Help)
+	}
+	doc.Summary = strings.TrimSpace(doc.Summary)
+	doc.Help = strings.TrimSpace(doc.Help)
+	return doc, nil
+}
+
+func validCommandToken(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func normalizeNamespaceQuery(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, ":")
+	if i := strings.IndexByte(text, ':'); i >= 0 {
+		text = text[:i]
+	}
+	return normalizeNamespace(text)
+}
+
+func normalizeCommandAlias(text string) string {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "::") {
+		return text
+	}
+	return ":ion:" + text[2:]
+}
+
+func parseCommandReference(text string) (string, string, bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, ":") {
+		return "", "", false
+	}
+	rest := text[1:]
+	i := strings.IndexByte(rest, ':')
+	if i <= 0 || i == len(rest)-1 {
+		return "", "", false
+	}
+	namespace := normalizeNamespace(rest[:i])
+	command := strings.TrimSpace(rest[i+1:])
+	if namespace == "" || !validCommandToken(command) {
+		return "", "", false
+	}
+	return namespace, command, true
 }
 
 func (m *managedSession) canCancel(clientID uint64) bool {

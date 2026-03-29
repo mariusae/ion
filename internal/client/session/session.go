@@ -164,12 +164,17 @@ func (c *Client) ListSessions() ([]wire.SessionSummary, error) {
 
 // RegisterNamespace claims one delegated command namespace for this client.
 func (c *Client) RegisterNamespace(namespace string) error {
+	return c.RegisterNamespaceProvider(wire.NamespaceProviderDoc{Namespace: namespace})
+}
+
+// RegisterNamespaceProvider claims one delegated command namespace and its docs.
+func (c *Client) RegisterNamespaceProvider(provider wire.NamespaceProviderDoc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.ensureConnectedLocked(); err != nil {
 		return err
 	}
-	if _, msg, err := c.roundTripLocked(0, &wire.NamespaceRegisterRequest{Namespace: namespace}); err != nil {
+	if _, msg, err := c.roundTripLocked(0, &wire.NamespaceRegisterRequest{Provider: provider}); err != nil {
 		return err
 	} else if _, ok := msg.(*wire.OKResponse); !ok {
 		return fmt.Errorf("namespace-register response type %T, want *wire.OKResponse", msg)
@@ -640,7 +645,24 @@ func (c *Client) roundTripLocked(sessionID uint64, req wire.Message) (wire.Frame
 
 func isSessionControlScript(script string) bool {
 	trimmed := strings.TrimSpace(script)
-	return trimmed == ":sess:list" || strings.HasPrefix(trimmed, ":sess:take ") || trimmed == ":sess:return"
+	switch {
+	case trimmed == ":help":
+		return true
+	case strings.HasPrefix(trimmed, ":help "):
+		return true
+	case trimmed == ":ns:list":
+		return true
+	case strings.HasPrefix(trimmed, ":ns:show "):
+		return true
+	case trimmed == ":sess:list":
+		return true
+	case strings.HasPrefix(trimmed, ":sess:take "):
+		return true
+	case trimmed == ":sess:return":
+		return true
+	default:
+		return false
+	}
 }
 
 type sessionControlScript struct {
@@ -651,6 +673,14 @@ type sessionControlScript struct {
 func parseSessionControlScript(script string) (sessionControlScript, bool) {
 	trimmed := strings.TrimSpace(script)
 	switch {
+	case trimmed == ":help":
+		return sessionControlScript{name: "help"}, true
+	case strings.HasPrefix(trimmed, ":help "):
+		return sessionControlScript{name: "help"}, true
+	case trimmed == ":ns:list":
+		return sessionControlScript{name: "ns-list"}, true
+	case strings.HasPrefix(trimmed, ":ns:show "):
+		return sessionControlScript{name: "ns-show"}, true
 	case trimmed == ":sess:list":
 		return sessionControlScript{name: "list"}, true
 	case trimmed == ":sess:return":

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	clientsession "ion/internal/client/session"
+	"ion/internal/proto/wire"
 	"ion/internal/server/workspace"
 )
 
@@ -629,6 +630,119 @@ func TestServerInterruptCancelsDelegatedSlowInvocation(t *testing.T) {
 
 	if got := stdout.String(); !strings.Contains(got, "demolsp slow cancelled\n") {
 		t.Fatalf("stdout after slow cancel = %q", got)
+	}
+}
+
+func TestServerNamespaceHelpCommands(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	service, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(service) error = %v", err)
+	}
+	defer service.Close()
+	if err := service.RegisterNamespaceProvider(wire.NamespaceProviderDoc{
+		Namespace: "demolsp",
+		Summary:   "demo LSP commands",
+		Help:      "Synthetic LSP-like commands for smoke testing.",
+		Commands: []wire.NamespaceCommandDoc{
+			{
+				Name:    "describe",
+				Summary: "report the demo symbol target",
+				Help:    "Reads the current view name and reports a synthetic symbol target.",
+			},
+			{
+				Name:    "slow",
+				Summary: "wait until interrupted",
+				Help:    "Blocks until the caller interrupts the delegated invocation.",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterNamespaceProvider() error = %v", err)
+	}
+
+	var stderr bytes.Buffer
+	caller, err := clientsession.DialUnix(socketPath, io.Discard, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+
+	if _, err := caller.Execute(":ns:list\n"); err != nil {
+		t.Fatalf("Execute(:ns:list) error = %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "demolsp\tdemo LSP commands\n") {
+		t.Fatalf("stderr after :ns:list = %q", got)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":ns:show demolsp\n"); err != nil {
+		t.Fatalf("Execute(:ns:show demolsp) error = %v", err)
+	}
+	gotShow := stderr.String()
+	if !strings.Contains(gotShow, "demolsp\tdemo LSP commands\n") || !strings.Contains(gotShow, ":demolsp:describe\treport the demo symbol target\n") || !strings.Contains(gotShow, ":demolsp:slow\twait until interrupted\n") {
+		t.Fatalf("stderr after :ns:show = %q", gotShow)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":help :ns\n"); err != nil {
+		t.Fatalf("Execute(:help :ns) error = %v", err)
+	}
+	gotNSHelp := stderr.String()
+	if !strings.Contains(gotNSHelp, ":ns\n") || !strings.Contains(gotNSHelp, "Summary: namespace discovery commands\n") || !strings.Contains(gotNSHelp, "Built-in commands for discovering registered namespaces and their documented commands.\n") || !strings.Contains(gotNSHelp, ":ns:list\tlist registered namespaces\n") || !strings.Contains(gotNSHelp, ":ns:show\tlist commands in one namespace\n") {
+		t.Fatalf("stderr after :help :ns = %q", gotNSHelp)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":help :demolsp\n"); err != nil {
+		t.Fatalf("Execute(:help :demolsp) error = %v", err)
+	}
+	gotProviderHelp := stderr.String()
+	if !strings.Contains(gotProviderHelp, ":demolsp\n") || !strings.Contains(gotProviderHelp, "Summary: demo LSP commands\n") || !strings.Contains(gotProviderHelp, "Synthetic LSP-like commands for smoke testing.\n") || !strings.Contains(gotProviderHelp, ":demolsp:describe\treport the demo symbol target\n") || !strings.Contains(gotProviderHelp, ":demolsp:slow\twait until interrupted\n") {
+		t.Fatalf("stderr after :help :demolsp = %q", gotProviderHelp)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":help :demolsp:slow\n"); err != nil {
+		t.Fatalf("Execute(:help :demolsp:slow) error = %v", err)
+	}
+	gotHelp := stderr.String()
+	if !strings.Contains(gotHelp, ":demolsp:slow\n") || !strings.Contains(gotHelp, "Summary: wait until interrupted\n") || !strings.Contains(gotHelp, "Blocks until the caller interrupts the delegated invocation.\n") {
+		t.Fatalf("stderr after :help = %q", gotHelp)
 	}
 }
 

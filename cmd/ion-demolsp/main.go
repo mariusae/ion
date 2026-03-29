@@ -18,6 +18,31 @@ import (
 
 const demoNamespace = "demolsp"
 
+func demoProviderDoc() wire.NamespaceProviderDoc {
+	return wire.NamespaceProviderDoc{
+		Namespace: demoNamespace,
+		Summary:   "demo LSP commands",
+		Help:      "Synthetic LSP-like commands for testing delegated namespace execution, navigation, and cancellation.",
+		Commands: []wire.NamespaceCommandDoc{
+			{
+				Name:    "describe",
+				Summary: "report the demo symbol target",
+				Help:    "Reads the current view name from the caller's session and prints a synthetic symbol resolution pointing at README.md:3:1. Takes no arguments.",
+			},
+			{
+				Name:    "goto",
+				Summary: "jump to the demo target",
+				Help:    "Opens README.md at line 3 in the caller's session and reports the resolved demo target. Takes no arguments.",
+			},
+			{
+				Name:    "slow",
+				Summary: "wait until interrupted",
+				Help:    "Blocks until the caller interrupts the delegated invocation. Takes no arguments and is useful for testing cancellation wiring.",
+			},
+		},
+	}
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -129,7 +154,7 @@ func runForeground(socketPath string, ready io.WriteCloser) (err error) {
 	}
 	defer client.Close()
 
-	if err := client.RegisterNamespace(demoNamespace); err != nil {
+	if err := client.RegisterNamespaceProvider(demoProviderDoc()); err != nil {
 		return err
 	}
 

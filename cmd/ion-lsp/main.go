@@ -25,6 +25,7 @@ import (
 )
 
 const lspNamespace = "lsp"
+const maxServerLogEntries = 200
 
 var lspMenuCommands = []wire.MenuCommand{
 	{Command: ":lsp:goto", Label: "symbol"},
@@ -36,7 +37,7 @@ func providerDoc() wire.NamespaceProviderDoc {
 	return wire.NamespaceProviderDoc{
 		Namespace: lspNamespace,
 		Summary:   "Language Server Protocol commands",
-		Help:      "Routes navigation and hover requests through configured LSP servers. Servers are selected by the configured path match rules.",
+		Help:      "Routes navigation, status, and hover requests through configured LSP servers. Servers are selected by the configured path match rules.",
 		Commands: []wire.NamespaceCommandDoc{
 			{
 				Name:    "goto",
@@ -52,6 +53,16 @@ func providerDoc() wire.NamespaceProviderDoc {
 				Name:    "gototype",
 				Summary: "jump to the type definition under dot",
 				Help:    "Resolves the type of the symbol at dot via textDocument/typeDefinition and opens the first target in the current ion session. Takes no arguments.",
+			},
+			{
+				Name:    "status",
+				Summary: "show the current state of the matching LSP server",
+				Help:    "Prints the current runtime state, configured command, synced document count, and latest status message for the LSP server selected for the current buffer. Takes no arguments.",
+			},
+			{
+				Name:    "log",
+				Summary: "show recent logs from the matching LSP server",
+				Help:    "Prints the recent stderr and notification messages seen from the LSP server selected for the current buffer. Takes no arguments.",
 			},
 		},
 	}
@@ -274,6 +285,9 @@ func runForeground(cfg config, ready io.WriteCloser) (err error) {
 	if err != nil {
 		return err
 	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	client, err := clientsession.DialUnix(cfg.socketPath, io.Discard, io.Discard)
 	if err != nil {
 		return err
@@ -484,9 +498,9 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 }
 
 func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPosition, string, error) {
-	path, server, ok := m.matchView(view)
-	if !ok {
-		return nil, lspPosition{}, "", fmt.Errorf("no LSP server configured for %q", view.Name)
+	path, server, err := m.serverForView(view)
+	if err != nil {
+		return nil, lspPosition{}, "", err
 	}
 	if err := server.EnsureView(wire.BufferView{
 		ID:   view.ID,
@@ -496,6 +510,14 @@ func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPositio
 		return nil, lspPosition{}, "", err
 	}
 	return server, positionForOffset(view.Text, view.DotStart), pathToURI(path), nil
+}
+
+func (m *lspManager) serverForView(view wire.BufferView) (string, *lspServer, error) {
+	path, server, ok := m.matchView(view)
+	if !ok {
+		return "", nil, fmt.Errorf("no LSP server configured for %q", view.Name)
+	}
+	return path, server, nil
 }
 
 func handleInvocation(client, aux *clientsession.Client, manager *lspManager, inv wire.Invocation) error {
@@ -526,6 +548,10 @@ func handleInvocation(client, aux *clientsession.Client, manager *lspManager, in
 		return finishGoto(client, session, manager, inv.ID, view, "textDocument/typeDefinition", "type definition")
 	case ":lsp:show":
 		return finishHover(client, manager, inv.ID, view)
+	case ":lsp:status":
+		return finishStatus(client, manager, inv.ID, view)
+	case ":lsp:log":
+		return finishLog(client, manager, inv.ID, view)
 	default:
 		return client.FinishInvocation(inv.ID, fmt.Sprintf("unknown command `%s'", script), "", "")
 	}
@@ -628,6 +654,22 @@ func finishHover(client *clientsession.Client, manager *lspManager, invocationID
 	return client.FinishInvocation(invocationID, "", text, "")
 }
 
+func finishStatus(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+	_, server, err := manager.serverForView(view)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	return client.FinishInvocation(invocationID, "", server.StatusReport(), "")
+}
+
+func finishLog(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+	_, server, err := manager.serverForView(view)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	return client.FinishInvocation(invocationID, "", server.LogReport(), "")
+}
+
 type lspServer struct {
 	name       string
 	languageID string
@@ -647,11 +689,18 @@ type lspServer struct {
 	initialized bool
 	closed      bool
 	lastStatus  string
+	logs        []serverLogEntry
 }
 
 type documentState struct {
 	version int
 	text    string
+}
+
+type serverLogEntry struct {
+	At      time.Time
+	Source  string
+	Message string
 }
 
 type rpcEnvelope struct {
@@ -994,7 +1043,10 @@ func (s *lspServer) stderrLoop(stderr io.Reader) {
 		if line == "" {
 			continue
 		}
-		s.publishStatus(line)
+		s.publishMessage("stderr", line)
+	}
+	if err := scanner.Err(); err != nil {
+		s.appendLog("stderr", "read error: "+err.Error())
 	}
 }
 
@@ -1002,9 +1054,32 @@ func (s *lspServer) handleNotification(method string, params json.RawMessage) {
 	switch method {
 	case "experimental/serverStatus", "window/logMessage", "$/progress":
 		if message := formatServerNotification(method, params); message != "" {
-			s.publishStatus(message)
+			s.publishMessage(method, message)
 		}
 	}
+}
+
+func (s *lspServer) publishMessage(source, message string) {
+	s.appendLog(source, message)
+	s.publishStatus(message)
+}
+
+func (s *lspServer) appendLog(source, message string) {
+	message = strings.TrimSpace(message)
+	source = strings.TrimSpace(source)
+	if s == nil || message == "" {
+		return
+	}
+	s.mu.Lock()
+	s.logs = append(s.logs, serverLogEntry{
+		At:      time.Now(),
+		Source:  source,
+		Message: message,
+	})
+	if len(s.logs) > maxServerLogEntries {
+		s.logs = append([]serverLogEntry(nil), s.logs[len(s.logs)-maxServerLogEntries:]...)
+	}
+	s.mu.Unlock()
 }
 
 func (s *lspServer) publishStatus(message string) {
@@ -1034,6 +1109,76 @@ func (s *lspServer) failPending() {
 	s.mu.Unlock()
 	for _, ch := range pending {
 		close(ch)
+	}
+}
+
+func (s *lspServer) StatusReport() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	name := s.name
+	command := s.command
+	root := s.root
+	status := s.lastStatus
+	docCount := len(s.docs)
+	state := s.runtimeStateLocked()
+	pid := 0
+	if s.cmd != nil && s.cmd.Process != nil {
+		pid = s.cmd.Process.Pid
+	}
+	s.mu.Unlock()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "lsp[%s]\n", name)
+	fmt.Fprintf(&b, "state: %s\n", state)
+	fmt.Fprintf(&b, "command: %s\n", command)
+	fmt.Fprintf(&b, "root: %s\n", root)
+	fmt.Fprintf(&b, "documents: %d\n", docCount)
+	if pid > 0 {
+		fmt.Fprintf(&b, "pid: %d\n", pid)
+	}
+	if status != "" {
+		fmt.Fprintf(&b, "status: %s\n", status)
+	}
+	return b.String()
+}
+
+func (s *lspServer) LogReport() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	name := s.name
+	state := s.runtimeStateLocked()
+	logs := append([]serverLogEntry(nil), s.logs...)
+	s.mu.Unlock()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "lsp[%s] log\n", name)
+	fmt.Fprintf(&b, "state: %s\n", state)
+	if len(logs) == 0 {
+		b.WriteString("no log entries\n")
+		return b.String()
+	}
+	for _, entry := range logs {
+		fmt.Fprintf(&b, "%s [%s] %s\n", entry.At.Format(time.RFC3339), entry.Source, entry.Message)
+	}
+	return b.String()
+}
+
+func (s *lspServer) runtimeStateLocked() string {
+	switch {
+	case s.closed:
+		return "closed"
+	case s.cmd == nil:
+		return "idle"
+	case s.initialized:
+		return "running"
+	case s.stdin == nil:
+		return "disconnected"
+	default:
+		return "starting"
 	}
 }
 
@@ -1348,10 +1493,16 @@ func resolvePath(root, name string) (string, error) {
 	if name == "" {
 		return "", nil
 	}
+	var path string
 	if filepath.IsAbs(name) {
-		return filepath.Clean(name), nil
+		path = filepath.Clean(name)
+	} else {
+		path = filepath.Clean(filepath.Join(root, name))
 	}
-	return filepath.Clean(filepath.Join(root, name)), nil
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, nil
+	}
+	return path, nil
 }
 
 func pathToURI(path string) string {

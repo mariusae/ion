@@ -81,6 +81,22 @@ func TestPositionForOffsetUsesUTF16Units(t *testing.T) {
 	}
 }
 
+func TestProviderDocIncludesStatusAndLog(t *testing.T) {
+	t.Parallel()
+
+	doc := providerDoc()
+	if got, want := len(doc.Commands), 5; got != want {
+		t.Fatalf("len(providerDoc().Commands) = %d, want %d", got, want)
+	}
+	names := make([]string, 0, len(doc.Commands))
+	for _, cmd := range doc.Commands {
+		names = append(names, cmd.Name)
+	}
+	if got := strings.Join(names, ","); got != "goto,show,gototype,status,log" {
+		t.Fatalf("providerDoc command names = %q", got)
+	}
+}
+
 func TestOffsetForLineColumn(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +131,70 @@ func TestTargetAddressUsesServerDocumentText(t *testing.T) {
 	}
 	if want := "#6"; got != want {
 		t.Fatalf("targetAddress() = %q, want %q", got, want)
+	}
+}
+
+func TestLSPServerStatusReport(t *testing.T) {
+	t.Parallel()
+
+	server := &lspServer{
+		name:        "go",
+		command:     "gopls serve",
+		root:        "/tmp/demo",
+		cmd:         &exec.Cmd{},
+		initialized: true,
+		lastStatus:  "ready",
+		docs: map[string]documentState{
+			"file:///tmp/demo/a.go": {version: 1, text: "package main\n"},
+			"file:///tmp/demo/b.go": {version: 1, text: "package main\n"},
+		},
+	}
+
+	got := server.StatusReport()
+	for _, want := range []string{
+		"lsp[go]\n",
+		"state: running\n",
+		"command: gopls serve\n",
+		"root: /tmp/demo\n",
+		"documents: 2\n",
+		"status: ready\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("StatusReport() = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestLSPServerLogReport(t *testing.T) {
+	t.Parallel()
+
+	server := &lspServer{
+		name: "go",
+		cmd:  &exec.Cmd{},
+		logs: []serverLogEntry{
+			{
+				At:      time.Date(2026, time.March, 29, 12, 0, 0, 0, time.UTC),
+				Source:  "stderr",
+				Message: "first line",
+			},
+			{
+				At:      time.Date(2026, time.March, 29, 12, 0, 1, 0, time.UTC),
+				Source:  "window/logMessage",
+				Message: "second line",
+			},
+		},
+	}
+
+	got := server.LogReport()
+	for _, want := range []string{
+		"lsp[go] log\n",
+		"state: disconnected\n",
+		"2026-03-29T12:00:00Z [stderr] first line\n",
+		"2026-03-29T12:00:01Z [window/logMessage] second line\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("LogReport() = %q, want substring %q", got, want)
+		}
 	}
 }
 

@@ -36,6 +36,8 @@ After `ion-lsp` registers, these commands are available in ion:
 - `:lsp:goto` - jump to definition via `textDocument/definition`
 - `:lsp:show` - show hover text via `textDocument/hover`
 - `:lsp:gototype` - jump to type definition via `textDocument/typeDefinition`
+- `:lsp:status` - show the current state of the matching server
+- `:lsp:log` - show recent stderr and notification messages from the matching server
 
 You can also use:
 
@@ -43,6 +45,8 @@ You can also use:
 - `:help :lsp:goto`
 - `:help :lsp:show`
 - `:help :lsp:gototype`
+- `:help :lsp:status`
+- `:help :lsp:log`
 
 ## Behavior
 

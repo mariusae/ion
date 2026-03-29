@@ -78,7 +78,7 @@ func TestRunReportsBareUnknownCommandToken(t *testing.T) {
 func TestRunAcceptsServerQuitAliases(t *testing.T) {
 	t.Parallel()
 
-	for _, script := range []string{"Q\n", ":ion:Q\n"} {
+	for _, script := range []string{"Q\n", ":ion:Q\n", "::Q\n"} {
 		t.Run(strings.TrimSpace(script), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "a.txt")
 			if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {

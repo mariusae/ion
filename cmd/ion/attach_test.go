@@ -1,6 +1,17 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"ion/internal/server/transport"
+	"ion/internal/server/workspace"
+)
 
 func TestResidentAttachKeyUsesTmuxSessionWhenAvailable(t *testing.T) {
 	t.Parallel()
@@ -67,5 +78,57 @@ func TestResidentPathsUseSharedPrefix(t *testing.T) {
 	}
 	if got, want := paths.panePath, "/tmp/ion/"+hashedPathBase(residentPathVersionPrefix, "tmux-session:$9")+".pane"; got != want {
 		t.Fatalf("panePath = %q, want %q", got, want)
+	}
+}
+
+func TestRunResidentDownloadModeWithAcceptsDoubleColonQuitAlias(t *testing.T) {
+	t.Parallel()
+
+	base := "/tmp"
+	if info, err := os.Stat(base); err != nil || !info.IsDir() {
+		base = os.TempDir()
+	}
+	wd, err := os.MkdirTemp(base, "ion-a-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(wd)
+	})
+
+	rt := residentRuntime{
+		getenv:     func(string) string { return "" },
+		getwd:      func() (string, error) { return wd, nil },
+		tempDir:    func() string { return base },
+		tmux:       runTmuxCommand,
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		spawn: func(cfg config, socketPath string) error {
+			if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+				return err
+			}
+			listener, err := net.Listen("unix", socketPath)
+			if err != nil {
+				return err
+			}
+			server := transport.New(workspace.New())
+			done := make(chan error, 1)
+			go func() {
+				done <- server.Serve(listener)
+			}()
+			t.Cleanup(func() {
+				_ = listener.Close()
+				if err := <-done; err != nil && !errors.Is(err, net.ErrClosed) {
+					t.Fatalf("Serve() error = %v", err)
+				}
+				_ = os.Remove(socketPath)
+			})
+			return nil
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runResidentDownloadModeWith(config{cmode: true, download: true}, strings.NewReader("::Q\n"), &stdout, &stderr, rt); err != nil {
+		t.Fatalf("runResidentDownloadModeWith() error = %v", err)
 	}
 }

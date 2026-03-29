@@ -81,6 +81,7 @@ func (s *DownloadSession) Bootstrap(files []string) error {
 
 // Execute parses and forwards one command script for this client.
 func (s *DownloadSession) Execute(script string) (bool, error) {
+	script = normalizeIonNamespaceAlias(script)
 	if isSessionQuitCommand(script) {
 		return false, nil
 	}
@@ -142,6 +143,15 @@ func isSessionQuitCommand(script string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeIonNamespaceAlias(script string) string {
+	trimmed := strings.TrimLeft(script, " \t")
+	if !strings.HasPrefix(trimmed, "::") {
+		return script
+	}
+	prefixLen := len(script) - len(trimmed)
+	return script[:prefixLen] + ":ion:" + trimmed[2:]
 }
 
 func (s *DownloadSession) executeAddressedB(cmd *cmdlang.Cmd) (bool, error) {

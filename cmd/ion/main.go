@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"ion/internal/client/download"
 	clientsession "ion/internal/client/session"
@@ -38,8 +39,27 @@ func main() {
 func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	cfg, err := parseArgs(args)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			_, _ = io.WriteString(stdout, helpText())
+			return 0
+		}
 		fmt.Fprintf(stderr, "ion: %v\n", err)
 		return 2
+	}
+
+	if cfg.cmode {
+		if cfg.download {
+			if err := runResidentDownloadMode(cfg, stdin, stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "ion: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+		if err := runCommandMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	if cfg.download {
@@ -60,14 +80,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	if cfg.nmode {
 		if err := runNewPaneMode(cfg, stdin, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "ion: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	if cfg.cmode {
-		if err := runCommandMode(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
 			return 1
 		}
@@ -134,6 +146,13 @@ func parseArgs(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.autoindent = !disableAutoIndent
+	cfg.files = fs.Args()
+	if !cfg.attach && !cfg.nmode && !cfg.bmode && !cfg.cmode && !cfg.bserve && !cfg.serve && !cfg.rage && len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
+		cfg.cmode = true
+	}
+	if len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
+		cfg.files[0] = normalizeIonNamespaceAlias(cfg.files[0])
+	}
 	if cfg.download && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -d cannot be combined")
 	}
@@ -142,9 +161,6 @@ func parseArgs(args []string) (config, error) {
 	}
 	if cfg.download && cfg.nmode {
 		return config{}, fmt.Errorf("-N and -d cannot be combined")
-	}
-	if cfg.download && cfg.cmode {
-		return config{}, fmt.Errorf("-C and -d cannot be combined")
 	}
 	if cfg.download && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -d cannot be combined")
@@ -224,11 +240,10 @@ func parseArgs(args []string) (config, error) {
 	if cfg.serve && cfg.socketPath == "" {
 		return config{}, fmt.Errorf("-serve requires -socket")
 	}
-	cfg.files = fs.Args()
 	if cfg.rage && len(cfg.files) > 0 {
 		return config{}, fmt.Errorf("-rage does not take file arguments")
 	}
-	if cfg.cmode && len(cfg.files) == 0 {
+	if cfg.cmode && !cfg.download && len(cfg.files) == 0 {
 		return config{}, fmt.Errorf("-C requires a command")
 	}
 	if cfg.serve && len(cfg.files) > 0 {
@@ -251,6 +266,39 @@ func runRage(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	_ = cfg
 	_ = stderr
 	return term.WriteThemeDiagnostics(stdin, stdout)
+}
+
+func helpText() string {
+	return "" +
+		"usage: ion [options] [files]\n" +
+		"       ion <fully-qualified-command>\n" +
+		"\n" +
+		"modes:\n" +
+		"  -d        command-line download mode\n" +
+		"  -A        attach to resident server\n" +
+		"  -N        open a new tmux pane attached to resident server\n" +
+		"  -B        reuse the last active session in the resident server\n" +
+		"  -C        resident command mode; with -d, run resident download mode\n" +
+		"  -rage     print terminal theme diagnostics\n" +
+		"  -help     show this help\n" +
+		"\n" +
+		"notes:\n" +
+		"  :: is a synonym for :ion:\n" +
+		"  ion :sess:list     is the same as ion -C :sess:list\n" +
+		"  ion ::Q            is the same as ion -C :ion:Q\n"
+}
+
+func looksLikeCommandScript(arg string) bool {
+	return strings.HasPrefix(strings.TrimSpace(arg), ":")
+}
+
+func normalizeIonNamespaceAlias(script string) string {
+	trimmed := strings.TrimLeft(script, " \t")
+	if !strings.HasPrefix(trimmed, "::") {
+		return script
+	}
+	prefixLen := len(script) - len(trimmed)
+	return script[:prefixLen] + ":ion:" + trimmed[2:]
 }
 
 func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {

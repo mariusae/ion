@@ -591,6 +591,48 @@ func TestParseArgsRecognizesCommandMode(t *testing.T) {
 	}
 }
 
+func TestParseArgsInfersCommandModeForFullyQualifiedCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{":sess:list"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.cmode {
+		t.Fatalf("config.cmode = false, want true")
+	}
+	if got, want := cfg.files, []string{":sess:list"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsNormalizesDoubleColonCommandAlias(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"::Q"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.cmode {
+		t.Fatalf("config.cmode = false, want true")
+	}
+	if got, want := cfg.files, []string{":ion:Q"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsAllowsResidentDownloadMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-C", "-d"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.cmode || !cfg.download {
+		t.Fatalf("config = %#v, want cmode+download", cfg)
+	}
+}
+
 func TestParseArgsDisablesAutoIndentWithLongFlag(t *testing.T) {
 	t.Parallel()
 

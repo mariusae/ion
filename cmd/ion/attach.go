@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"ion/internal/client/download"
 	clientsession "ion/internal/client/session"
 	clienttarget "ion/internal/client/target"
 	"ion/internal/client/term"
@@ -88,6 +89,10 @@ func runCommandMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error
 	return runCommandModeWith(cfg, stdout, stderr, defaultResidentRuntime())
 }
 
+func runResidentDownloadMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	return runResidentDownloadModeWith(cfg, stdin, stdout, stderr, defaultResidentRuntime())
+}
+
 func runCommandModeWith(cfg config, stdout, stderr io.Writer, rt residentRuntime) error {
 	paths, err := ensureResidentServer(cfg, rt)
 	if err != nil {
@@ -98,12 +103,25 @@ func runCommandModeWith(cfg config, stdout, stderr io.Writer, rt residentRuntime
 		return err
 	}
 	defer client.Close()
-	script := strings.Join(cfg.files, " ")
+	script := normalizeIonNamespaceAlias(strings.Join(cfg.files, " "))
 	if !strings.HasSuffix(script, "\n") {
 		script += "\n"
 	}
 	_, err = client.Execute(script)
 	return err
+}
+
+func runResidentDownloadModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt residentRuntime) error {
+	paths, err := ensureResidentServer(cfg, rt)
+	if err != nil {
+		return err
+	}
+	client, err := clientsession.DialUnix(paths.socketPath, stdout, stderr)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return download.Run(cfg.files, stdin, stderr, client)
 }
 
 func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {

@@ -270,6 +270,7 @@ func (c *Client) Bootstrap(files []string) error {
 
 // Execute runs one command script.
 func (c *Client) Execute(script string) (bool, error) {
+	script = normalizeIonNamespaceAlias(script)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.ensureConnectedLocked(); err != nil {
@@ -466,6 +467,7 @@ func (s *Session) Execute(script string) (bool, error) {
 	if s == nil || s.client == nil || s.id == 0 {
 		return false, fmt.Errorf("nil session")
 	}
+	script = normalizeIonNamespaceAlias(script)
 	_, msg, err := s.client.roundTripForSession(s.id, &wire.CommandRequest{Script: script})
 	if err != nil {
 		return false, err
@@ -644,4 +646,13 @@ func parseSessionControlScript(script string) (sessionControlScript, bool) {
 	default:
 		return sessionControlScript{}, false
 	}
+}
+
+func normalizeIonNamespaceAlias(script string) string {
+	trimmed := strings.TrimLeft(script, " \t")
+	if !strings.HasPrefix(trimmed, "::") {
+		return script
+	}
+	prefixLen := len(script) - len(trimmed)
+	return script[:prefixLen] + ":ion:" + trimmed[2:]
 }

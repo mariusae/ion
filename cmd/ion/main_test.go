@@ -108,6 +108,23 @@ func TestRunTermRejectsNonTTY(t *testing.T) {
 	}
 }
 
+func TestRunHelpWritesUsage(t *testing.T) {
+	t.Parallel()
+
+	var stdout syncBuffer
+	var stderr syncBuffer
+
+	if got := run([]string{"-help"}, strings.NewReader(""), &stdout, &stderr); got != 0 {
+		t.Fatalf("run(-help) = %d, want 0", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "usage: ion") || !strings.Contains(got, "ion <fully-qualified-command>") {
+		t.Fatalf("stdout = %q, want usage text", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool, desc string) {
 	t.Helper()
 

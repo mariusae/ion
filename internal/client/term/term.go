@@ -17,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	clientdiag "ion/internal/client/commanddiag"
 	clienttarget "ion/internal/client/target"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
@@ -295,7 +296,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	var refreshBuffer func() error
 
-	executePending := func(final bool) (bool, error) {
+	reportCommandDiagnostic := func(report func(string) error, err error) error {
+		line := diagnosticText(err)
+		if report != nil {
+			return report(line)
+		}
+		_, werr := fmt.Fprintln(stderr, line)
+		return werr
+	}
+
+	executePending := func(final bool, report func(string) error) (bool, error) {
 		for {
 			parser.ResetRunes(pending)
 			cmd, err := parser.ParseWithFinal(final)
@@ -303,7 +313,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if errors.Is(err, cmdlang.ErrNeedMoreInput) {
 					return false, nil
 				}
-				if _, werr := fmt.Fprintf(stderr, "?%v\n", err); werr != nil {
+				err = clientdiag.RewriteParseError(clientdiag.PendingScript(pending), err)
+				if werr := reportCommandDiagnostic(report, err); werr != nil {
 					return false, werr
 				}
 				if !final {
@@ -325,7 +336,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 			ok, err := svc.Execute(script)
 			if err != nil {
-				if _, werr := fmt.Fprintf(stderr, "?%v\n", err); werr != nil {
+				if werr := reportCommandDiagnostic(report, err); werr != nil {
 					return false, werr
 				}
 				continue
@@ -346,7 +357,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		pending = append(pending, linebuf...)
 		pending = append(pending, '\n')
 		linebuf = linebuf[:0]
-		return executePending(false)
+		return executePending(false, nil)
 	}
 
 	eraseLast := func() error {
@@ -364,7 +375,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		linebuf = linebuf[:0]
 		pending = append(pending, '\n')
-		return executePending(false)
+		return executePending(false, nil)
 	}
 
 	refreshBuffer = func() error {
@@ -562,6 +573,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		parser.ResetRunes([]rune(line))
 		cmd, err := parser.ParseWithFinal(true)
 		if err != nil {
+			err = clientdiag.RewriteParseError(line, err)
 			return false, nil, err
 		}
 		if cmd == nil {
@@ -647,7 +659,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					queue.push(line)
 				})
 			}
-			done, err := executePending(false)
+			done, err := executePending(false, func(line string) error {
+				queue.push(line)
+				return nil
+			})
 			if capture != nil {
 				capture.Stop()
 			}
@@ -1227,7 +1242,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			if errors.Is(err, io.EOF) {
 				pending = append(pending, linebuf...)
-				_, err := executePending(true)
+				_, err := executePending(true, nil)
 				if err != nil {
 					return err
 				}
@@ -1514,7 +1529,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				break
 			}
 			pending = append(pending, linebuf...)
-			done, err := executePending(true)
+			done, err := executePending(true, nil)
 			if err != nil {
 				return err
 			}

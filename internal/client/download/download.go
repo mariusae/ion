@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"ion/internal/client/commanddiag"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
@@ -43,6 +44,7 @@ func Run(files []string, stdin io.Reader, stderr io.Writer, svc wire.DownloadSer
 				if errors.Is(err, cmdlang.ErrNeedMoreInput) {
 					return false, nil
 				}
+				err = commanddiag.RewriteParseError(commanddiag.PendingScript(pending), err)
 				if err := reportCommandError(stderr, err); err != nil {
 					return false, err
 				}

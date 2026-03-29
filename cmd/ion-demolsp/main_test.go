@@ -106,7 +106,7 @@ func TestRunInvocationGotoExecutesTargetOpen(t *testing.T) {
 	if err := runInvocation(ctrl, root, inv); err != nil {
 		t.Fatalf("runInvocation() error = %v", err)
 	}
-	wantScript := "B " + filepath.Join(root, "README.md") + ":3\n"
+	wantScript := ":ion:push " + filepath.Join(root, "README.md") + ":3\n"
 	if got, want := ctrl.session.scripts, []string{wantScript}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("Execute() scripts = %#v, want %#v", got, want)
 	}

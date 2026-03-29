@@ -547,16 +547,63 @@ func finishGoto(client *clientsession.Client, session *clientsession.Session, ma
 	if err != nil {
 		return client.FinishInvocation(invocationID, fmt.Sprintf("no %s found", label), "", "")
 	}
-	next, err := session.OpenTarget(target.Path, "")
-	if err != nil {
+	if _, err := session.Execute(manager.pushCommand(view, server, target) + "\n"); err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
 	}
-	if offset, ok := offsetForLineColumn(next.Text, target.Line, target.Column); ok {
-		if _, err := session.SetDot(offset, offset); err != nil {
-			return client.FinishInvocation(invocationID, err.Error(), "", "")
+	return client.FinishInvocation(invocationID, "", "", "")
+}
+
+func (m *lspManager) targetAddress(view wire.BufferView, server *lspServer, target locationTarget) (string, bool) {
+	text, ok := m.targetText(view, server, target.Path)
+	if !ok {
+		return "", false
+	}
+	offset, ok := offsetForLineColumn(text, target.Line, target.Column)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("#%d", offset), true
+}
+
+func (m *lspManager) pushCommand(view wire.BufferView, server *lspServer, target locationTarget) string {
+	spec := target.Path
+	if address, ok := m.targetAddress(view, server, target); ok {
+		spec += ":" + address
+	} else {
+		spec += ":" + strconv.Itoa(target.Line)
+		if target.Column > 1 {
+			spec += ":" + strconv.Itoa(target.Column)
 		}
 	}
-	return client.FinishInvocation(invocationID, "", fmt.Sprintf("%s %s:%d:%d\n", methodSummary(method), target.DisplayPath(manager.root), target.Line, target.Column), "")
+	return ":ion:push " + spec
+}
+
+func (m *lspManager) targetText(view wire.BufferView, server *lspServer, path string) (string, bool) {
+	if currentPath, err := resolvePath(m.root, view.Name); err == nil && currentPath == path {
+		return view.Text, true
+	}
+	if text, ok := server.DocumentText(path); ok {
+		return text, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+func (s *lspServer) DocumentText(path string) (string, bool) {
+	if s == nil || path == "" {
+		return "", false
+	}
+	uri := pathToURI(path)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doc, ok := s.docs[uri]
+	if !ok {
+		return "", false
+	}
+	return doc.text, true
 }
 
 func finishHover(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
@@ -579,15 +626,6 @@ func finishHover(client *clientsession.Client, manager *lspManager, invocationID
 		text += "\n"
 	}
 	return client.FinishInvocation(invocationID, "", text, "")
-}
-
-func methodSummary(method string) string {
-	switch method {
-	case "textDocument/typeDefinition":
-		return "gototype"
-	default:
-		return "goto"
-	}
 }
 
 type lspServer struct {

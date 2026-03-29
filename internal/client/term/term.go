@@ -624,24 +624,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return !ok, lines, nil
 	}
 
-	submitOverlay := func() (bool, error) {
+	runOverlayCommand := func(line string, recordHistory bool) (bool, error) {
 		type overlayResult struct {
 			done bool
 			err  error
 		}
-
-		line := string(overlay.input)
-		if len(overlay.input) == 0 {
-			last, ok := overlay.lastCommand()
-			if !ok {
-				return false, nil
-			}
-			line = last
-		} else {
-			overlay.addCommand(line)
+		if strings.TrimSpace(line) == "" {
+			return false, nil
+		}
+		historyLine := strings.TrimSuffix(line, "\n")
+		if !strings.HasSuffix(line, "\n") {
+			line += "\n"
+		}
+		if !overlay.visible {
+			overlay.open("")
+		}
+		if recordHistory {
+			overlay.addCommand(historyLine)
 		}
 		pending = append(pending, []rune(line)...)
-		pending = append(pending, '\n')
 		overlay.resetInput()
 		queue := newOverlayOutputQueue()
 		resultCh := make(chan overlayResult, 1)
@@ -722,6 +723,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
+	submitOverlay := func() (bool, error) {
+		line := string(overlay.input)
+		if len(overlay.input) == 0 {
+			last, ok := overlay.lastCommand()
+			if !ok {
+				return false, nil
+			}
+			line = last
+		}
+		return runOverlayCommand(line, len(overlay.input) != 0)
+	}
+
 	showMenu := func(clickX, clickY int) error {
 		refreshTerminalSize()
 		snapshot, err := loadMenuSnapshot(svc)
@@ -798,12 +811,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			buffer.status = ""
 			return false, nil
-		case menuHistoryPrev, menuHistoryNext:
-			line := "P\n"
-			if item.kind == menuHistoryNext {
-				line = "N\n"
-			}
-			done, _, err := executeDirect(line, true)
+		case menuHistoryPop:
+			done, _, err := executeDirect(":ion:pop\n", true)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
@@ -817,19 +826,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			return false, nil
 		case menuCommand:
-			done, lines, err := executeDirect(strings.TrimSpace(item.command)+"\n", true)
+			done, err := runOverlayCommand(strings.TrimSpace(item.command), true)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
 			}
-			if done {
-				return true, nil
-			}
-			if err := refreshBuffer(); err != nil {
-				return false, err
-			}
-			applyStatusResult("", lines)
-			return false, nil
+			return done, nil
 		case menuPlumb:
 			token := plumbToken(buffer)
 			if token == "" {

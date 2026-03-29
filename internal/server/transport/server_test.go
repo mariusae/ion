@@ -411,7 +411,7 @@ func TestServerDelegatesNamespaceGotoAndDescribe(t *testing.T) {
 					serviceErr <- err
 					return
 				}
-				_, err := service.Session(inv.SessionID).Execute("B " + readme + ":3\n")
+				_, err := service.Session(inv.SessionID).Execute(":ion:push " + readme + ":3\n")
 				if retErr := service.Return(inv.SessionID); err == nil && retErr != nil {
 					err = retErr
 				}
@@ -468,14 +468,14 @@ func TestServerDelegatesNamespaceGotoAndDescribe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("caller.NavigationStack() error = %v", err)
 	}
-	if got, want := len(stack.Entries), 3; got != want {
+	if got, want := len(stack.Entries), 2; got != want {
 		t.Fatalf("len(stack.Entries) = %d, want %d (%#v)", got, want, stack.Entries)
 	}
-	if got, want := stack.Current, 2; got != want {
+	if got, want := stack.Current, 1; got != want {
 		t.Fatalf("stack.Current = %d, want %d", got, want)
 	}
-	if got, want := stack.Entries[2].Label, readme+":#8,#14"; got != want {
-		t.Fatalf("stack.Entries[2] = %q, want %q", got, want)
+	if got, want := stack.Entries[1].Label, readme+":#8,#14"; got != want {
+		t.Fatalf("stack.Entries[1] = %q, want %q", got, want)
 	}
 
 	select {

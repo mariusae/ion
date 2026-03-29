@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 )
 
@@ -44,13 +43,12 @@ func sameNavigationPoint(a, b navigationPoint) bool {
 	return sameNavigationFile(a, b) && a.dotStart == b.dotStart && a.dotEnd == b.dotEnd
 }
 
-func (s *navigationStack) Record(point navigationPoint) {
+func (s *navigationStack) normalize() {
 	if s == nil {
 		return
 	}
 	if len(s.points) == 0 {
-		s.points = []navigationPoint{point}
-		s.index = 0
+		s.index = -1
 		return
 	}
 	if s.index < 0 {
@@ -59,16 +57,27 @@ func (s *navigationStack) Record(point navigationPoint) {
 	if s.index >= len(s.points) {
 		s.index = len(s.points) - 1
 	}
-	if sameNavigationPoint(s.points[s.index], point) {
+}
+
+func (s *navigationStack) PushTransition(source, dest navigationPoint) {
+	if s == nil {
 		return
 	}
-	for i, existing := range s.points {
-		if sameNavigationPoint(existing, point) {
-			s.index = i
-			return
+	s.normalize()
+	if len(s.points) == 0 {
+		s.points = append(s.points, source)
+		s.index = 0
+	} else {
+		s.points = s.points[:s.index+1]
+		if !sameNavigationPoint(s.points[s.index], source) {
+			s.points = append(s.points, source)
+			s.index = len(s.points) - 1
 		}
 	}
-	s.points = append(s.points[:s.index+1], point)
+	if sameNavigationPoint(s.points[s.index], dest) {
+		return
+	}
+	s.points = append(s.points[:s.index+1], dest)
 	s.index = len(s.points) - 1
 }
 
@@ -83,40 +92,23 @@ func (s *navigationStack) Target(delta int) (navigationPoint, int, bool) {
 	return s.points[next], next, true
 }
 
-func shouldRecordCommandNavigation(cmd *cmdlang.Cmd) bool {
-	if cmd == nil {
-		return false
-	}
-	switch cmd.Cmdc {
-	case '\n', 'p', 'b', 'B', 'e':
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *DownloadSession) recordCurrentView() error {
-	if s == nil {
-		return nil
-	}
-	view, err := s.ws.CurrentView(s.state)
-	if err != nil {
-		return err
-	}
-	s.recordView(view)
-	return nil
-}
-
-func (s *DownloadSession) recordView(view wire.BufferView) {
+func (s *DownloadSession) pushHistory(source, dest wire.BufferView) {
 	if s == nil {
 		return
 	}
-	if point, ok := navigationPointFromView(view); ok {
-		s.history.Record(point)
+	src, ok := navigationPointFromView(source)
+	if !ok {
+		return
 	}
+	dst, ok := navigationPointFromView(dest)
+	if !ok {
+		return
+	}
+	s.history.PushTransition(src, dst)
 }
 
 func (s *DownloadSession) navigate(delta int) (bool, error) {
+	s.history.normalize()
 	target, nextIndex, ok := s.history.Target(delta)
 	if !ok {
 		return true, nil
@@ -135,6 +127,22 @@ func (s *DownloadSession) navigate(delta int) (bool, error) {
 		}
 	}
 	s.history.index = nextIndex
+	return true, nil
+}
+
+func (s *DownloadSession) popNavigation() (bool, error) {
+	if s == nil {
+		return true, nil
+	}
+	s.history.normalize()
+	if s.history.index <= 0 || s.history.index >= len(s.history.points) {
+		return true, nil
+	}
+	ok, err := s.navigate(-1)
+	if err != nil || !ok {
+		return ok, err
+	}
+	s.history.points = s.history.points[:s.history.index+1]
 	return true, nil
 }
 
@@ -210,6 +218,7 @@ func (s *DownloadSession) navigationStack() wire.NavigationStack {
 	if s == nil {
 		return wire.NavigationStack{Current: -1}
 	}
+	s.history.normalize()
 	entries := make([]wire.NavigationEntry, 0, len(s.history.points))
 	for _, point := range s.history.points {
 		entries = append(entries, wire.NavigationEntry{Label: point.displayLabel()})

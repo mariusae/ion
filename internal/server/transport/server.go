@@ -903,6 +903,44 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 			s.changeNotify()
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "push":
+		managed, err := s.waitForControlledSession(frame.SessionID, clientID, &wire.CommandRequest{})
+		if err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		notify, err := s.withManagedSession(managed, stdout, stderr, func(sess *serversession.TermSession) (bool, error) {
+			_, err := sess.PushTarget(strings.Fields(cmd.arg))
+			return true, err
+		})
+		if err != nil {
+			return writeError(conn, frame.RequestID, managed.id, err)
+		}
+		if notify {
+			s.markSessionActive(managed.id)
+			if s.changeNotify != nil {
+				s.changeNotify()
+			}
+		}
+		return wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.CommandResponse{Continue: true})
+	case "pop":
+		managed, err := s.waitForControlledSession(frame.SessionID, clientID, &wire.CommandRequest{})
+		if err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		notify, err := s.withManagedSession(managed, stdout, stderr, func(sess *serversession.TermSession) (bool, error) {
+			_, err := sess.PopNavigation()
+			return true, err
+		})
+		if err != nil {
+			return writeError(conn, frame.RequestID, managed.id, err)
+		}
+		if notify {
+			s.markSessionActive(managed.id)
+			if s.changeNotify != nil {
+				s.changeNotify()
+			}
+		}
+		return wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.CommandResponse{Continue: true})
 	default:
 		return writeError(conn, frame.RequestID, frame.SessionID, fmt.Errorf("unknown session command %q", cmd.name))
 	}
@@ -944,6 +982,14 @@ func parseSessionCommand(script string) (sessionCommand, bool, error) {
 			return sessionCommand{}, true, err
 		}
 		return sessionCommand{name: "menuadd", arg: command, arg2: label}, true, nil
+	case strings.HasPrefix(trimmed, ":ion:push "):
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:push "))
+		if target == "" {
+			return sessionCommand{}, true, fmt.Errorf("push target expected")
+		}
+		return sessionCommand{name: "push", arg: target}, true, nil
+	case trimmed == ":ion:pop":
+		return sessionCommand{name: "pop"}, true, nil
 	case strings.HasPrefix(trimmed, ":ion:menudel "):
 		command := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menudel "))
 		if !validMenuCommand(command) {
@@ -1285,6 +1331,18 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "add a shared custom context-menu item",
 			help:    "Registers one server-global menu item for all attached clients. The first argument is the command to run when the item is selected. The optional label defaults to the command text.",
 		}, true
+	case ":ion:push":
+		return commandHelpDoc{
+			usage:   ":ion:push <b syntax>",
+			summary: "push the current location, then navigate",
+			help:    "Records the current session location in the navigation stack, then opens the destination described using B-style target syntax such as path, path:line, or path:/regexp/.",
+		}, true
+	case ":ion:pop":
+		return commandHelpDoc{
+			usage:   ":ion:pop",
+			summary: "pop the navigation stack",
+			help:    "Navigates to the previous recorded navigation entry and removes the popped entry. If the current stack position is not at the top, forward entries are discarded.",
+		}, true
 	case ":ion:menudel":
 		return commandHelpDoc{
 			usage:   ":ion:menudel <command>",
@@ -1313,6 +1371,17 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Args:    `<command> ["label"]`,
 					Summary: "add a shared custom context-menu item",
 					Help:    "Registers one server-global menu item for all attached clients. The optional label defaults to the command text.",
+				},
+				{
+					Name:    "push",
+					Args:    "<b syntax>",
+					Summary: "push the current location, then navigate",
+					Help:    "Records the current session location in the navigation stack, then opens the destination described using B-style target syntax such as path, path:line, or path:/regexp/.",
+				},
+				{
+					Name:    "pop",
+					Summary: "pop the navigation stack",
+					Help:    "Navigates to the previous recorded navigation entry and removes the popped entry. If the current stack position is not at the top, forward entries are discarded.",
 				},
 				{
 					Name:    "menudel",

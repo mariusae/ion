@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	clientsession "ion/internal/client/session"
+	"ion/internal/proto/wire"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
@@ -87,6 +89,32 @@ func TestOffsetForLineColumn(t *testing.T) {
 	}
 	if got, ok := offsetForLineColumn("one\ntwo\nthree\n", 3, 3); !ok || got != 10 {
 		t.Fatalf("offsetForLineColumn(line 3 col 3) = (%d, %t), want (10, true)", got, ok)
+	}
+}
+
+func TestTargetAddressUsesServerDocumentText(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "demo.go")
+	text := "one\ntwo\nthree\n"
+	manager := &lspManager{root: root}
+	server := &lspServer{
+		docs: map[string]documentState{
+			pathToURI(path): {version: 1, text: text},
+		},
+	}
+
+	got, ok := manager.targetAddress(wire.BufferView{Name: filepath.Join(root, "other.go")}, server, locationTarget{
+		Path:   path,
+		Line:   2,
+		Column: 3,
+	})
+	if !ok {
+		t.Fatal("targetAddress() returned ok=false, want true")
+	}
+	if want := "#6"; got != want {
+		t.Fatalf("targetAddress() = %q, want %q", got, want)
 	}
 }
 
@@ -209,6 +237,10 @@ func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 	if got, want := view.Name, attachGo; got != want {
 		t.Fatalf("view.Name after goto = %q, want %q", got, want)
 	}
+	assertNavigationMatchesView(t, caller, view)
+	if got := stdout.String(); got != "" {
+		t.Fatalf("goto stdout = %q, want empty output", got)
+	}
 
 	if _, err := caller.OpenTarget(mainGo, ""); err != nil {
 		t.Fatalf("OpenTarget(main.go) error = %v", err)
@@ -251,8 +283,9 @@ func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 	if got, want := view.Name, mainGo; got != want {
 		t.Fatalf("view.Name after gototype = %q, want %q", got, want)
 	}
-	if got := stdout.String(); !strings.Contains(got, "gototype cmd/ion/main.go:20") {
-		t.Fatalf("gototype stdout = %q, want config target in main.go", got)
+	assertNavigationMatchesView(t, caller, view)
+	if got := stdout.String(); got != "" {
+		t.Fatalf("gototype stdout = %q, want empty output", got)
 	}
 
 	_ = server.Shutdown()
@@ -280,5 +313,24 @@ func waitForMenuCommands(client *clientsession.Client, want int, timeout time.Du
 			return errors.New("timed out waiting for lsp menu items")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func assertNavigationMatchesView(t *testing.T, client *clientsession.Client, view wire.BufferView) {
+	t.Helper()
+
+	nav, err := client.NavigationStack()
+	if err != nil {
+		t.Fatalf("NavigationStack() error = %v", err)
+	}
+	if nav.Current < 0 || nav.Current >= len(nav.Entries) {
+		t.Fatalf("NavigationStack current index = %d, entries=%d", nav.Current, len(nav.Entries))
+	}
+	want := fmt.Sprintf("%s:#%d", view.Name, view.DotStart)
+	if view.DotStart != view.DotEnd {
+		want = fmt.Sprintf("%s:#%d,#%d", view.Name, view.DotStart, view.DotEnd)
+	}
+	if got := nav.Entries[nav.Current].Label; got != want {
+		t.Fatalf("NavigationStack current label = %q, want %q", got, want)
 	}
 }

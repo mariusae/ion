@@ -21,8 +21,7 @@ const (
 	menuLook
 	menuRegexp
 	menuPlumb
-	menuHistoryPrev
-	menuHistoryNext
+	menuHistoryPop
 )
 
 type menuItem struct {
@@ -105,11 +104,8 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		}
 		menu.items = append(menu.items, item)
 	}
-	if prev, ok := previousNavigationMenuItem(nav); ok {
-		menu.items = append(menu.items, prev)
-	}
-	if next, ok := nextNavigationMenuItem(nav, len(files) == 0); ok {
-		menu.items = append(menu.items, next)
+	if pop, ok := popNavigationMenuItem(nav, len(files) == 0); ok {
+		menu.items = append(menu.items, pop)
 	} else if len(menu.items) > 0 && len(files) > 0 {
 		menu.items[len(menu.items)-1].sepAfter = true
 	}
@@ -396,26 +392,14 @@ func currentMark(current bool) rune {
 	return ' '
 }
 
-func previousNavigationMenuItem(nav wire.NavigationStack) (menuItem, bool) {
+func popNavigationMenuItem(nav wire.NavigationStack, lastSection bool) (menuItem, bool) {
 	if nav.Current <= 0 || nav.Current > len(nav.Entries)-1 {
 		return menuItem{}, false
 	}
 	return menuItem{
-		label:    " -  " + nav.Entries[nav.Current-1].Label,
+		label:    " pop " + nav.Entries[nav.Current-1].Label,
 		shortcut: "(P)",
-		kind:     menuHistoryPrev,
-		sepAfter: nav.Current >= len(nav.Entries)-1,
-	}, true
-}
-
-func nextNavigationMenuItem(nav wire.NavigationStack, lastSection bool) (menuItem, bool) {
-	if nav.Current < 0 || nav.Current >= len(nav.Entries)-1 {
-		return menuItem{}, false
-	}
-	return menuItem{
-		label:    " -  " + nav.Entries[nav.Current+1].Label,
-		shortcut: "(N)",
-		kind:     menuHistoryNext,
+		kind:     menuHistoryPop,
 		sepAfter: !lastSection,
 	}, true
 }
@@ -425,16 +409,6 @@ func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
 		if idx := menuItemIndexByKind(items, sticky.historyKind); idx >= 0 {
 			return idx
 		}
-		// Fall back to the other history direction (e.g., prev when next
-		// disappears at end of stack).
-		other := menuHistoryPrev
-		if sticky.historyKind == menuHistoryPrev {
-			other = menuHistoryNext
-		}
-		if idx := menuItemIndexByKind(items, other); idx >= 0 {
-			return idx
-		}
-		// Stack is empty; no item should be selected.
 		return -1
 	}
 	if sticky.preferPreviousFile {
@@ -451,7 +425,7 @@ func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
 func nextMenuStickyState(menu *menuState, itemIndex int, item menuItem) menuStickyState {
 	next := menuStickyState{itemIndex: itemIndex}
 	switch item.kind {
-	case menuHistoryPrev, menuHistoryNext:
+	case menuHistoryPop:
 		next.preferHistory = true
 		next.historyKind = item.kind
 		return next

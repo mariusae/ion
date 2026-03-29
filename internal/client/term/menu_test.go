@@ -182,7 +182,7 @@ func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 	}
 }
 
-func TestBuildContextMenuIncludesPreviousAndNextNavigationItems(t *testing.T) {
+func TestBuildContextMenuIncludesPopNavigationItem(t *testing.T) {
 	t.Parallel()
 
 	state := newBufferState(wire.BufferView{
@@ -200,24 +200,17 @@ func TestBuildContextMenuIncludesPreviousAndNextNavigationItems(t *testing.T) {
 	}
 
 	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, nav, 10, 10, menuStickyState{itemIndex: -1})
-	foundPrev := false
-	foundNext := false
+	foundPop := false
 	for _, item := range menu.items {
-		if item.kind == menuHistoryPrev {
-			foundPrev = true
-			if got, want := item.label, " -  a.txt:#0"; got != want {
-				t.Fatalf("prev item label = %q, want %q", got, want)
-			}
-		}
-		if item.kind == menuHistoryNext {
-			foundNext = true
-			if got, want := item.label, " -  c.txt:#0"; got != want {
-				t.Fatalf("next item label = %q, want %q", got, want)
+		if item.kind == menuHistoryPop {
+			foundPop = true
+			if got, want := item.label, " pop a.txt:#0"; got != want {
+				t.Fatalf("pop item label = %q, want %q", got, want)
 			}
 		}
 	}
-	if !foundPrev || !foundNext {
-		t.Fatalf("foundPrev=%v foundNext=%v, want both true", foundPrev, foundNext)
+	if !foundPop {
+		t.Fatal("expected pop navigation item in menu")
 	}
 }
 
@@ -245,7 +238,7 @@ func TestNextMenuStickyStateForFileNavigationTargetsPreviousFile(t *testing.T) {
 	}
 }
 
-func TestBuildContextMenuStickyHistoryHoverPrefersPreviousCommandKind(t *testing.T) {
+func TestBuildContextMenuStickyHistoryHoverPrefersPop(t *testing.T) {
 	t.Parallel()
 
 	state := newBufferState(wire.BufferView{
@@ -263,12 +256,12 @@ func TestBuildContextMenuStickyHistoryHoverPrefersPreviousCommandKind(t *testing
 	sticky := menuStickyState{
 		itemIndex:     7,
 		preferHistory: true,
-		historyKind:   menuHistoryPrev,
+		historyKind:   menuHistoryPop,
 	}
 
 	menu := buildContextMenu(state, nil, nil, nav, 10, 10, sticky)
-	if got, want := menu.hover, menuItemIndexByKind(menu.items, menuHistoryPrev); got != want {
-		t.Fatalf("menu.hover = %d, want previous history index %d", got, want)
+	if got, want := menu.hover, menuItemIndexByKind(menu.items, menuHistoryPop); got != want {
+		t.Fatalf("menu.hover = %d, want pop history index %d", got, want)
 	}
 }
 
@@ -278,7 +271,7 @@ func TestNextMenuStickyStateForHistoryNavigationTargetsCommandKind(t *testing.T)
 	menu := &menuState{
 		items: []menuItem{
 			{kind: menuCut},
-			{kind: menuHistoryPrev},
+			{kind: menuHistoryPop},
 			{kind: menuFile, fileID: 2, current: true},
 		},
 	}
@@ -287,7 +280,7 @@ func TestNextMenuStickyStateForHistoryNavigationTargetsCommandKind(t *testing.T)
 	if !sticky.preferHistory {
 		t.Fatalf("preferHistory = false, want true")
 	}
-	if got, want := sticky.historyKind, menuHistoryPrev; got != want {
+	if got, want := sticky.historyKind, menuHistoryPop; got != want {
 		t.Fatalf("historyKind = %v, want %v", got, want)
 	}
 	if got, want := sticky.itemIndex, 1; got != want {
@@ -295,7 +288,7 @@ func TestNextMenuStickyStateForHistoryNavigationTargetsCommandKind(t *testing.T)
 	}
 }
 
-func TestStickyHistoryFallsBackToOtherDirection(t *testing.T) {
+func TestStickyHistoryMissingPopSelectsNothing(t *testing.T) {
 	t.Parallel()
 
 	state := newBufferState(wire.BufferView{
@@ -303,27 +296,21 @@ func TestStickyHistoryFallsBackToOtherDirection(t *testing.T) {
 		Name: "b.txt",
 	})
 
-	// At end of stack: prev exists, next does not.
 	nav := wire.NavigationStack{
 		Entries: []wire.NavigationEntry{
 			{Label: "a.txt:#0"},
-			{Label: "b.txt:#6,#10"},
 		},
-		Current: 1,
+		Current: 0,
 	}
 	sticky := menuStickyState{
 		itemIndex:     8,
 		preferHistory: true,
-		historyKind:   menuHistoryNext,
+		historyKind:   menuHistoryPop,
 	}
 
 	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, nav, 10, 10, sticky)
-	want := menuItemIndexByKind(menu.items, menuHistoryPrev)
-	if want < 0 {
-		t.Fatal("expected prev history item in menu")
-	}
-	if got := menu.hover; got != want {
-		t.Fatalf("menu.hover = %d, want prev history index %d", got, want)
+	if got := menu.hover; got != -1 {
+		t.Fatalf("menu.hover = %d, want -1 when pop item is absent", got)
 	}
 }
 
@@ -339,7 +326,7 @@ func TestStickyHistoryEmptyStackSelectsNothing(t *testing.T) {
 	sticky := menuStickyState{
 		itemIndex:     8,
 		preferHistory: true,
-		historyKind:   menuHistoryNext,
+		historyKind:   menuHistoryPop,
 	}
 
 	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, wire.NavigationStack{}, 10, 10, sticky)

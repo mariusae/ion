@@ -98,8 +98,8 @@ func TestTermSessionNavigationCommandsTrackFileHistory(t *testing.T) {
 	}
 	stderr.Reset()
 
-	if _, err := sess.Execute("B " + goMod + "\n"); err != nil {
-		t.Fatalf("Execute(B) error = %v", err)
+	if _, err := sess.PushTarget([]string{goMod}); err != nil {
+		t.Fatalf("PushTarget(go.mod) error = %v", err)
 	}
 	stderr.Reset()
 	view, err := sess.CurrentView()
@@ -159,12 +159,12 @@ func TestTermSessionNavigationCommandsClearForwardHistory(t *testing.T) {
 		t.Fatalf("CurrentView() start error = %v", err)
 	}
 
-	line2, err := sess.SetAddress("2")
+	line2, err := sess.PushTarget([]string{path + ":2"})
 	if err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+		t.Fatalf("PushTarget(file:2) error = %v", err)
 	}
 	if sameBufferView(start, line2) {
-		t.Fatal("SetAddress(2) did not change the current view")
+		t.Fatal("PushTarget(file:2) did not change the current view")
 	}
 
 	if _, err := sess.Execute("P\n"); err != nil {
@@ -178,9 +178,9 @@ func TestTermSessionNavigationCommandsClearForwardHistory(t *testing.T) {
 		t.Fatalf("restored view = %#v, want %#v", restored, start)
 	}
 
-	line3, err := sess.SetAddress("3")
+	line3, err := sess.PushTarget([]string{path + ":3"})
 	if err != nil {
-		t.Fatalf("SetAddress(3) error = %v", err)
+		t.Fatalf("PushTarget(file:3) error = %v", err)
 	}
 	if _, err := sess.Execute("N\n"); err != nil {
 		t.Fatalf("Execute(N) error = %v", err)
@@ -210,8 +210,8 @@ func TestTermSessionNavigationCommandsDoNotPrintStatusWithinSameFile(t *testing.
 	}
 	stderr.Reset()
 
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+	if _, err := sess.PushTarget([]string{path + ":2"}); err != nil {
+		t.Fatalf("PushTarget(file:2) error = %v", err)
 	}
 	stderr.Reset()
 
@@ -244,11 +244,11 @@ func TestTermSessionShowNavigationStack(t *testing.T) {
 	}
 	stderr.Reset()
 
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+	if _, err := sess.PushTarget([]string{readme + ":2"}); err != nil {
+		t.Fatalf("PushTarget(readme:2) error = %v", err)
 	}
-	if _, err := sess.Execute("B " + goMod + "\n"); err != nil {
-		t.Fatalf("Execute(B) error = %v", err)
+	if _, err := sess.PushTarget([]string{goMod}); err != nil {
+		t.Fatalf("PushTarget(go.mod) error = %v", err)
 	}
 	stderr.Reset()
 
@@ -282,8 +282,8 @@ func TestTermSessionShowNavigationStackMarksDirtyCurrentEntry(t *testing.T) {
 	}
 	stderr.Reset()
 
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+	if _, err := sess.PushTarget([]string{readme + ":2"}); err != nil {
+		t.Fatalf("PushTarget(readme:2) error = %v", err)
 	}
 	view, err := sess.CurrentView()
 	if err != nil {
@@ -384,7 +384,7 @@ func TestTermSessionGotoDemoSymbol(t *testing.T) {
 	}
 }
 
-func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
+func TestTargetOpenWithAddressDoesNotRecordNavigation(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -410,20 +410,15 @@ func TestTargetOpenWithAddressProducesSingleNavEntry(t *testing.T) {
 	}
 	stderr.Reset()
 
-	// The navigation stack should have exactly two entries:
-	// a.txt at bootstrap position, and b.txt at line 2 — not b.txt:#0.
 	if _, err := sess.Execute("S\n"); err != nil {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
-	want := "" +
-		" -  " + fileA + ":#0\n" +
-		" -. " + fileB + ":#6,#11\n"
-	if got := stderr.String(); got != want {
-		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("nav stack = %q, want empty", got)
 	}
 }
 
-func TestTargetOpenWithoutAddressRecordsNavigationImmediately(t *testing.T) {
+func TestTargetOpenWithoutAddressDoesNotRecordNavigation(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -451,15 +446,12 @@ func TestTargetOpenWithoutAddressRecordsNavigationImmediately(t *testing.T) {
 	if _, err := sess.Execute("S\n"); err != nil {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
-	want := "" +
-		" -  " + fileA + ":#0\n" +
-		" -. " + fileB + ":#0\n"
-	if got := stderr.String(); got != want {
-		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("nav stack = %q, want empty", got)
 	}
 }
 
-func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
+func TestExecuteAddressedBDoesNotRecordNavigation(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -486,11 +478,8 @@ func TestExecuteAddressedBProducesSingleNavEntry(t *testing.T) {
 	if _, err := sess.Execute("S\n"); err != nil {
 		t.Fatalf("Execute(S) error = %v", err)
 	}
-	want := "" +
-		" -  " + fileA + ":#0\n" +
-		" -. " + fileB + ":#6,#11\n"
-	if got := stderr.String(); got != want {
-		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("nav stack = %q, want empty", got)
 	}
 }
 
@@ -566,7 +555,37 @@ func TestOpenTargetOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
 	}
 }
 
-func TestNavigationStackReusesExistingDestination(t *testing.T) {
+func TestOpenTargetWithCharacterAddressUsesExactPoint(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	sess := NewTerm(ws, nil, io.Discard)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := sess.OpenTarget(file, "#5")
+	if err != nil {
+		t.Fatalf("OpenTarget(current-file, #5) error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file after OpenTarget = %q, want %q", view.Name, file)
+	}
+	if got, want := view.DotStart, 5; got != want {
+		t.Fatalf("DotStart = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 5; got != want {
+		t.Fatalf("DotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestPushTargetClearsForwardHistoryFromCurrentPoint(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -583,14 +602,17 @@ func TestNavigationStackReusesExistingDestination(t *testing.T) {
 	}
 	stderr.Reset()
 
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) error = %v", err)
+	if _, err := sess.PushTarget([]string{file + ":2"}); err != nil {
+		t.Fatalf("PushTarget(file:2) error = %v", err)
 	}
-	if _, err := sess.SetAddress("3"); err != nil {
-		t.Fatalf("SetAddress(3) error = %v", err)
+	if _, err := sess.PushTarget([]string{file + ":3"}); err != nil {
+		t.Fatalf("PushTarget(file:3) error = %v", err)
 	}
-	if _, err := sess.SetAddress("2"); err != nil {
-		t.Fatalf("SetAddress(2) second error = %v", err)
+	if _, err := sess.Execute("P\n"); err != nil {
+		t.Fatalf("Execute(P) error = %v", err)
+	}
+	if _, err := sess.PushTarget([]string{file + ":1"}); err != nil {
+		t.Fatalf("PushTarget(file:1) error = %v", err)
 	}
 	stderr.Reset()
 
@@ -599,8 +621,54 @@ func TestNavigationStackReusesExistingDestination(t *testing.T) {
 	}
 	want := "" +
 		" -  " + file + ":#0\n" +
-		" -. " + file + ":#4,#8\n" +
-		" -  " + file + ":#8,#14\n"
+		" -  " + file + ":#4,#8\n" +
+		" -. " + file + ":#0,#4\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestPopNavigationRemovesCurrentEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	var stderr bytes.Buffer
+	sess := NewTerm(ws, nil, &stderr)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	if _, err := sess.PushTarget([]string{file + ":2"}); err != nil {
+		t.Fatalf("PushTarget(file:2) error = %v", err)
+	}
+	if _, err := sess.PushTarget([]string{file + ":3"}); err != nil {
+		t.Fatalf("PushTarget(file:3) error = %v", err)
+	}
+
+	view, err := sess.PopNavigation()
+	if err != nil {
+		t.Fatalf("PopNavigation() error = %v", err)
+	}
+	if got, want := view.DotStart, 4; got != want {
+		t.Fatalf("DotStart after pop = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 8; got != want {
+		t.Fatalf("DotEnd after pop = %d, want %d", got, want)
+	}
+	stderr.Reset()
+
+	if _, err := sess.Execute("S\n"); err != nil {
+		t.Fatalf("Execute(S) error = %v", err)
+	}
+	want := "" +
+		" -  " + file + ":#0\n" +
+		" -. " + file + ":#4,#8\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("nav stack =\n%s\nwant:\n%s", got, want)
 	}

@@ -295,7 +295,7 @@ func runInvocation(client invocationController, root string, inv wire.Invocation
 		finishStdout = fmt.Sprintf("demolsp symbol demo %s -> README.md:3:1\n", filepath.Base(view.Name))
 	case ":demolsp:goto":
 		target := filepath.Join(root, "README.md")
-		if _, err := session.Execute("B " + target + ":3\n"); err != nil {
+		if _, err := session.Execute(":ion:push " + target + ":3\n"); err != nil {
 			finishErr = err.Error()
 			break
 		}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	clienttarget "ion/internal/client/target"
 	ionaddr "ion/internal/core/addr"
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
@@ -73,10 +74,7 @@ func (s *DownloadSession) ID() uint64 {
 
 // Bootstrap loads the initial file set for this client.
 func (s *DownloadSession) Bootstrap(files []string) error {
-	if err := s.ws.Bootstrap(s.state, files, s.stdout, s.stderr); err != nil {
-		return err
-	}
-	return s.recordCurrentView()
+	return s.ws.Bootstrap(s.state, files, s.stdout, s.stderr)
 }
 
 // Execute parses and forwards one command script for this client.
@@ -86,13 +84,8 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		return false, nil
 	}
 	if handled, view, err := s.executeDemoCommand(script); handled {
-		if err != nil {
-			return false, err
-		}
-		if view != nil {
-			s.recordView(*view)
-		}
-		return true, nil
+		_ = view
+		return true, err
 	}
 	if trimmed := strings.TrimSpace(script); strings.HasPrefix(trimmed, ":") {
 		return false, fmt.Errorf("unknown command `%s'", trimmed)
@@ -119,24 +112,10 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		return s.showNavigationStack()
 	}
 	if handled, err := s.executeAddressedB(cmd); handled || err != nil {
-		if err != nil {
-			return false, err
-		}
-		if recErr := s.recordCurrentView(); recErr != nil {
-			return false, recErr
-		}
-		return true, nil
+		return true, err
 	}
 	ok, err := s.ws.Execute(s.state, cmd, s.stdout, s.stderr)
-	if err != nil || !ok {
-		return ok, err
-	}
-	if shouldRecordCommandNavigation(cmd) {
-		if recErr := s.recordCurrentView(); recErr != nil {
-			return false, recErr
-		}
-	}
-	return ok, nil
+	return ok, err
 }
 
 func isSessionQuitCommand(script string) bool {
@@ -365,7 +344,6 @@ func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) 
 			return wire.BufferView{}, err
 		}
 	}
-	s.recordView(view)
 	return view, nil
 }
 
@@ -381,30 +359,46 @@ func (s *TermSession) NavigationStack() (wire.NavigationStack, error) {
 
 // FocusFile changes this client's current file selection.
 func (s *TermSession) FocusFile(id int) (wire.BufferView, error) {
-	before, _ := s.ws.CurrentView(s.state)
 	view, err := s.ws.FocusFile(s.state, id)
 	if err != nil {
 		return wire.BufferView{}, err
-	}
-	if before.ID != view.ID {
-		s.recordView(view)
 	}
 	return view, nil
 }
 
 // SetAddress resolves one sam address against the current file.
 func (s *TermSession) SetAddress(expr string) (wire.BufferView, error) {
-	view, err := s.ws.SetAddress(s.state, expr)
-	if err != nil {
-		return wire.BufferView{}, err
-	}
-	s.recordView(view)
-	return view, nil
+	return s.ws.SetAddress(s.state, expr)
 }
 
 // SetDot updates the current selection.
 func (s *TermSession) SetDot(start, end int) (wire.BufferView, error) {
 	return s.ws.SetDot(s.state, start, end)
+}
+
+// PushTarget opens one target using B-style syntax and records the source and destination.
+func (s *TermSession) PushTarget(args []string) (wire.BufferView, error) {
+	if len(args) == 0 {
+		return wire.BufferView{}, fmt.Errorf("push target expected")
+	}
+	before, err := s.ws.CurrentView(s.state)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	view, err := clienttarget.Open(s, args)
+	if err != nil {
+		return wire.BufferView{}, err
+	}
+	s.pushHistory(before, view)
+	return view, nil
+}
+
+// PopNavigation returns to the previous recorded navigation point and removes the popped entry.
+func (s *TermSession) PopNavigation() (wire.BufferView, error) {
+	if _, err := s.popNavigation(); err != nil {
+		return wire.BufferView{}, err
+	}
+	return s.ws.CurrentView(s.state)
 }
 
 // Replace applies one text edit and returns the refreshed view.

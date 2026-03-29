@@ -2,6 +2,7 @@ package target
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -114,7 +115,7 @@ func Open(svc Service, args []string) (wire.BufferView, error) {
 		return svc.OpenTarget(last.Path, last.Address)
 	}
 
-	if _, ok := loaded[last.Path]; !ok {
+	if _, ok := loaded[targetPathKey(last.Path)]; !ok {
 		toOpen := missingWithoutLast(missing, last.Path)
 		if len(toOpen) > 0 {
 			if _, err := svc.OpenFiles(toOpen); err != nil {
@@ -278,11 +279,12 @@ func literalPathExists(path string) bool {
 func menuIDsByName(menu []wire.MenuFile) map[string]int {
 	ids := make(map[string]int, len(menu))
 	for _, file := range menu {
-		if file.Name == "" {
+		name := targetPathKey(file.Name)
+		if name == "" {
 			continue
 		}
-		if _, ok := ids[file.Name]; !ok || file.Current {
-			ids[file.Name] = file.ID
+		if _, ok := ids[name]; !ok || file.Current {
+			ids[name] = file.ID
 		}
 	}
 	return ids
@@ -295,14 +297,15 @@ func missingPaths(targets []Target, loaded map[string]int) []string {
 		if target.Path == "" {
 			continue
 		}
-		if _, ok := loaded[target.Path]; ok {
+		key := targetPathKey(target.Path)
+		if _, ok := loaded[key]; ok {
 			continue
 		}
-		if _, ok := queued[target.Path]; ok {
+		if _, ok := queued[key]; ok {
 			continue
 		}
 		missing = append(missing, target.Path)
-		queued[target.Path] = struct{}{}
+		queued[key] = struct{}{}
 	}
 	return missing
 }
@@ -322,10 +325,11 @@ func missingWithoutLast(missing []string, lastPath string) []string {
 }
 
 func findMenuFileID(menu []wire.MenuFile, path string) (int, bool) {
+	path = targetPathKey(path)
 	var first int
 	found := false
 	for _, file := range menu {
-		if file.Name != path {
+		if targetPathKey(file.Name) != path {
 			continue
 		}
 		if file.Current {
@@ -337,4 +341,20 @@ func findMenuFileID(menu []wire.MenuFile, path string) (int, bool) {
 		}
 	}
 	return first, found
+}
+
+func targetPathKey(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+		if abs, err := filepath.Abs(path); err == nil {
+			return abs
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

@@ -89,6 +89,9 @@ func (w *Workspace) Bootstrap(state *SessionState, files []string, stdout, stder
 		w.session.AddFile(f)
 	} else {
 		for _, name := range files {
+			if abs, err := filepath.Abs(name); err == nil {
+				name = abs
+			}
 			d, err := text.NewDisk()
 			if err != nil {
 				return err

@@ -110,16 +110,7 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		menu.items[len(menu.items)-1].sepAfter = true
 	}
 	for _, f := range files {
-		name := f.Name
-		if name == "" {
-			name = "(unnamed)"
-		}
-		maxName := 38 - 5
-		label := name
-		if len([]rune(label)) > maxName {
-			runes := []rune(label)
-			label = string(runes[len(runes)-maxName:])
-		}
+		label := menuDisplayFileName(f.Name)
 		menu.items = append(menu.items, menuItem{
 			label:   fmt.Sprintf(" %c%c %s", dirtyMark(f.Dirty, f.Changed), currentMark(f.Current), label),
 			kind:    menuFile,
@@ -251,6 +242,20 @@ func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover b
 	}
 	prefix := menuItemPrefix(theme, item.current, hover)
 	return writeMenuLine(stdout, row, col, line, prefix, theme)
+}
+
+func menuDisplayFileName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "(unnamed)"
+	}
+	// File names stay canonical in shared state; the menu shortens them only here.
+	const maxName = 38 - 5
+	label := name
+	if len([]rune(label)) > maxName {
+		runes := []rune(label)
+		label = string(runes[len(runes)-maxName:])
+	}
+	return label
 }
 
 func menuItemPrefix(theme *uiTheme, current, hover bool) string {

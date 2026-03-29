@@ -42,7 +42,7 @@ func TestExecuteChangeDirectoryCommand(t *testing.T) {
 	})
 
 	f := text.NewFile(d)
-	name := text.NewStringFromUTF8("one.txt")
+	name := text.NewStringFromUTF8(filepath.Join(root, "one.txt"))
 	if err := f.Name.DupString(&name); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
@@ -211,6 +211,55 @@ func TestQuotedFileAddressLoadsUnreadFileAndReportsStatus(t *testing.T) {
 	}
 	if got, want := diag.String(), " -  "+bPath+"\n -. "+bPath+"\n"; got != want {
 		t.Fatalf("diag = %q, want %q", got, want)
+	}
+}
+
+func TestListFilesShowsAbsolutePaths(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+	if err := sess.OpenFilesPaths([]string{"a.txt"}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	diag.Reset()
+	parser := cmdlang.NewParser("n\n")
+	cmd, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !ok {
+		t.Fatal("execute requested stop")
+	}
+
+	const prefix = " -. "
+	got := strings.TrimSuffix(diag.String(), "\n")
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("diag = %q, want %q prefix", got, prefix)
+	}
+	if !sameFilePath(t, strings.TrimPrefix(got, prefix), path) {
+		t.Fatalf("diag path = %q, want same file as %q", strings.TrimPrefix(got, prefix), path)
 	}
 }
 
@@ -384,7 +433,7 @@ func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	if !ok {
 		t.Fatal("execute requested stop")
 	}
-	if got, want := diag.String(), "'-. renamed.txt\n"; got != want {
+	if got, want := diag.String(), "'-. "+canonicalFileName("renamed.txt")+"\n"; got != want {
 		t.Fatalf("diag = %q, want %q", got, want)
 	}
 }

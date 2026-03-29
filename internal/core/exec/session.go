@@ -1119,7 +1119,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	}
 
 	currentName := trimToken(f.Name.UTF8())
-	explicitName := trimToken(nameTokenUTF8(nameToken))
+	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
 	newFile := currentName == ""
 
 	if !newFile {
@@ -1322,7 +1322,7 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 	if f == nil {
 		return fmt.Errorf("no file")
 	}
-	name := trimToken(nameTokenUTF8(nameToken))
+	name := canonicalFileName(nameTokenUTF8(nameToken))
 	warnDup := false
 	if name != "" {
 		oldName := trimToken(f.Name.UTF8())
@@ -1354,7 +1354,7 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 		return fmt.Errorf("no file name")
 	}
 	currentName := trimToken(f.Name.UTF8())
-	explicitName := trimToken(nameTokenUTF8(nameToken))
+	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
 	wasEmpty := f.B.Len() == 0 && (currentName == "" || currentName == name)
 	data, err := os.ReadFile(name)
 	if err != nil {
@@ -1401,7 +1401,7 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	if name == "" {
 		return fmt.Errorf("no file name")
 	}
-	explicitName := trimToken(nameTokenUTF8(nameToken))
+	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
 	data, err := os.ReadFile(name)
 	if err != nil {
 		return openFileError(name, err)
@@ -1472,10 +1472,6 @@ func (s *Session) ReloadFileFromDisk(f *text.File) error {
 }
 
 func (s *Session) changeDirectory(nameToken *text.String) error {
-	oldwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
 	target := trimToken(nameTokenUTF8(nameToken))
 	if target == "" {
 		target = strings.TrimSpace(os.Getenv("HOME"))
@@ -1490,14 +1486,9 @@ func (s *Session) changeDirectory(nameToken *text.String) error {
 	if err := os.Chdir(target); err != nil {
 		return diagnosticError{msg: fmt.Sprintf("chdir: ?I/O error: %q", ioErrText(err))}
 	}
-	newwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
 	if _, err := fmt.Fprintln(s.Diag, "!"); err != nil {
 		return err
 	}
-	s.rewriteRelativeNames(oldwd, newwd)
 	return nil
 }
 
@@ -1607,8 +1598,12 @@ func (s *Session) restoreOpenFiles(snapshot openFilesSnapshot) {
 }
 
 func (s *Session) openFileFields(fields []string, allowNamelessCurrent bool) error {
-	if allowNamelessCurrent && len(fields) == 1 {
-		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == fields[0] {
+	canonicalFields := make([]string, 0, len(fields))
+	for _, name := range fields {
+		canonicalFields = append(canonicalFields, canonicalFileName(name))
+	}
+	if allowNamelessCurrent && len(canonicalFields) == 1 {
+		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == canonicalFields[0] {
 			if shouldOpenNamelessForCurrent(current) {
 				return s.openNamelessFile()
 			}
@@ -1617,7 +1612,7 @@ func (s *Session) openFileFields(fields []string, allowNamelessCurrent bool) err
 	var current *text.File
 	currentExisted := false
 	currentWasUnread := false
-	for _, name := range fields {
+	for _, name := range canonicalFields {
 		f := s.findFileByName(name)
 		existed := f != nil
 		wasUnread := existed && f.Unread
@@ -1716,8 +1711,8 @@ func (s *Session) switchFile(nameToken *text.String) error {
 	name := ""
 	displayName := ""
 	if len(list.fields) > 0 {
-		name = list.fields[0]
-		displayName = name
+		displayName = list.fields[0]
+		name = canonicalFileName(list.fields[0])
 	} else if list.fromShell {
 		displayName = list.raw
 	}
@@ -1744,6 +1739,7 @@ func (s *Session) switchFile(nameToken *text.String) error {
 }
 
 func (s *Session) findFileByName(name string) *text.File {
+	name = canonicalFileName(name)
 	for _, f := range s.Files {
 		if trimToken(f.Name.UTF8()) == name {
 			return f
@@ -1759,38 +1755,6 @@ func (s *Session) hasFile(target *text.File) bool {
 		}
 	}
 	return false
-}
-
-func (s *Session) rewriteRelativeNames(oldwd, newwd string) {
-	for _, f := range s.Files {
-		if f == nil {
-			continue
-		}
-		name := trimToken(f.Name.UTF8())
-		if name == "" || filepath.IsAbs(name) {
-			continue
-		}
-		s.setFileName(f, normalizeNameForCWD(newwd, filepath.Join(oldwd, name)))
-	}
-	for _, f := range s.Files {
-		if f == nil {
-			continue
-		}
-		name := trimToken(f.Name.UTF8())
-		if name == "" || !filepath.IsAbs(name) {
-			continue
-		}
-		if !isUnderDir(newwd, name) {
-			continue
-		}
-		s.setFileName(f, normalizeNameForCWD(newwd, name))
-	}
-	s.sortFiles()
-}
-
-func (s *Session) setFileName(f *text.File, name string) {
-	next := text.NewStringFromUTF8(name)
-	_ = f.Name.DupString(&next)
 }
 
 func (s *Session) firstFile() *text.File {
@@ -2143,7 +2107,7 @@ func commandNeedsCurrent(cmdc rune) bool {
 
 func fileNameForWrite(f *text.File, token *text.String) string {
 	if token != nil {
-		name := trimToken(token.UTF8())
+		name := canonicalFileName(token.UTF8())
 		if name != "" {
 			return name
 		}
@@ -2153,6 +2117,18 @@ func fileNameForWrite(f *text.File, token *text.String) string {
 
 func trimToken(s string) string {
 	return strings.TrimRight(strings.TrimSpace(strings.TrimRight(s, "\x00")), "\x00")
+}
+
+func canonicalFileName(name string) string {
+	name = trimToken(name)
+	if name == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		return filepath.Clean(name)
+	}
+	return abs
 }
 
 func nameTokenUTF8(s *text.String) string {
@@ -2290,30 +2266,6 @@ func (s *Session) loadFileList(token *text.String) (fileListSpec, error) {
 		fields:    fields,
 		emptyList: len(fields) == 0,
 	}, nil
-}
-
-func normalizeNameForCWD(cwd, name string) string {
-	clean := filepath.Clean(name)
-	if clean == "." {
-		return ""
-	}
-	if rel, err := filepath.Rel(cwd, clean); err == nil {
-		if rel == "." {
-			return ""
-		}
-		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return rel
-		}
-	}
-	return clean
-}
-
-func isUnderDir(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 type shellResult struct {

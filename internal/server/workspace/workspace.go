@@ -241,6 +241,10 @@ func (w *Workspace) Replace(state *SessionState, start, end int, repl string) (w
 	if err := w.session.ReplaceCurrent(text.Posn(start), text.Posn(end), repl); err != nil {
 		return wire.BufferView{}, err
 	}
+	cursor := text.Posn(start + len([]rune(repl)))
+	if err := w.session.SetCurrentDot(cursor, cursor); err != nil {
+		return wire.BufferView{}, err
+	}
 	return w.currentView()
 }
 

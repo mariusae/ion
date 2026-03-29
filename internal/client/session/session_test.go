@@ -89,6 +89,12 @@ func TestClientRoundTripsDownloadAndTermRequests(t *testing.T) {
 	if got, want := view.Text, "omega\nbeta\n"; got != want {
 		t.Fatalf("view.Text = %q, want %q", got, want)
 	}
+	if got, want := view.DotStart, 5; got != want {
+		t.Fatalf("view.DotStart = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 5; got != want {
+		t.Fatalf("view.DotEnd = %d, want %d", got, want)
+	}
 
 	files, err := client.MenuFiles()
 	if err != nil {

@@ -29,6 +29,7 @@ This has a few structural problems:
 The result is that local fixes tend to be narrow, timing-sensitive, and easy to
 regress.
 
+
 ## Lessons From Neovim
 
 Neovim uses a better split:

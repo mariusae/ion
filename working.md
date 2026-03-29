@@ -71,3 +71,5 @@
 - Change: coalesced buffered and timed bursts of repeated vertical wheel events at the same screen position, so one wheel burst produces one larger scroll update instead of many back-to-back redraws.
 - Change: kept `redrawOverlayHistory` on full-frame repaint for now; only `redrawOverlayInput` remains diff-rendered.
 - Verification: added mouse regressions for passive motion, unknown wheel codes, boundary no-op scrolls, and coalesced wheel bursts; `go test ./internal/client/term -count=1` passed.
+
+

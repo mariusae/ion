@@ -2,138 +2,109 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	clientsession "ion/internal/client/session"
+	"ion/internal/server/transport"
+	"ion/internal/server/workspace"
 )
 
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func TestRunDownloadProcessesCommandsIncrementally(t *testing.T) {
+func TestWithServerSocketClientsInterruptCancelsCurrentSession(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "README.md")
-	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	server := transport.New(workspace.New())
+	socketPath, cleanup, err := makeSocketPath()
+	if err != nil {
+		t.Fatalf("makeSocketPath() error = %v", err)
 	}
+	defer cleanup()
 
-	stdinR, stdinW := io.Pipe()
-	var stdout syncBuffer
-	var stderr syncBuffer
-	done := make(chan error, 1)
-
-	go func() {
-		done <- runDownload(config{download: true, files: []string{path}}, stdinR, &stdout, &stderr)
-	}()
-
-	waitFor(t, func() bool {
-		return strings.Contains(stderr.String(), " -. "+path+"\n")
-	}, "initial file status")
-
-	if _, err := io.WriteString(stdinW, ",\n"); err != nil {
-		t.Fatalf("WriteString(first command) error = %v", err)
-	}
-
-	waitFor(t, func() bool {
-		return strings.Contains(stdout.String(), "alpha\nbeta\n")
-	}, "command output before EOF")
-
-	if _, err := io.WriteString(stdinW, "q\n"); err != nil {
-		t.Fatalf("WriteString(quit) error = %v", err)
-	}
-	if err := stdinW.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	select {
-	case err := <-done:
+	var stdout bytes.Buffer
+	err = withServerSocketClients(server, socketPath, &stdout, io.Discard, func(client *clientsession.Client, interruptSession *clientsession.Session) error {
+		service, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
 		if err != nil {
-			t.Fatalf("runDownload() error = %v", err)
+			return err
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("runDownload() did not return")
-	}
-}
-
-func TestRunTermRejectsNonTTY(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "README.md")
-	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	stdinR, stdinW := io.Pipe()
-	var stdout syncBuffer
-	var stderr syncBuffer
-	done := make(chan int, 1)
-
-	go func() {
-		done <- run([]string{path}, stdinR, &stdout, &stderr)
-	}()
-	if err := stdinW.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	select {
-	case code := <-done:
-		if code != 1 {
-			t.Fatalf("run() exit code = %d, want 1", code)
+		defer service.Close()
+		if err := service.RegisterNamespace("demolsp"); err != nil {
+			return err
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("run() did not return")
-	}
 
-	if got := stderr.String(); !strings.Contains(got, "terminal mode requires a tty; use ion -d for command mode") {
-		t.Fatalf("stderr = %q, want non-tty terminal-mode error", got)
-	}
-}
+		started := make(chan struct{}, 1)
+		serviceErr := make(chan error, 1)
+		go func() {
+			inv, err := service.WaitInvocation()
+			if err != nil {
+				serviceErr <- err
+				return
+			}
+			if got, want := inv.Script, ":demolsp:slow"; got != want {
+				serviceErr <- fmt.Errorf("inv.Script = %q, want %q", got, want)
+				return
+			}
+			started <- struct{}{}
+			canceled, err := service.WaitInvocationCancel(inv.ID)
+			if err != nil {
+				serviceErr <- err
+				return
+			}
+			if !canceled {
+				serviceErr <- fmt.Errorf("WaitInvocationCancel(%d) = false, want true", inv.ID)
+				return
+			}
+			serviceErr <- service.FinishInvocation(inv.ID, "", "demolsp slow cancelled\n", "")
+		}()
 
-func TestRunHelpWritesUsage(t *testing.T) {
-	t.Parallel()
-
-	var stdout syncBuffer
-	var stderr syncBuffer
-
-	if got := run([]string{"-help"}, strings.NewReader(""), &stdout, &stderr); got != 0 {
-		t.Fatalf("run(-help) = %d, want 0", got)
-	}
-	if got := stdout.String(); !strings.Contains(got, "usage: ion") || !strings.Contains(got, "ion <fully-qualified-command>") {
-		t.Fatalf("stdout = %q, want usage text", got)
-	}
-	if got := stderr.String(); got != "" {
-		t.Fatalf("stderr = %q, want empty", got)
-	}
-}
-
-func waitFor(t *testing.T, cond func() bool, desc string) {
-	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
+		if err := client.Bootstrap(nil); err != nil {
+			return err
 		}
-		time.Sleep(10 * time.Millisecond)
+
+		execDone := make(chan error, 1)
+		go func() {
+			_, err := client.Execute(":demolsp:slow\n")
+			execDone <- err
+		}()
+
+		select {
+		case <-started:
+		case err := <-serviceErr:
+			return fmt.Errorf("service loop error: %w", err)
+		case <-time.After(2 * time.Second):
+			return fmt.Errorf("service did not receive slow invocation")
+		}
+
+		if err := interruptSession.Cancel(); err != nil {
+			return err
+		}
+
+		select {
+		case err := <-execDone:
+			if err != nil {
+				return fmt.Errorf("client.Execute(:demolsp:slow) error: %w", err)
+			}
+		case <-time.After(2 * time.Second):
+			return fmt.Errorf("client.Execute(:demolsp:slow) did not finish after cancel")
+		}
+
+		select {
+		case err := <-serviceErr:
+			if err != nil {
+				return fmt.Errorf("service loop error: %w", err)
+			}
+		case <-time.After(2 * time.Second):
+			return fmt.Errorf("service loop did not finish after cancel")
+		}
+
+		if got := stdout.String(); !strings.Contains(got, "demolsp slow cancelled\n") {
+			return fmt.Errorf("stdout after slow cancel = %q", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("timed out waiting for %s", desc)
 }

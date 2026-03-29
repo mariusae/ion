@@ -475,7 +475,7 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 			return err
 		}
 	}
-	return withLocalServerClients(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client, interruptClient *clientsession.Client) error {
+	return withLocalServerClients(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client, interruptSession *clientsession.Session) error {
 		if !shouldPreloadAddressedStartup(targets) {
 			if err := bootstrapTargetSession(&wireBModeClient{client: client}, targets); err != nil {
 				return err
@@ -486,7 +486,7 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 		}
 		return term.RunBootstrapped(stdin, stdout, stderr, client, capture, term.Options{
 			AutoIndent: cfg.autoindent,
-			Interrupt:  interruptClient.Interrupt,
+			Interrupt:  interruptSession.Cancel,
 		})
 	})
 }

@@ -312,7 +312,7 @@ func withLocalServer(ws *workspace.Workspace, stdout, stderr io.Writer, runClien
 	return withServerSocket(server, socketPath, stdout, stderr, runClient)
 }
 
-func withLocalServerClients(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Client) error) error {
+func withLocalServerClients(ws *workspace.Workspace, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Session) error) error {
 	server := transport.New(ws)
 	socketPath, cleanup, err := makeSocketPath()
 	if err != nil {
@@ -324,12 +324,12 @@ func withLocalServerClients(ws *workspace.Workspace, stdout, stderr io.Writer, r
 }
 
 func withServerSocket(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client) error) error {
-	return withServerSocketClients(server, socketPath, stdout, stderr, func(client *clientsession.Client, _ *clientsession.Client) error {
+	return withServerSocketClients(server, socketPath, stdout, stderr, func(client *clientsession.Client, _ *clientsession.Session) error {
 		return runClient(client)
 	})
 }
 
-func withServerSocketClients(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Client) error) error {
+func withServerSocketClients(server *transport.Server, socketPath string, stdout, stderr io.Writer, runClient func(*clientsession.Client, *clientsession.Session) error) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return err
 	}
@@ -349,7 +349,14 @@ func withServerSocketClients(server *transport.Server, socketPath string, stdout
 		<-serverErr
 		return err
 	}
-	interruptClient, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		_ = listener.Close()
+		<-serverErr
+		return err
+	}
+	interruptClient, err := clientsession.DialUnixAs(socketPath, client.ID(), io.Discard, io.Discard)
 	if err != nil {
 		_ = client.Close()
 		_ = listener.Close()
@@ -357,7 +364,7 @@ func withServerSocketClients(server *transport.Server, socketPath string, stdout
 		return err
 	}
 
-	clientErr := runClient(client, interruptClient)
+	clientErr := runClient(client, interruptClient.Session(session.ID()))
 	closeErr := client.Close()
 	interruptCloseErr := interruptClient.Close()
 	listenerErr := listener.Close()

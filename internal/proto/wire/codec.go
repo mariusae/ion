@@ -54,6 +54,7 @@ const (
 	KindInvocationWaitRequest
 	KindInvocationWaitResponse
 	KindInvocationFinishRequest
+	KindDisconnectRequest
 )
 
 // Frame is the versioned binary envelope shared by all wire messages.
@@ -247,6 +248,8 @@ func DecodeMessage(frame Frame) (any, error) {
 	case KindInvocationFinishRequest:
 		var msg InvocationFinishRequest
 		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindDisconnectRequest:
+		return &DisconnectRequest{}, nil
 	default:
 		return nil, fmt.Errorf("unknown frame kind %d", frame.Kind)
 	}

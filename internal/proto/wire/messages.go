@@ -431,6 +431,20 @@ func (m *InvocationFinishRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// DisconnectRequest tells the server to tear down the current client immediately.
+type DisconnectRequest struct{}
+
+func (m *DisconnectRequest) Kind() Kind { return KindDisconnectRequest }
+
+func (m *DisconnectRequest) MarshalBinary() ([]byte, error) { return nil, nil }
+
+func (m *DisconnectRequest) UnmarshalBinary(data []byte) error {
+	if len(data) != 0 {
+		return fmt.Errorf("disconnect request has trailing data")
+	}
+	return nil
+}
+
 // OpenFilesRequest carries one explicit file-open list for a live terminal
 // client without reparsing shell-style whitespace.
 type OpenFilesRequest struct {

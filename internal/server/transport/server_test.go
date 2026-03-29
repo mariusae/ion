@@ -417,3 +417,97 @@ func errorText(err error) string {
 	}
 	return err.Error()
 }
+
+func TestPrimaryClientCloseRemovesOwnedSessionsEvenWithAuxiliaryConnection(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	owner, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(owner) error = %v", err)
+	}
+	if err := owner.Bootstrap(nil); err != nil {
+		t.Fatalf("owner.Bootstrap() error = %v", err)
+	}
+	session := owner.CurrentSession()
+	if session == nil {
+		t.Fatal("owner.CurrentSession() = nil")
+	}
+
+	aux, err := clientsession.DialUnixAs(socketPath, owner.ID(), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnixAs(aux) error = %v", err)
+	}
+	defer aux.Close()
+	if _, err := aux.ListSessions(); err != nil {
+		t.Fatalf("aux.ListSessions() error = %v", err)
+	}
+
+	if err := owner.Close(); err != nil {
+		t.Fatalf("owner.Close() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		checker, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatalf("DialUnix(checker) error = %v", err)
+		}
+		sessions, listErr := checker.ListSessions()
+		_ = checker.Close()
+		if listErr != nil {
+			t.Fatalf("checker.ListSessions() error = %v", listErr)
+		}
+		found := false
+		for _, summary := range sessions {
+			if summary.ID == session.ID() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %d still present after owner close: %#v", session.ID(), sessions)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, err := aux.Session(session.ID()).CurrentView(); err == nil || !strings.Contains(err.Error(), "unknown session") {
+		t.Fatalf("aux.CurrentView() error = %v, want unknown session", err)
+	}
+}

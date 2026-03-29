@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ion/internal/proto/wire"
@@ -33,7 +34,8 @@ type Server struct {
 
 type serverClient struct {
 	id           uint64
-	refs         int
+	primaryRefs  int
+	auxRefs      int
 	ownedSession []uint64
 	namespaces   map[string]struct{}
 	pending      []*invocationState
@@ -44,10 +46,10 @@ type serverClient struct {
 type managedSession struct {
 	id               uint64
 	ownerClientID    uint64
-	controllerClient uint64
+	controllerClient atomic.Uint64
 	term             *serversession.TermSession
 	lastActive       time.Time
-	closed           bool
+	closed           atomic.Bool
 	delegate         *delegatedIO
 
 	mu   sync.Mutex
@@ -74,7 +76,8 @@ type invocationState struct {
 }
 
 type connState struct {
-	clientID uint64
+	clientID  uint64
+	auxiliary bool
 }
 
 type sessionCommand struct {
@@ -137,7 +140,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) error {
 	state := &connState{}
 	stdout := &eventWriter{conn: conn, kind: wire.KindStdoutEvent}
 	stderr := &eventWriter{conn: conn, kind: wire.KindStderrEvent}
-	defer s.releaseClient(state.clientID)
+	defer s.releaseClient(state.clientID, state.auxiliary)
 
 	for {
 		frame, err := wire.ReadFrame(conn)
@@ -164,11 +167,12 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 
 	switch msg := msg.(type) {
 	case *wire.ConnectRequest:
-		clientID, err := s.connectClient(msg.ClientID)
+		clientID, auxiliary, err := s.connectClient(msg.ClientID)
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		state.clientID = clientID
+		state.auxiliary = auxiliary
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.ConnectResponse{ClientID: clientID})
 	}
 
@@ -219,6 +223,10 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
+	case *wire.DisconnectRequest:
+		s.releaseClient(state.clientID, state.auxiliary)
+		state.clientID = 0
+		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.CommandRequest:
 		if cmd, ok, err := parseSessionCommand(msg.Script); ok {
 			if err != nil {
@@ -237,6 +245,12 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 	managed, err := s.waitForControlledSession(frame.SessionID, state.clientID, msg)
 	if err != nil {
 		return writeError(conn, frame.RequestID, frame.SessionID, err)
+	}
+	if _, ok := msg.(*wire.InterruptRequest); ok {
+		if err := managed.term.Interrupt(); err != nil {
+			return writeError(conn, frame.RequestID, managed.id, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.OKResponse{})
 	}
 	stdout.sessionID = managed.id
 	stderr.sessionID = managed.id
@@ -347,31 +361,34 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 	return nil
 }
 
-func (s *Server) connectClient(requested uint64) (uint64, error) {
+func (s *Server) connectClient(requested uint64) (uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if requested != 0 {
 		client, ok := s.clients[requested]
 		if !ok {
-			return 0, fmt.Errorf("unknown client %d", requested)
+			return 0, false, fmt.Errorf("unknown client %d", requested)
 		}
-		client.refs++
-		return client.id, nil
+		if client.closed || client.primaryRefs == 0 {
+			return 0, false, fmt.Errorf("unknown client %d", requested)
+		}
+		client.auxRefs++
+		return client.id, true, nil
 	}
 
 	s.nextClient++
 	client := &serverClient{
-		id:         s.nextClient,
-		refs:       1,
-		namespaces: make(map[string]struct{}),
+		id:          s.nextClient,
+		primaryRefs: 1,
+		namespaces:  make(map[string]struct{}),
 	}
 	client.cond = sync.NewCond(&s.mu)
 	s.clients[client.id] = client
-	return client.id, nil
+	return client.id, false, nil
 }
 
-func (s *Server) releaseClient(clientID uint64) {
+func (s *Server) releaseClient(clientID uint64, auxiliary bool) {
 	if clientID == 0 {
 		return
 	}
@@ -381,8 +398,17 @@ func (s *Server) releaseClient(clientID uint64) {
 		s.mu.Unlock()
 		return
 	}
-	client.refs--
-	if client.refs > 0 {
+	if auxiliary {
+		if client.auxRefs > 0 {
+			client.auxRefs--
+		}
+		s.mu.Unlock()
+		return
+	}
+	if client.primaryRefs > 0 {
+		client.primaryRefs--
+	}
+	if client.primaryRefs > 0 {
 		s.mu.Unlock()
 		return
 	}
@@ -418,12 +444,12 @@ func (s *Server) newSession(clientID uint64) (*managedSession, error) {
 	}
 	term := serversession.NewTerm(s.ws, io.Discard, io.Discard)
 	managed := &managedSession{
-		id:               term.ID(),
-		ownerClientID:    clientID,
-		controllerClient: clientID,
-		term:             term,
-		lastActive:       time.Now(),
+		id:            term.ID(),
+		ownerClientID: clientID,
+		term:          term,
+		lastActive:    time.Now(),
 	}
+	managed.controllerClient.Store(clientID)
 	managed.cond = sync.NewCond(&managed.mu)
 	s.sessions[managed.id] = managed
 	client.ownedSession = append(client.ownedSession, managed.id)
@@ -604,13 +630,14 @@ func (s *Server) takeSession(sessionID, clientID uint64) error {
 	}
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
-	if managed.closed {
+	if managed.closed.Load() {
 		return fmt.Errorf("session %d closed", sessionID)
 	}
-	if managed.controllerClient != managed.ownerClientID && managed.controllerClient != clientID {
+	controller := managed.controllerClient.Load()
+	if controller != managed.ownerClientID && controller != clientID {
 		return fmt.Errorf("session %d busy", sessionID)
 	}
-	managed.controllerClient = clientID
+	managed.controllerClient.Store(clientID)
 	managed.cond.Broadcast()
 	return nil
 }
@@ -622,13 +649,13 @@ func (s *Server) returnSession(sessionID, clientID uint64) error {
 	}
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
-	if managed.closed {
+	if managed.closed.Load() {
 		return fmt.Errorf("session %d closed", sessionID)
 	}
-	if managed.controllerClient != clientID {
+	if managed.controllerClient.Load() != clientID {
 		return fmt.Errorf("session %d not controlled by client", sessionID)
 	}
-	managed.controllerClient = managed.ownerClientID
+	managed.controllerClient.Store(managed.ownerClientID)
 	managed.cond.Broadcast()
 	return nil
 }
@@ -666,7 +693,7 @@ func (s *Server) waitForControlledSession(sessionID, clientID uint64, msg any) (
 func (s *Server) withManagedSession(managed *managedSession, stdout, stderr *eventWriter, fn func(*serversession.TermSession) (bool, error)) (bool, error) {
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
-	if managed.closed {
+	if managed.closed.Load() {
 		return false, fmt.Errorf("session %d closed", managed.id)
 	}
 	bindStdout, bindStderr := managed.boundIO(stdout, stderr)
@@ -683,7 +710,7 @@ func (s *Server) markSessionActive(sessionID uint64) {
 		return
 	}
 	managed.mu.Lock()
-	if !managed.closed {
+	if !managed.closed.Load() {
 		managed.lastActive = time.Now()
 	}
 	managed.mu.Unlock()
@@ -794,9 +821,7 @@ func parseNamespace(script string) string {
 }
 
 func (m *managedSession) canCancel(clientID uint64) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return !m.closed && (m.ownerClientID == clientID || m.controllerClient == clientID)
+	return !m.closed.Load() && (m.ownerClientID == clientID || m.controllerClient.Load() == clientID)
 }
 
 func (m *managedSession) boundIO(stdout, stderr io.Writer) (io.Writer, io.Writer) {
@@ -814,10 +839,10 @@ func (m *managedSession) boundIO(stdout, stderr io.Writer) (io.Writer, io.Writer
 func (m *managedSession) waitForController(clientID uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for !m.closed && m.controllerClient != clientID {
+	for !m.closed.Load() && m.controllerClient.Load() != clientID {
 		m.cond.Wait()
 	}
-	if m.closed {
+	if m.closed.Load() {
 		return fmt.Errorf("session %d closed", m.id)
 	}
 	return nil
@@ -825,7 +850,7 @@ func (m *managedSession) waitForController(clientID uint64) error {
 
 func (m *managedSession) close() {
 	m.mu.Lock()
-	m.closed = true
+	m.closed.Store(true)
 	m.cond.Broadcast()
 	m.mu.Unlock()
 }
@@ -851,7 +876,7 @@ func (m *managedSession) summary(clientID uint64) wire.SessionSummary {
 	defer m.mu.Unlock()
 
 	currentFile := ""
-	if !m.closed {
+	if !m.closed.Load() {
 		if view, err := m.term.CurrentView(); err == nil {
 			currentFile = view.Name
 		}
@@ -859,8 +884,8 @@ func (m *managedSession) summary(clientID uint64) wire.SessionSummary {
 	return wire.SessionSummary{
 		ID:               m.id,
 		Owner:            m.ownerClientID == clientID,
-		Controlled:       m.controllerClient == clientID,
-		Taken:            m.controllerClient != m.ownerClientID,
+		Controlled:       m.controllerClient.Load() == clientID,
+		Taken:            m.controllerClient.Load() != m.ownerClientID,
 		CurrentFile:      currentFile,
 		LastActiveUnixMs: m.lastActive.UnixMilli(),
 	}

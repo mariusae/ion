@@ -66,6 +66,15 @@ func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+	c.mu.Lock()
+	if c.connected {
+		c.nextReqID++
+		_ = wire.WriteFrame(c.conn, c.nextReqID, 0, &wire.DisconnectRequest{})
+		c.connected = false
+		c.sessionID = 0
+		c.takeStack = nil
+	}
+	c.mu.Unlock()
 	return c.conn.Close()
 }
 

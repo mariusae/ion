@@ -265,6 +265,7 @@ func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsess
 		_ = client.Close()
 		return nil, nil, nil, nil, err
 	}
+	interruptSession := interruptClient.Session(session.ID())
 	stop := make(chan struct{})
 	refresh := make(chan struct{}, 1)
 	go func() {
@@ -286,7 +287,7 @@ func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsess
 		close(stop)
 		_ = interruptClient.Close()
 	}
-	return client, session.Cancel, refresh, cleanup, nil
+	return client, interruptSession.Cancel, refresh, cleanup, nil
 }
 
 func wrapInteractiveClient(rt residentRuntime, paths residentPaths, client *clientsession.Client) wire.TermService {

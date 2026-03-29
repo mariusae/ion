@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
@@ -159,5 +161,70 @@ func TestRunResidentDownloadModeWithAcceptsDoubleColonQuitAlias(t *testing.T) {
 	var stderr bytes.Buffer
 	if err := runResidentDownloadModeWith(config{cmode: true, download: true}, strings.NewReader("::Q\n"), &stdout, &stderr, rt); err != nil {
 		t.Fatalf("runResidentDownloadModeWith() error = %v", err)
+	}
+}
+
+func TestDialSocketClientsInterruptCancelsRunningCommand(t *testing.T) {
+	t.Parallel()
+
+	socketPath, cleanup, err := makeSocketPath()
+	if err != nil {
+		t.Fatalf("makeSocketPath() error = %v", err)
+	}
+	defer cleanup()
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+
+	server := transport.New(workspace.New())
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		if err := <-serverErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	client, interrupt, _, stopRefresh, err := dialSocketClients(socketPath, &stdout, io.Discard)
+	if err != nil {
+		t.Fatalf("dialSocketClients() error = %v", err)
+	}
+	defer stopRefresh()
+	defer client.Close()
+
+	if err := client.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap(nil) error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Execute("!sleep 10\n")
+		done <- err
+	}()
+
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Execute(!sleep 10) error = %v", err)
+			}
+			return
+		case <-ticker.C:
+			if err := interrupt(); err != nil {
+				t.Fatalf("interrupt() error = %v", err)
+			}
+		case <-deadline:
+			t.Fatal("Execute(!sleep 10) did not stop after interrupt")
+		}
 	}
 }

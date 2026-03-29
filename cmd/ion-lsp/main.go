@@ -1275,21 +1275,21 @@ func (t locationTarget) DisplayPath(root string) string {
 }
 
 func decodeLocationTarget(raw json.RawMessage) (locationTarget, error) {
-	var list []lspLocation
-	if err := json.Unmarshal(raw, &list); err == nil && len(list) > 0 {
-		return targetFromLocation(list[0])
-	}
-	var one lspLocation
-	if err := json.Unmarshal(raw, &one); err == nil && one.URI != "" {
-		return targetFromLocation(one)
-	}
 	var links []lspLocationLink
-	if err := json.Unmarshal(raw, &links); err == nil && len(links) > 0 {
+	if err := json.Unmarshal(raw, &links); err == nil && len(links) > 0 && links[0].TargetURI != "" {
 		return targetFromLocationLink(links[0])
 	}
 	var link lspLocationLink
 	if err := json.Unmarshal(raw, &link); err == nil && link.TargetURI != "" {
 		return targetFromLocationLink(link)
+	}
+	var list []lspLocation
+	if err := json.Unmarshal(raw, &list); err == nil && len(list) > 0 && list[0].URI != "" {
+		return targetFromLocation(list[0])
+	}
+	var one lspLocation
+	if err := json.Unmarshal(raw, &one); err == nil && one.URI != "" {
+		return targetFromLocation(one)
 	}
 	return locationTarget{}, fmt.Errorf("no target")
 }

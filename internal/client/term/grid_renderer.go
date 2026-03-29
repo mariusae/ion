@@ -19,7 +19,12 @@ type gridRenderer struct {
 	initialized    bool
 
 	bufferAnchors  []int
-	overlayAnchors []int
+	overlayAnchors []overlayAnchor
+}
+
+type overlayAnchor struct {
+	history      int
+	contentStart int
 }
 
 type gridScrollOp struct {
@@ -235,7 +240,7 @@ func (r *gridRenderer) planBufferScroll(nextAnchors []int, overlay *overlayState
 	return gridScrollOp{top: 0, bottom: bufferViewRows(overlay), delta: shift}, true
 }
 
-func (r *gridRenderer) planOverlayHistoryScroll(nextAnchors []int, overlay *overlayState, menu *menuState) (gridScrollOp, bool) {
+func (r *gridRenderer) planOverlayHistoryScroll(nextAnchors []overlayAnchor, overlay *overlayState, menu *menuState) (gridScrollOp, bool) {
 	if overlay == nil || !overlay.visible || overlayHistoryRows(overlay) == 0 {
 		return gridScrollOp{}, false
 	}
@@ -311,10 +316,15 @@ func (r *gridRenderer) renderHUDInputGrid(overlay *overlayState, theme *uiTheme)
 		return
 	}
 	builder := newGridLineBuilder(r.hudInput.cols)
+	var promptLines []overlayRenderLine
+	if overlay != nil {
+		promptLines = overlay.renderPromptLines()
+	}
+	promptRows := len(promptLines)
 	for row := 0; row < r.hudInput.rows; row++ {
 		builder.Start(r.hudInput, row)
-		if row == 0 && overlay != nil && overlay.visible && overlayPromptRows(overlay) > 0 {
-			renderOverlayPromptGridRow(builder, overlay, theme, r.palette)
+		if row < promptRows {
+			renderOverlayPromptGridRow(builder, promptLines[row], theme, r.palette)
 		} else {
 			builder.Fill(0, r.hudInput.cols, gridCell{r: ' ', style: r.palette.ID(hudPrefix(theme))})
 		}
@@ -456,34 +466,11 @@ func renderOverlayGridLine(builder *GridLineBuilder, line overlayRenderLine, ove
 		renderGridText(builder, 0, line.text, hudPrefix(theme), hudTabWidth, palette)
 		return
 	}
-	start, end, ok := overlay.selectionBounds()
-	selStart := 0
-	selEnd := 0
-	contentOffset := line.offset
-	if ok && !overlay.flashSelection && line.history >= start.line && line.history <= end.line {
-		if line.command {
-			selStart = 0
-		} else {
-			selStart = contentOffset
-		}
-		selEnd = len([]rune(line.text))
-	}
-	if ok && !overlay.flashSelection && line.history == start.line {
-		selStart = start.col + contentOffset
-	}
-	if ok && !overlay.flashSelection && line.history == end.line {
-		selEnd = end.col + contentOffset
-	}
-	if selStart < contentOffset {
-		selStart = contentOffset
-	}
-	if selEnd < selStart {
-		selEnd = selStart
-	}
 	baseStyle := palette.ID(overlayLinePrefix(theme, line.command))
 	if baseStyle != 0 {
 		builder.Fill(0, len(builder.cells), gridCell{r: ' ', style: baseStyle})
 	}
+	start, end, ok := overlay.selectionBounds()
 	col := 0
 	runes := []rune(line.text)
 	for i, glyph := range runes {
@@ -492,10 +479,17 @@ func renderOverlayGridLine(builder *GridLineBuilder, line overlayRenderLine, ove
 		}
 		style := baseStyle
 		drawRune := glyph
+		selected := false
+		if ok && !overlay.flashSelection && i >= line.prefixRunes {
+			contentCol := line.contentStart + (i - line.prefixRunes)
+			selected = line.history >= start.line && line.history <= end.line &&
+				(line.history > start.line || contentCol >= start.col) &&
+				(line.history < end.line || contentCol < end.col)
+		}
 		switch {
 		case line.running:
 			style = palette.ID(shimmerPrefix(theme, i, len(runes)))
-		case i >= selStart && i < selEnd:
+		case selected:
 			style = palette.ID(highlightPrefix(theme, false))
 		case theme != nil && i == 0 && glyph == '█':
 			style = palette.ID(theme.outputPrefix())
@@ -505,16 +499,13 @@ func renderOverlayGridLine(builder *GridLineBuilder, line overlayRenderLine, ove
 	}
 }
 
-func renderOverlayPromptGridRow(builder *GridLineBuilder, overlay *overlayState, theme *uiTheme, palette *gridStylePalette) {
+func renderOverlayPromptGridRow(builder *GridLineBuilder, line overlayRenderLine, theme *uiTheme, palette *gridStylePalette) {
 	if builder == nil {
 		return
 	}
 	style := palette.ID(hudPrefix(theme))
 	builder.Fill(0, len(builder.cells), gridCell{r: ' ', style: style})
-	if overlay == nil {
-		return
-	}
-	renderGridRunes(builder, 0, overlay.input, hudPrefix(theme), hudTabWidth, palette)
+	renderGridText(builder, 0, line.text, hudPrefix(theme), hudTabWidth, palette)
 }
 
 func renderInlineStatusGridRow(builder *GridLineBuilder, grid *ScreenGrid, state *bufferState, theme *uiTheme, palette *gridStylePalette) {
@@ -564,23 +555,23 @@ func currentBufferAnchors(state *bufferState, overlay *overlayState, rows int) [
 	return anchors
 }
 
-func currentOverlayAnchors(overlay *overlayState) []int {
+func currentOverlayAnchors(overlay *overlayState) []overlayAnchor {
 	rows := overlayHistoryRows(overlay)
-	anchors := make([]int, rows)
+	anchors := make([]overlayAnchor, rows)
 	for i := range anchors {
-		anchors[i] = -1
+		anchors[i] = overlayAnchor{history: -1}
 	}
 	if overlay == nil || !overlay.visible || rows == 0 {
 		return anchors
 	}
 	lines := overlay.renderLines(rows)
 	for row := 0; row < rows && row < len(lines); row++ {
-		anchors[row] = lines[row].history
+		anchors[row] = overlayAnchor{history: lines[row].history, contentStart: lines[row].contentStart}
 	}
 	return anchors
 }
 
-func detectAnchorShift(prev, next []int) (int, bool) {
+func detectAnchorShift[T comparable](prev, next []T) (int, bool) {
 	if len(prev) != len(next) || len(prev) <= 1 {
 		return 0, false
 	}

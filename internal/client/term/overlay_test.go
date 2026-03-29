@@ -303,6 +303,27 @@ func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
 	}
 }
 
+func TestOverlayRenderLinesWrapLongHistoryEntries(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 10, 6
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("abcdefghi")
+
+	if got, want := overlayTexts(overlay.renderLines(4)), []string{"█ abcd", "█ efgh", "█ i"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(wrapped) = %q, want %q", got, want)
+	}
+
+	overlay.scrollOlder(1)
+	if got, want := overlayTexts(overlay.renderLines(2)), []string{"█ abcd", "█ efgh"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(wrapped scrolled) = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 	prev := termRows
 	termRows = 10
@@ -328,6 +349,23 @@ func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 	pos = overlay.screenToPos(overlayTopRow(overlay)+2, 1)
 	if pos.line != 1 || pos.col != 1 {
 		t.Fatalf("screenToPos(command) = (%d, %d), want (1, 1)", pos.line, pos.col)
+	}
+}
+
+func TestOverlayScreenToPosMapsWrappedRows(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 12, 6
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addOutput("abcdefghi")
+
+	pos := overlay.screenToPos(overlayTopRow(overlay)+2, 3)
+	if pos.line != 0 || pos.col != 5 {
+		t.Fatalf("screenToPos(wrapped row) = (%d, %d), want (0, 5)", pos.line, pos.col)
 	}
 }
 

@@ -851,7 +851,7 @@ func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 
 	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
 	overlay := newOverlayState()
-	line := overlayRenderLine{text: "█ alpha", history: 0}
+	line := overlayRenderLine{text: "█ alpha", history: 0, prefixRunes: 2, contentEnd: 5}
 
 	var out bytes.Buffer
 	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
@@ -878,7 +878,7 @@ func TestDrawOverlayHistoryLineExpandsTabsUnderOutputTint(t *testing.T) {
 
 	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
 	overlay := newOverlayState()
-	line := overlayRenderLine{text: "█ a\tb", history: 0}
+	line := overlayRenderLine{text: "█ a\tb", history: 0, prefixRunes: 2, contentEnd: 3}
 
 	var out bytes.Buffer
 	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
@@ -907,7 +907,7 @@ func TestDrawOverlayHistoryLineSelectionStartsAfterOutputGutter(t *testing.T) {
 	overlay := newOverlayState()
 	overlay.selectStart = overlaySelectionPos{line: 0, col: 0}
 	overlay.selectEnd = overlaySelectionPos{line: 0, col: 2}
-	line := overlayRenderLine{text: "█ alpha", history: 0, offset: 2}
+	line := overlayRenderLine{text: "█ alpha", history: 0, offset: 2, prefixRunes: 2, contentEnd: 5}
 
 	var out bytes.Buffer
 	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
@@ -970,6 +970,31 @@ func TestDrawOverlayPromptUsesOverlayTintWithoutPromptGlyph(t *testing.T) {
 	}
 	if strings.Contains(got, "\x1b[1;") {
 		t.Fatalf("drawOverlayPrompt() = %q, want non-bold live prompt", got)
+	}
+}
+
+func TestDrawOverlayPromptWrapsLongInput(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 4
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.input = []rune("abcdef")
+
+	var out bytes.Buffer
+	if err := drawOverlayPrompt(&out, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayPrompt() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[4;1H") || !strings.Contains(got, theme.hudPrefix()+"abcd") {
+		t.Fatalf("drawOverlayPrompt() = %q, want wrapped first prompt row", got)
+	}
+	if !strings.Contains(got, "\x1b[5;1H") || !strings.Contains(got, theme.hudPrefix()+"ef") {
+		t.Fatalf("drawOverlayPrompt() = %q, want wrapped second prompt row", got)
 	}
 }
 
@@ -1250,6 +1275,24 @@ func TestDrawOverlayHistoryLineShimmersRunningCommand(t *testing.T) {
 	}
 	if strings.Contains(got, "running") {
 		t.Fatalf("drawOverlayHistoryLine() = %q, want no separate running line text", got)
+	}
+}
+
+func TestTerminalCursorPositionWrapsOverlayPrompt(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 4
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.input = []rune("abcdef")
+	overlay.cursor = len(overlay.input)
+
+	row, col := terminalCursorPosition(nil, overlay)
+	if row != 4 || col != 2 {
+		t.Fatalf("terminalCursorPosition(overlay wrapped) = (%d, %d), want (4, 2)", row, col)
 	}
 }
 

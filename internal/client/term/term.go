@@ -2097,32 +2097,13 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 
 func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, overlay *overlayState, theme *uiTheme) error {
 	if line.history < 0 {
-		return drawHUDLine(stdout, row, line.text, theme.hudPrefix(), theme)
+		prefix := ""
+		if theme != nil {
+			prefix = theme.hudPrefix()
+		}
+		return drawHUDLine(stdout, row, line.text, prefix, theme)
 	}
 	start, end, ok := overlay.selectionBounds()
-	selStart := 0
-	selEnd := 0
-	contentOffset := line.offset
-	if ok && !overlay.flashSelection && line.history >= start.line && line.history <= end.line {
-		if line.command {
-			selStart = 0
-		} else {
-			selStart = contentOffset
-		}
-		selEnd = len([]rune(line.text))
-	}
-	if ok && !overlay.flashSelection && line.history == start.line {
-		selStart = start.col + contentOffset
-	}
-	if ok && !overlay.flashSelection && line.history == end.line {
-		selEnd = end.col + contentOffset
-	}
-	if selStart < contentOffset {
-		selStart = contentOffset
-	}
-	if selEnd < selStart {
-		selEnd = selStart
-	}
 
 	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H\x1b[2K", row+1); err != nil {
 		return err
@@ -2141,7 +2122,13 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 			if col >= termCols {
 				break
 			}
-			wantSelected := i >= selStart && i < selEnd
+			wantSelected := false
+			if ok && !overlay.flashSelection && i >= line.prefixRunes {
+				contentCol := line.contentStart + (i - line.prefixRunes)
+				wantSelected = line.history >= start.line && line.history <= end.line &&
+					(line.history > start.line || contentCol >= start.col) &&
+					(line.history < end.line || contentCol < end.col)
+			}
 			if wantSelected != selected {
 				selected = wantSelected
 				if selected {
@@ -2205,7 +2192,14 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 			break
 		}
 		nextPrefix := prefix
-		if i >= selStart && i < selEnd {
+		selected := false
+		if ok && !overlay.flashSelection && i >= line.prefixRunes {
+			contentCol := line.contentStart + (i - line.prefixRunes)
+			selected = line.history >= start.line && line.history <= end.line &&
+				(line.history > start.line || contentCol >= start.col) &&
+				(line.history < end.line || contentCol < end.col)
+		}
+		if selected {
 			nextPrefix = highlightPrefix(theme, false)
 		} else if i == 0 && r == '█' {
 			nextPrefix = theme.outputPrefix()
@@ -2326,31 +2320,14 @@ func drawOverlayPrompt(stdout io.Writer, overlay *overlayState, theme *uiTheme) 
 	if overlay == nil {
 		return nil
 	}
-	row := termRows - 1 - overlayBottomPadRows(overlay)
-	if err := drawHUDLine(stdout, row, "", theme.hudPrefix(), theme); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(stdout, "\x1b[%d;1H", row+1); err != nil {
-		return err
-	}
+	lines := overlay.renderPromptLines()
+	startRow := termRows - overlayBottomPadRows(overlay) - len(lines)
+	prefix := ""
 	if theme != nil {
-		if _, err := io.WriteString(stdout, theme.hudPrefix()); err != nil {
-			return err
-		}
+		prefix = theme.hudPrefix()
 	}
-	col := 0
-	for _, r := range overlay.input {
-		if col >= termCols {
-			break
-		}
-		nextCol, err := writeHUDRune(stdout, r, col, termCols)
-		if err != nil {
-			return err
-		}
-		col = nextCol
-	}
-	if theme != nil {
-		if _, err := io.WriteString(stdout, styleReset()); err != nil {
+	for i, line := range lines {
+		if err := drawHUDLine(stdout, startRow+i, line.text, prefix, theme); err != nil {
 			return err
 		}
 	}
@@ -2665,12 +2642,45 @@ func terminalCursorVisible(state *bufferState, overlay *overlayState) bool {
 
 func terminalCursorPosition(state *bufferState, overlay *overlayState) (int, int) {
 	if overlay != nil && overlay.visible {
-		row := termRows - 1 - overlayBottomPadRows(overlay)
-		col := overlay.cursor
+		lines := overlay.renderPromptLines()
+		startRow := termRows - overlayBottomPadRows(overlay) - len(lines)
+		for idx, line := range lines {
+			if overlay.cursor >= line.contentStart && overlay.cursor <= line.contentEnd {
+				col := 0
+				contentCol := line.contentStart
+				for _, glyph := range []rune(line.text)[line.prefixRunes:] {
+					if contentCol >= overlay.cursor {
+						break
+					}
+					advance := runeDisplayAdvance(glyph, col, termCols, hudTabWidth)
+					if advance <= 0 {
+						break
+					}
+					col += advance
+					contentCol++
+				}
+				if col > termCols-1 {
+					col = termCols - 1
+				}
+				return startRow + idx, col
+			}
+		}
+		if len(lines) == 0 {
+			return termRows - 1 - overlayBottomPadRows(overlay), 0
+		}
+		last := lines[len(lines)-1]
+		col := 0
+		for _, glyph := range []rune(last.text)[last.prefixRunes:] {
+			nextCol := runeDisplayAdvance(glyph, col, termCols, hudTabWidth)
+			if nextCol <= 0 {
+				break
+			}
+			col += nextCol
+		}
 		if col > termCols-1 {
 			col = termCols - 1
 		}
-		return row, col
+		return startRow + len(lines) - 1, col
 	}
 	if state == nil {
 		return 0, 0

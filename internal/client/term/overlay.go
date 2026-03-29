@@ -40,11 +40,14 @@ type overlaySelectionPos struct {
 }
 
 type overlayRenderLine struct {
-	text    string
-	history int
-	command bool
-	offset  int
-	running bool
+	text         string
+	history      int
+	command      bool
+	offset       int
+	running      bool
+	prefixRunes  int
+	contentStart int
+	contentEnd   int
 }
 
 func newOverlayState() *overlayState {
@@ -325,50 +328,103 @@ func (o *overlayState) promptLine() string {
 	return string(out)
 }
 
-func (o *overlayState) renderLines(limit int) []overlayRenderLine {
-	if limit <= 0 {
+func wrapOverlayRunes(content []rune, prefix string) []overlayRenderLine {
+	if termCols <= 0 {
 		return nil
 	}
-	historyLimit := limit
-	end := len(o.history) - o.scroll
-	if end < 0 {
-		end = 0
+	prefixRunes := []rune(prefix)
+	lines := make([]overlayRenderLine, 0, 1)
+	start := 0
+	for {
+		line := overlayRenderLine{contentStart: start}
+		var b strings.Builder
+		col := 0
+		for _, glyph := range prefixRunes {
+			advance := runeDisplayAdvance(glyph, col, termCols, hudTabWidth)
+			if advance <= 0 {
+				break
+			}
+			b.WriteRune(glyph)
+			col += advance
+			line.prefixRunes++
+		}
+		line.offset = col
+		for start < len(content) {
+			advance := runeDisplayAdvance(content[start], col, termCols, hudTabWidth)
+			if advance <= 0 {
+				break
+			}
+			b.WriteRune(content[start])
+			col += advance
+			start++
+		}
+		line.contentEnd = start
+		line.text = b.String()
+		lines = append(lines, line)
+		if len(content) == 0 || start >= len(content) || line.contentEnd == line.contentStart {
+			break
+		}
 	}
-	start := end - historyLimit
-	if start < 0 {
-		start = 0
+	return lines
+}
+
+func (o *overlayState) renderAllLines() []overlayRenderLine {
+	if o == nil || len(o.history) == 0 {
+		return nil
 	}
-	lines := make([]overlayRenderLine, 0, end-start)
+	lines := make([]overlayRenderLine, 0, len(o.history))
 	runningIdx := -1
 	if o.running {
 		runningIdx = o.findCommand(0)
 	}
-	for idx, entry := range o.history[start:end] {
-		line := overlayRenderLine{
-			history: start + idx,
-			command: entry.command,
-			running: start+idx == runningIdx,
+	for idx, entry := range o.history {
+		prefix := ""
+		if !entry.command {
+			prefix = "█ "
 		}
-		if entry.command {
-			line.text = entry.text
-			lines = append(lines, line)
-			continue
+		wrapped := wrapOverlayRunes([]rune(entry.text), prefix)
+		for i := range wrapped {
+			wrapped[i].history = idx
+			wrapped[i].command = entry.command
+			wrapped[i].running = idx == runningIdx
 		}
-		line.text = "█ " + entry.text
-		line.offset = 2
-		lines = append(lines, line)
+		lines = append(lines, wrapped...)
 	}
 	return lines
+}
+
+func (o *overlayState) renderPromptLines() []overlayRenderLine {
+	if o == nil || !o.visible || o.running {
+		return nil
+	}
+	return wrapOverlayRunes(o.input, "")
+}
+
+func (o *overlayState) renderLines(limit int) []overlayRenderLine {
+	if limit <= 0 {
+		return nil
+	}
+	all := o.renderAllLines()
+	end := len(all) - o.scroll
+	if end < 0 {
+		end = 0
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	return append([]overlayRenderLine(nil), all[start:end]...)
 }
 
 func (o *overlayState) maxScroll(limit int) int {
 	if limit <= 0 {
 		return 0
 	}
-	if len(o.history) <= limit {
+	total := len(o.renderAllLines())
+	if total <= limit {
 		return 0
 	}
-	return len(o.history) - limit
+	return total - limit
 }
 
 func (o *overlayState) scrollOlder(lines int) {
@@ -417,7 +473,7 @@ func overlayPromptRows(o *overlayState) int {
 	if o == nil || !o.visible || o.running {
 		return 0
 	}
-	return 1
+	return len(o.renderPromptLines())
 }
 
 func overlayHistoryRows(o *overlayState) int {
@@ -436,13 +492,14 @@ func overlayHeight(o *overlayState) int {
 	topPad := overlayTopPadRows(o)
 	prompt := overlayPromptRows(o)
 	bottomPad := overlayBottomPadRows(o)
-	height := len(o.history) + topPad + prompt + bottomPad
+	historyLines := len(o.renderAllLines())
+	height := historyLines + topPad + prompt + bottomPad
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
 	maxHeight := termRows / 2
 	minVisible := topPad + prompt + bottomPad
-	if len(o.history) > 0 {
+	if historyLines > 0 {
 		minVisible++
 	}
 	if maxHeight < minVisible {
@@ -472,20 +529,36 @@ func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {
 		return pos
 	}
 	line := lines[lineRow]
-	runes := []rune(line.text)
+	pos.line = line.history
+	pos.col = line.contentPosForScreenCol(col)
+	return pos
+}
+
+func (line overlayRenderLine) contentPosForScreenCol(col int) int {
+	if col <= line.offset {
+		return line.contentStart
+	}
 	if col < 0 {
 		col = 0
 	}
-	if col > len(runes) {
-		col = len(runes)
+	contentCol := line.contentStart
+	visualCol := line.offset
+	runes := []rune(line.text)
+	for i := line.prefixRunes; i < len(runes); i++ {
+		advance := runeDisplayAdvance(runes[i], visualCol, termCols, hudTabWidth)
+		if advance <= 0 {
+			break
+		}
+		if col < visualCol+advance {
+			return contentCol
+		}
+		visualCol += advance
+		contentCol++
 	}
-	pos.line = line.history
-	if col <= line.offset {
-		pos.col = 0
-		return pos
+	if contentCol > line.contentEnd {
+		contentCol = line.contentEnd
 	}
-	pos.col = col - line.offset
-	return pos
+	return contentCol
 }
 
 func (o *overlayState) hasSelection() bool {

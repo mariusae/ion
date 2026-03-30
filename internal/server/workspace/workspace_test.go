@@ -30,6 +30,55 @@ func TestBootstrapMissingFileKeepsEmptyNamedBuffer(t *testing.T) {
 	}
 }
 
+func TestBootstrapStoresRelativeNameAndAbsolutePathUnderCWD(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir(root) error = %v", err)
+	}
+
+	ws := New()
+	state := ws.NewSessionState()
+	if err := ws.Bootstrap(state, []string{path}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	view, err := ws.CurrentView(state)
+	if err != nil {
+		t.Fatalf("CurrentView() error = %v", err)
+	}
+	if got, want := view.Name, "a.txt"; got != want {
+		t.Fatalf("view.Name = %q, want %q", got, want)
+	}
+	if !sameFilePathWorkspace(t, view.Path, path) {
+		t.Fatalf("view.Path = %q, want same file as %q", view.Path, path)
+	}
+
+	files, err := ws.MenuFiles(state)
+	if err != nil {
+		t.Fatalf("MenuFiles() error = %v", err)
+	}
+	if got, want := len(files), 1; got != want {
+		t.Fatalf("menu len = %d, want %d", got, want)
+	}
+	if got, want := files[0].Name, "a.txt"; got != want {
+		t.Fatalf("menu name = %q, want %q", got, want)
+	}
+	if !sameFilePathWorkspace(t, files[0].Path, path) {
+		t.Fatalf("menu path = %q, want same file as %q", files[0].Path, path)
+	}
+}
+
 func TestWorkspaceWatcherReloadsCleanFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
@@ -174,4 +223,17 @@ func waitForWorkspace(t *testing.T, ready func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for workspace watcher state")
+}
+
+func sameFilePathWorkspace(t *testing.T, got, want string) bool {
+	t.Helper()
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat %q: %v", got, err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat %q: %v", want, err)
+	}
+	return os.SameFile(gotInfo, wantInfo)
 }

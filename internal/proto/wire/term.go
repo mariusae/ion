@@ -8,6 +8,7 @@ type BufferView struct {
 	ID        int
 	Text      string
 	Name      string
+	Path      string
 	DotStart  int
 	DotEnd    int
 	Status    string
@@ -18,6 +19,7 @@ type BufferView struct {
 type MenuFile struct {
 	ID      int
 	Name    string
+	Path    string
 	Dirty   bool
 	Changed bool
 	Current bool

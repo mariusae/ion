@@ -520,10 +520,11 @@ func bootstrapMissingTargets(client bModeClient, targets []clienttarget.Target) 
 	}
 	loaded := make(map[string]struct{}, len(menu))
 	for _, file := range menu {
-		if file.Name == "" {
+		path := menuFilePath(file)
+		if path == "" {
 			continue
 		}
-		loaded[file.Name] = struct{}{}
+		loaded[path] = struct{}{}
 	}
 	var missing []string
 	for _, path := range uniqueTargetPaths(targets) {
@@ -536,6 +537,16 @@ func bootstrapMissingTargets(client bModeClient, targets []clienttarget.Target) 
 		return nil
 	}
 	return client.Bootstrap(missing)
+}
+
+func menuFilePath(file wire.MenuFile) string {
+	if strings.TrimSpace(file.Path) != "" {
+		return filepath.Clean(strings.TrimSpace(file.Path))
+	}
+	if strings.TrimSpace(file.Name) != "" {
+		return filepath.Clean(strings.TrimSpace(file.Name))
+	}
+	return ""
 }
 
 func uniqueTargetPaths(targets []clienttarget.Target) []string {

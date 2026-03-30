@@ -279,7 +279,7 @@ func literalPathExists(path string) bool {
 func menuIDsByName(menu []wire.MenuFile) map[string]int {
 	ids := make(map[string]int, len(menu))
 	for _, file := range menu {
-		name := targetPathKey(file.Name)
+		name := menuFilePathKey(file)
 		if name == "" {
 			continue
 		}
@@ -329,7 +329,7 @@ func findMenuFileID(menu []wire.MenuFile, path string) (int, bool) {
 	var first int
 	found := false
 	for _, file := range menu {
-		if targetPathKey(file.Name) != path {
+		if menuFilePathKey(file) != path {
 			continue
 		}
 		if file.Current {
@@ -341,6 +341,13 @@ func findMenuFileID(menu []wire.MenuFile, path string) (int, bool) {
 		}
 	}
 	return first, found
+}
+
+func menuFilePathKey(file wire.MenuFile) string {
+	if strings.TrimSpace(file.Path) != "" {
+		return targetPathKey(file.Path)
+	}
+	return targetPathKey(file.Name)
 }
 
 func targetPathKey(path string) string {

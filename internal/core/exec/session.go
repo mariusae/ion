@@ -67,6 +67,7 @@ func (e diagnosticError) Diagnostic() string {
 type MenuFileInfo struct {
 	ID      int
 	Name    string
+	Path    string
 	Dirty   bool
 	Changed bool
 	Current bool
@@ -1119,11 +1120,12 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 	}
 
 	currentName := trimToken(f.Name.UTF8())
-	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
+	explicitName := normalizeStoredFileName(nameTokenUTF8(nameToken))
+	resolvedName := resolveStoredFileName(name)
 	newFile := currentName == ""
 
 	if !newFile {
-		if meta, ok, err := statFile(currentName); err != nil {
+		if meta, ok, err := statFile(resolveStoredFileName(currentName)); err != nil {
 			return err
 		} else if !ok {
 			newFile = true
@@ -1159,7 +1161,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 			written = trimmed
 		}
 	}
-	if err := os.WriteFile(name, []byte(written), 0o666); err != nil {
+	if err := os.WriteFile(resolvedName, []byte(written), 0o666); err != nil {
 		return createFileError(name, err)
 	}
 
@@ -1167,7 +1169,7 @@ func (s *Session) writeFile(f *text.File, a ionaddr.Address, nameToken *text.Str
 		f.MarkClean()
 	}
 	if currentName == "" || name == currentName {
-		if meta, ok, err := statFile(name); err != nil {
+		if meta, ok, err := statFile(resolvedName); err != nil {
 			return err
 		} else if ok {
 			f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
@@ -1322,7 +1324,7 @@ func (s *Session) fileCmd(f *text.File, nameToken *text.String) error {
 	if f == nil {
 		return fmt.Errorf("no file")
 	}
-	name := canonicalFileName(nameTokenUTF8(nameToken))
+	name := normalizeStoredFileName(nameTokenUTF8(nameToken))
 	warnDup := false
 	if name != "" {
 		oldName := trimToken(f.Name.UTF8())
@@ -1354,9 +1356,9 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 		return fmt.Errorf("no file name")
 	}
 	currentName := trimToken(f.Name.UTF8())
-	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
+	explicitName := normalizeStoredFileName(nameTokenUTF8(nameToken))
 	wasEmpty := f.B.Len() == 0 && (currentName == "" || currentName == name)
-	data, err := os.ReadFile(name)
+	data, err := os.ReadFile(resolveStoredFileName(name))
 	if err != nil {
 		return openFileError(name, err)
 	}
@@ -1384,7 +1386,7 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	}
 	if wasEmpty && !containsNullByte(data) {
 		f.MarkClean()
-		if meta, ok, err := statFile(name); err != nil {
+		if meta, ok, err := statFile(resolveStoredFileName(name)); err != nil {
 			return err
 		} else if ok {
 			f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
@@ -1401,8 +1403,8 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	if name == "" {
 		return fmt.Errorf("no file name")
 	}
-	explicitName := canonicalFileName(nameTokenUTF8(nameToken))
-	data, err := os.ReadFile(name)
+	explicitName := normalizeStoredFileName(nameTokenUTF8(nameToken))
+	data, err := os.ReadFile(resolveStoredFileName(name))
 	if err != nil {
 		return openFileError(name, err)
 	}
@@ -1418,7 +1420,7 @@ func (s *Session) editFileFromDisk(f *text.File, nameToken *text.String) error {
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
 	}
-	if meta, ok, err := statFile(name); err != nil {
+	if meta, ok, err := statFile(resolveStoredFileName(name)); err != nil {
 		return err
 	} else if ok {
 		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
@@ -1445,7 +1447,7 @@ func (s *Session) ReloadFileFromDisk(f *text.File) error {
 	if name == "" {
 		return nil
 	}
-	data, err := os.ReadFile(name)
+	data, err := os.ReadFile(resolveStoredFileName(name))
 	if err != nil {
 		return openFileError(name, err)
 	}
@@ -1457,7 +1459,7 @@ func (s *Session) ReloadFileFromDisk(f *text.File) error {
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
 	}
-	if meta, ok, err := statFile(name); err != nil {
+	if meta, ok, err := statFile(resolveStoredFileName(name)); err != nil {
 		return err
 	} else if ok {
 		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)
@@ -1472,6 +1474,10 @@ func (s *Session) ReloadFileFromDisk(f *text.File) error {
 }
 
 func (s *Session) changeDirectory(nameToken *text.String) error {
+	oldwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	target := trimToken(nameTokenUTF8(nameToken))
 	if target == "" {
 		target = strings.TrimSpace(os.Getenv("HOME"))
@@ -1486,9 +1492,14 @@ func (s *Session) changeDirectory(nameToken *text.String) error {
 	if err := os.Chdir(target); err != nil {
 		return diagnosticError{msg: fmt.Sprintf("chdir: ?I/O error: %q", ioErrText(err))}
 	}
+	newwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintln(s.Diag, "!"); err != nil {
 		return err
 	}
+	s.rewriteStoredNames(filepath.Clean(oldwd), filepath.Clean(newwd))
 	return nil
 }
 
@@ -1600,7 +1611,7 @@ func (s *Session) restoreOpenFiles(snapshot openFilesSnapshot) {
 func (s *Session) openFileFields(fields []string, allowNamelessCurrent bool) error {
 	canonicalFields := make([]string, 0, len(fields))
 	for _, name := range fields {
-		canonicalFields = append(canonicalFields, canonicalFileName(name))
+		canonicalFields = append(canonicalFields, normalizeStoredFileName(name))
 	}
 	if allowNamelessCurrent && len(canonicalFields) == 1 {
 		if current := s.Current; current != nil && trimToken(current.Name.UTF8()) == canonicalFields[0] {
@@ -1712,7 +1723,7 @@ func (s *Session) switchFile(nameToken *text.String) error {
 	displayName := ""
 	if len(list.fields) > 0 {
 		displayName = list.fields[0]
-		name = canonicalFileName(list.fields[0])
+		name = normalizeStoredFileName(list.fields[0])
 	} else if list.fromShell {
 		displayName = list.raw
 	}
@@ -1724,7 +1735,7 @@ func (s *Session) switchFile(nameToken *text.String) error {
 			continue
 		}
 		if f.Unread {
-			data, err := os.ReadFile(name)
+			data, err := os.ReadFile(resolveStoredFileName(name))
 			if err != nil {
 				return err
 			}
@@ -1739,13 +1750,45 @@ func (s *Session) switchFile(nameToken *text.String) error {
 }
 
 func (s *Session) findFileByName(name string) *text.File {
-	name = canonicalFileName(name)
+	name = normalizeStoredFileName(name)
 	for _, f := range s.Files {
 		if trimToken(f.Name.UTF8()) == name {
 			return f
 		}
 	}
 	return nil
+}
+
+func (s *Session) rewriteStoredNames(oldwd, newwd string) {
+	for _, f := range s.Files {
+		if f == nil {
+			continue
+		}
+		name := trimToken(f.Name.UTF8())
+		if name == "" || filepath.IsAbs(name) {
+			continue
+		}
+		s.setStoredName(f, normalizeNameForCWD(newwd, filepath.Join(oldwd, name)))
+	}
+	for _, f := range s.Files {
+		if f == nil {
+			continue
+		}
+		name := trimToken(f.Name.UTF8())
+		if name == "" || !filepath.IsAbs(name) {
+			continue
+		}
+		if !isUnderDir(newwd, name) {
+			continue
+		}
+		s.setStoredName(f, normalizeNameForCWD(newwd, name))
+	}
+	s.sortFiles()
+}
+
+func (s *Session) setStoredName(f *text.File, name string) {
+	next := text.NewStringFromUTF8(trimToken(name))
+	_ = f.Name.DupString(&next)
 }
 
 func (s *Session) hasFile(target *text.File) bool {
@@ -2030,6 +2073,7 @@ func (s *Session) MenuFiles() []MenuFileInfo {
 		out = append(out, MenuFileInfo{
 			ID:      s.ensureFileID(f),
 			Name:    trimToken(f.Name.UTF8()),
+			Path:    resolveStoredFileName(f.Name.UTF8()),
 			Dirty:   f.Mod,
 			Changed: f.DiskChanged,
 			Current: f == s.Current,
@@ -2107,7 +2151,7 @@ func commandNeedsCurrent(cmdc rune) bool {
 
 func fileNameForWrite(f *text.File, token *text.String) string {
 	if token != nil {
-		name := canonicalFileName(token.UTF8())
+		name := normalizeStoredFileName(token.UTF8())
 		if name != "" {
 			return name
 		}
@@ -2119,16 +2163,80 @@ func trimToken(s string) string {
 	return strings.TrimRight(strings.TrimSpace(strings.TrimRight(s, "\x00")), "\x00")
 }
 
-func canonicalFileName(name string) string {
+func normalizeStoredFileName(name string) string {
 	name = trimToken(name)
 	if name == "" {
 		return ""
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return filepath.Clean(name)
+	}
+	return normalizeNameForCWD(filepath.Clean(cwd), name)
+}
+
+func resolveStoredFileName(name string) string {
+	name = trimToken(name)
+	if name == "" {
+		return ""
+	}
+	if filepath.IsAbs(name) {
+		return filepath.Clean(name)
 	}
 	abs, err := filepath.Abs(name)
 	if err != nil {
 		return filepath.Clean(name)
 	}
 	return abs
+}
+
+func normalizeNameForCWD(cwd, name string) string {
+	name = trimToken(name)
+	if name == "" {
+		return ""
+	}
+	clean := filepath.Clean(name)
+	if clean == "." {
+		return ""
+	}
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Clean(filepath.Join(cwd, clean))
+	}
+	if rel, err := filepath.Rel(comparablePath(cwd), comparablePath(clean)); err == nil {
+		if rel == "." {
+			return ""
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel
+		}
+	}
+	return clean
+}
+
+func isUnderDir(dir, path string) bool {
+	rel, err := filepath.Rel(comparablePath(dir), comparablePath(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func comparablePath(path string) string {
+	clean := filepath.Clean(path)
+	if clean == "" {
+		return clean
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != "" {
+		return filepath.Clean(resolved)
+	}
+	dir := filepath.Dir(clean)
+	if dir == "" || dir == "." || dir == clean {
+		return clean
+	}
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil && resolvedDir != "" {
+		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(clean))
+	}
+	return clean
 }
 
 func nameTokenUTF8(s *text.String) string {
@@ -2180,7 +2288,7 @@ func loadUnreadFile(f *text.File) error {
 		f.ClearFileInfo()
 		return nil
 	}
-	data, err := os.ReadFile(name)
+	data, err := os.ReadFile(resolveStoredFileName(name))
 	if err != nil {
 		f.Unread = false
 		return openFileError(name, err)
@@ -2191,7 +2299,7 @@ func loadUnreadFile(f *text.File) error {
 	if _, _, err := f.LoadInitial(strings.NewReader(string(data))); err != nil {
 		return err
 	}
-	if meta, ok, err := statFile(name); err != nil {
+	if meta, ok, err := statFile(resolveStoredFileName(name)); err != nil {
 		return err
 	} else if ok {
 		f.SetFileInfo(meta.dev, meta.inode, meta.mtime)

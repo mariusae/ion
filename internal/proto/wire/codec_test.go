@@ -170,6 +170,7 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 			ID:       17,
 			Text:     "alpha\nbeta\n",
 			Name:     "notes.txt",
+			Path:     "/tmp/notes.txt",
 			DotStart: 2,
 			DotEnd:   7,
 		},
@@ -188,8 +189,8 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 
 	menu := &MenuFilesMessage{
 		Files: []MenuFile{
-			{ID: 0, Name: "one.txt", Dirty: false, Current: true},
-			{ID: 1, Name: "", Dirty: true, Current: false},
+			{ID: 0, Name: "one.txt", Path: "/tmp/one.txt", Dirty: false, Current: true},
+			{ID: 1, Name: "", Path: "", Dirty: true, Current: false},
 		},
 		Commands: []MenuCommand{
 			{Command: ":lsp:goto", Label: "symbol"},

@@ -211,7 +211,7 @@ func TestBootstrapAttachTargetsLoadsMissingFilesOnly(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeBModeClient{
-		menuFiles: []wire.MenuFile{{ID: 1, Name: "/tmp/already.txt", Current: true}},
+		menuFiles: []wire.MenuFile{{ID: 1, Name: "already.txt", Path: "/tmp/already.txt", Current: true}},
 	}
 	targets := []clienttarget.Target{
 		{Path: "/tmp/already.txt"},

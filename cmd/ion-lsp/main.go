@@ -478,7 +478,7 @@ func (m *lspManager) syncBuffers(client *clientsession.Client) error {
 		if !ok {
 			continue
 		}
-		view.Name = path
+		view.Path = path
 		grouped[server.name] = append(grouped[server.name], view)
 	}
 	for name, server := range m.servers {
@@ -493,7 +493,7 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 	if m == nil {
 		return "", nil, false
 	}
-	path, err := resolvePath(m.root, view.Name)
+	path, err := resolvePath(m.root, viewPath(view))
 	if err != nil || path == "" {
 		return "", nil, false
 	}
@@ -517,7 +517,8 @@ func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPositio
 	}
 	if err := server.EnsureView(wire.BufferView{
 		ID:   view.ID,
-		Name: path,
+		Name: view.Name,
+		Path: path,
 		Text: view.Text,
 	}); err != nil {
 		return nil, lspPosition{}, "", err
@@ -528,7 +529,7 @@ func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPositio
 func (m *lspManager) serverForView(view wire.BufferView) (string, *lspServer, error) {
 	path, server, ok := m.matchView(view)
 	if !ok {
-		return "", nil, fmt.Errorf("no LSP server configured for %q", view.Name)
+		return "", nil, fmt.Errorf("no LSP server configured for %q", viewPath(view))
 	}
 	return path, server, nil
 }
@@ -622,7 +623,7 @@ func (m *lspManager) pushCommand(view wire.BufferView, server *lspServer, target
 }
 
 func (m *lspManager) targetText(view wire.BufferView, server *lspServer, path string) (string, bool) {
-	if currentPath, err := resolvePath(m.root, view.Name); err == nil && currentPath == path {
+	if currentPath, err := resolvePath(m.root, viewPath(view)); err == nil && currentPath == path {
 		return view.Text, true
 	}
 	if text, ok := server.DocumentText(path); ok {
@@ -757,7 +758,8 @@ func finishFormat(client *clientsession.Client, manager *lspManager, invocationI
 	}
 	if err := server.EnsureView(wire.BufferView{
 		ID:       updatedView.ID,
-		Name:     path,
+		Name:     updatedView.Name,
+		Path:     path,
 		Text:     updatedView.Text,
 		DotStart: updatedView.DotStart,
 		DotEnd:   updatedView.DotEnd,
@@ -882,10 +884,10 @@ func (s *lspServer) Sync(buffers []wire.BufferView) error {
 	}
 	seen := make(map[string]wire.BufferView, len(buffers))
 	for _, view := range buffers {
-		if view.Name == "" {
+		if viewPath(view) == "" {
 			continue
 		}
-		uri := pathToURI(view.Name)
+		uri := pathToURI(viewPath(view))
 		seen[uri] = view
 		if err := s.syncDocument(uri, view); err != nil {
 			return err
@@ -895,13 +897,13 @@ func (s *lspServer) Sync(buffers []wire.BufferView) error {
 }
 
 func (s *lspServer) EnsureView(view wire.BufferView) error {
-	if s == nil || view.Name == "" {
+	if s == nil || viewPath(view) == "" {
 		return nil
 	}
 	if err := s.ensureStarted(); err != nil {
 		return err
 	}
-	return s.syncDocument(pathToURI(view.Name), view)
+	return s.syncDocument(pathToURI(viewPath(view)), view)
 }
 
 func (s *lspServer) ensureStarted() error {
@@ -1821,6 +1823,13 @@ func resolvePath(root, name string) (string, error) {
 		return resolved, nil
 	}
 	return path, nil
+}
+
+func viewPath(view wire.BufferView) string {
+	if strings.TrimSpace(view.Path) != "" {
+		return strings.TrimSpace(view.Path)
+	}
+	return strings.TrimSpace(view.Name)
 }
 
 func pathToURI(path string) string {

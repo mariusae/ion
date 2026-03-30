@@ -89,9 +89,7 @@ func (w *Workspace) Bootstrap(state *SessionState, files []string, stdout, stder
 		w.session.AddFile(f)
 	} else {
 		for _, name := range files {
-			if abs, err := filepath.Abs(name); err == nil {
-				name = abs
-			}
+			name = normalizeBootstrapFileName(name)
 			d, err := text.NewDisk()
 			if err != nil {
 				return err
@@ -101,7 +99,7 @@ func (w *Workspace) Bootstrap(state *SessionState, files []string, stdout, stder
 			if err := f.Name.DupString(&s); err != nil {
 				return err
 			}
-			if _, err := os.Stat(name); err != nil && errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(resolveWorkspaceFilePath(name)); err != nil && errors.Is(err, os.ErrNotExist) {
 				f.Unread = false
 			}
 			w.session.AddFile(f)
@@ -176,6 +174,7 @@ func (w *Workspace) BufferSnapshots() ([]wire.BufferView, error) {
 		out = append(out, wire.BufferView{
 			ID:   entry.ID,
 			Name: entry.Name,
+			Path: entry.Path,
 			Text: text,
 		})
 	}
@@ -241,6 +240,7 @@ func (w *Workspace) MenuFiles(state *SessionState) ([]wire.MenuFile, error) {
 		out = append(out, wire.MenuFile{
 			ID:      f.ID,
 			Name:    f.Name,
+			Path:    f.Path,
 			Dirty:   f.Dirty,
 			Changed: f.Changed,
 			Current: f.Current,
@@ -382,6 +382,7 @@ func (w *Workspace) currentView(state *SessionState) (wire.BufferView, error) {
 		ID:        w.session.CurrentFileID(),
 		Text:      text,
 		Name:      name,
+		Path:      resolveWorkspaceFilePath(name),
 		DotStart:  int(dot.P1),
 		DotEnd:    int(dot.P2),
 		Status:    stateStatus(state),
@@ -544,15 +545,75 @@ func watchPathForFile(f *text.File) string {
 	if f == nil {
 		return ""
 	}
-	name := strings.TrimSpace(strings.TrimRight(f.Name.UTF8(), "\x00"))
+	return resolveWorkspaceFilePath(strings.TrimSpace(strings.TrimRight(f.Name.UTF8(), "\x00")))
+}
+
+func normalizeBootstrapFileName(name string) string {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return ""
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return filepath.Clean(name)
+	}
+	return normalizeWorkspaceNameForCWD(filepath.Clean(cwd), name)
+}
+
+func normalizeWorkspaceNameForCWD(cwd, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	clean := filepath.Clean(name)
+	if clean == "." {
+		return ""
+	}
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Clean(filepath.Join(cwd, clean))
+	}
+	if rel, err := filepath.Rel(comparableWorkspacePath(cwd), comparableWorkspacePath(clean)); err == nil {
+		if rel == "." {
+			return ""
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel
+		}
+	}
+	return clean
+}
+
+func resolveWorkspaceFilePath(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if filepath.IsAbs(name) {
+		return filepath.Clean(name)
 	}
 	path, err := filepath.Abs(filepath.Clean(name))
 	if err != nil {
 		return ""
 	}
 	return path
+}
+
+func comparableWorkspacePath(path string) string {
+	clean := filepath.Clean(path)
+	if clean == "" {
+		return clean
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != "" {
+		return filepath.Clean(resolved)
+	}
+	dir := filepath.Dir(clean)
+	if dir == "" || dir == "." || dir == clean {
+		return clean
+	}
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil && resolvedDir != "" {
+		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(clean))
+	}
+	return clean
 }
 
 type watchedFileStat struct {

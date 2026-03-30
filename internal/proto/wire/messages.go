@@ -638,6 +638,9 @@ func (m *BufferSnapshotsMessage) MarshalBinary() ([]byte, error) {
 		if err := writeString(&b, view.Name); err != nil {
 			return nil, err
 		}
+		if err := writeString(&b, view.Path); err != nil {
+			return nil, err
+		}
 	}
 	return b.Bytes(), nil
 }
@@ -662,10 +665,15 @@ func (m *BufferSnapshotsMessage) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return err
 		}
+		path, err := readString(r)
+		if err != nil {
+			return err
+		}
 		buffers = append(buffers, BufferView{
 			ID:   int(id),
 			Text: text,
 			Name: name,
+			Path: path,
 		})
 	}
 	if r.Len() != 0 {
@@ -970,6 +978,9 @@ func (m *BufferViewMessage) MarshalBinary() ([]byte, error) {
 	if err := writeString(&b, m.View.Name); err != nil {
 		return nil, err
 	}
+	if err := writeString(&b, m.View.Path); err != nil {
+		return nil, err
+	}
 	if err := binary.Write(&b, binary.LittleEndian, int32(m.View.DotStart)); err != nil {
 		return nil, err
 	}
@@ -999,6 +1010,10 @@ func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return err
 	}
+	path, err := readString(r)
+	if err != nil {
+		return err
+	}
 	var start int32
 	if err := binary.Read(r, binary.LittleEndian, &start); err != nil {
 		return err
@@ -1022,6 +1037,7 @@ func (m *BufferViewMessage) UnmarshalBinary(data []byte) error {
 		ID:        int(id),
 		Text:      text,
 		Name:      name,
+		Path:      path,
 		DotStart:  int(start),
 		DotEnd:    int(end),
 		Status:    status,
@@ -1055,6 +1071,9 @@ func (m *MenuFilesMessage) MarshalBinary() ([]byte, error) {
 			return nil, err
 		}
 		if err := writeString(&b, f.Name); err != nil {
+			return nil, err
+		}
+		if err := writeString(&b, f.Path); err != nil {
 			return nil, err
 		}
 		if err := writeBool(&b, f.Dirty); err != nil {
@@ -1097,6 +1116,10 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return err
 		}
+		path, err := readString(r)
+		if err != nil {
+			return err
+		}
 		dirty, err := readBool(r)
 		if err != nil {
 			return err
@@ -1112,6 +1135,7 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 		files = append(files, MenuFile{
 			ID:      int(id),
 			Name:    name,
+			Path:    path,
 			Dirty:   dirty,
 			Changed: changed,
 			Current: current,

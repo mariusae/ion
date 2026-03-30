@@ -214,7 +214,7 @@ func TestQuotedFileAddressLoadsUnreadFileAndReportsStatus(t *testing.T) {
 	}
 }
 
-func TestListFilesShowsAbsolutePaths(t *testing.T) {
+func TestListFilesShowsStoredNames(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
@@ -252,14 +252,114 @@ func TestListFilesShowsAbsolutePaths(t *testing.T) {
 	if !ok {
 		t.Fatal("execute requested stop")
 	}
-
-	const prefix = " -. "
-	got := strings.TrimSuffix(diag.String(), "\n")
-	if !strings.HasPrefix(got, prefix) {
-		t.Fatalf("diag = %q, want %q prefix", got, prefix)
+	if got, want := diag.String(), " -. a.txt\n"; got != want {
+		t.Fatalf("diag = %q, want %q", got, want)
 	}
-	if !sameFilePath(t, strings.TrimPrefix(got, prefix), path) {
-		t.Fatalf("diag path = %q, want same file as %q", strings.TrimPrefix(got, prefix), path)
+}
+
+func TestOpenFilesPathsStoresRelativeNameUnderCWD(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	if got, want := trimToken(sess.Current.Name.UTF8()), "a.txt"; got != want {
+		t.Fatalf("current stored name = %q, want %q", got, want)
+	}
+	menu := sess.MenuFiles()
+	if got, want := len(menu), 1; got != want {
+		t.Fatalf("menu len = %d, want %d", got, want)
+	}
+	if got, want := menu[0].Name, "a.txt"; got != want {
+		t.Fatalf("menu name = %q, want %q", got, want)
+	}
+	if got, want := menu[0].Path, path; !sameFilePath(t, got, want) {
+		t.Fatalf("menu path = %q, want same file as %q", got, want)
+	}
+}
+
+func TestChangeDirectoryRewritesStoredNamesLikeSam(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "sub")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	one := filepath.Join(root, "one.txt")
+	two := filepath.Join(subdir, "two.txt")
+	if err := os.WriteFile(one, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write one.txt: %v", err)
+	}
+	if err := os.WriteFile(two, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("write two.txt: %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+
+	sess := NewSession(io.Discard)
+	sess.Diag = io.Discard
+	if err := sess.OpenFilesPaths([]string{one, two}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	cmd, err := cmdlang.NewParser("cd sub\n").Parse()
+	if err != nil {
+		t.Fatalf("parse cd: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute cd: %v", err)
+	}
+	if !ok {
+		t.Fatal("cd requested stop")
+	}
+
+	menu := sess.MenuFiles()
+	if got, want := len(menu), 2; got != want {
+		t.Fatalf("menu len = %d, want %d", got, want)
+	}
+	outside := menu[0]
+	inside := menu[1]
+	if !filepath.IsAbs(outside.Name) {
+		t.Fatalf("outside file stored name = %q, want absolute path", outside.Name)
+	}
+	if !sameFilePath(t, outside.Name, one) {
+		t.Fatalf("outside file stored name = %q, want same file as %q", outside.Name, one)
+	}
+	if !sameFilePath(t, outside.Path, one) {
+		t.Fatalf("outside file path = %q, want same file as %q", outside.Path, one)
+	}
+	if got, want := inside.Name, "two.txt"; got != want {
+		t.Fatalf("inside file stored name = %q, want %q", got, want)
+	}
+	if !sameFilePath(t, inside.Path, two) {
+		t.Fatalf("inside file path = %q, want same file as %q", inside.Path, two)
 	}
 }
 
@@ -433,7 +533,7 @@ func TestFileCommandPrintsPendingNewName(t *testing.T) {
 	if !ok {
 		t.Fatal("execute requested stop")
 	}
-	if got, want := diag.String(), "'-. "+canonicalFileName("renamed.txt")+"\n"; got != want {
+	if got, want := diag.String(), "'-. "+normalizeStoredFileName("renamed.txt")+"\n"; got != want {
 		t.Fatalf("diag = %q, want %q", got, want)
 	}
 }

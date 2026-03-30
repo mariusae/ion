@@ -1002,7 +1002,9 @@ func parseSessionCommand(script string) (sessionCommand, bool, error) {
 		trimmed == ":ion:paste",
 		trimmed == ":ion:look",
 		trimmed == ":ion:regexp",
-		trimmed == ":ion:plumb":
+		trimmed == ":ion:plumb",
+		trimmed == ":ion:plumb2",
+		trimmed == ":ion:new":
 		return sessionCommand{name: "terminal-only", arg: trimmed}, true, nil
 	case strings.HasPrefix(trimmed, ":ion:menudel "):
 		command := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menudel "))
@@ -1403,7 +1405,19 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 		return commandHelpDoc{
 			usage:   ":ion:plumb",
 			summary: "open the current token as a target",
-			help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing.",
+			help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing and pushes the destination onto the navigation stack.",
+		}, true
+	case ":ion:plumb2":
+		return commandHelpDoc{
+			usage:   ":ion:plumb2",
+			summary: "open the current token in another session",
+			help:    "Terminal HUD command that opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, it opens a new attached pane as in ion -N.",
+		}, true
+	case ":ion:new":
+		return commandHelpDoc{
+			usage:   ":ion:new",
+			summary: "open a new attached pane for the current file",
+			help:    "Terminal HUD command that opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 		}, true
 	default:
 		return commandHelpDoc{}, false
@@ -1478,7 +1492,17 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 				{
 					Name:    "plumb",
 					Summary: "open the current token as a target",
-					Help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing.",
+					Help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing and pushes the destination onto the navigation stack.",
+				},
+				{
+					Name:    "plumb2",
+					Summary: "open the current token in another session",
+					Help:    "Terminal HUD command that opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, it opens a new attached pane as in ion -N.",
+				},
+				{
+					Name:    "new",
+					Summary: "open a new attached pane for the current file",
+					Help:    "Terminal HUD command that opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 				},
 			},
 		},

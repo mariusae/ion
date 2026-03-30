@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"ion/internal/proto/wire"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
@@ -227,5 +228,21 @@ func TestDialSocketClientsInterruptCancelsRunningCommand(t *testing.T) {
 		case <-deadline:
 			t.Fatal("Execute(!sleep 10) did not stop after interrupt")
 		}
+	}
+}
+
+func TestSelectAlternateResidentSessionSkipsCurrentAndTaken(t *testing.T) {
+	t.Parallel()
+
+	sessionID, ok := selectAlternateResidentSession([]wire.SessionSummary{
+		{ID: 11},
+		{ID: 12, Taken: true},
+		{ID: 13},
+	}, 11)
+	if !ok {
+		t.Fatal("selectAlternateResidentSession() = false, want match")
+	}
+	if got, want := sessionID, uint64(13); got != want {
+		t.Fatalf("sessionID = %d, want %d", got, want)
 	}
 }

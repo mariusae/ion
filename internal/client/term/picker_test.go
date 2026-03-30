@@ -26,7 +26,7 @@ func TestCommandCompletionsFromDocsIncludesLocalIonAndMenuCommands(t *testing.T)
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":ion:snarf", ":ion:regexp", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":ion:snarf", ":ion:regexp", ":ion:new", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -161,7 +161,7 @@ func TestAugmentNamespaceDocsAddsLocalIonCommands(t *testing.T) {
 	for _, command := range docs[0].Commands {
 		names = append(names, command.Name)
 	}
-	for _, want := range []string{"Q", "write", "cut", "snarf", "paste", "look", "regexp", "plumb"} {
+	for _, want := range []string{"Q", "write", "cut", "snarf", "paste", "look", "regexp", "plumb", "plumb2", "new"} {
 		found := false
 		for _, got := range names {
 			if got == want {

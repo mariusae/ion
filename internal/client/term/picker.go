@@ -71,7 +71,17 @@ func localIonNamespaceDoc() wire.NamespaceProviderDoc {
 			{
 				Name:    "plumb",
 				Summary: "open the current token as a target",
-				Help:    "Opens the current selection or token under the cursor using B-style target plumbing.",
+				Help:    "Opens the current selection or token under the cursor using B-style target plumbing and pushes the destination onto the navigation stack.",
+			},
+			{
+				Name:    "plumb2",
+				Summary: "open the current token in another session",
+				Help:    "Opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, opens a new attached pane as in ion -N.",
+			},
+			{
+				Name:    "new",
+				Summary: "open a new attached pane for the current file",
+				Help:    "Opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 			},
 		},
 	}

@@ -67,7 +67,7 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 	defer stopRefresh()
 	defer client.Close()
 
-	service := wrapInteractiveClient(rt, paths, client)
+	service := wrapInteractiveClient(cfg, rt, paths, client)
 	if err := bootstrapAttachTargets(&wireBModeClient{client: client}, targets); err != nil {
 		return err
 	}
@@ -290,7 +290,7 @@ func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsess
 	return client, interruptSession.Cancel, refresh, cleanup, nil
 }
 
-func wrapInteractiveClient(rt residentRuntime, paths residentPaths, client *clientsession.Client) wire.TermService {
+func wrapInteractiveClient(cfg config, rt residentRuntime, paths residentPaths, client *clientsession.Client) wire.TermService {
 	paneID := ""
 	if rt.getenv != nil && rt.getenv("TMUX") != "" {
 		paneID = strings.TrimSpace(rt.getenv("TMUX_PANE"))
@@ -300,6 +300,9 @@ func wrapInteractiveClient(rt residentRuntime, paths residentPaths, client *clie
 	}
 	return &paneTrackingClient{
 		client:   client,
+		cfg:      cfg,
+		rt:       rt,
+		socket:   paths.socketPath,
 		panePath: paths.panePath,
 		paneID:   paneID,
 	}
@@ -307,6 +310,9 @@ func wrapInteractiveClient(rt residentRuntime, paths residentPaths, client *clie
 
 type paneTrackingClient struct {
 	client   *clientsession.Client
+	cfg      config
+	rt       residentRuntime
+	socket   string
 	panePath string
 	paneID   string
 }
@@ -387,6 +393,80 @@ func (c *paneTrackingClient) Undo() (wire.BufferView, error) {
 func (c *paneTrackingClient) Save() (string, error) {
 	c.markActive()
 	return c.client.Save()
+}
+
+func (c *paneTrackingClient) OpenNewPane(files []string) error {
+	if c == nil {
+		return fmt.Errorf("missing resident client")
+	}
+	rt := bModeRuntimeFromResident(c.rt)
+	ctx, ok, err := detectTmuxContext(rt, c.paneID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("command :ion:new requires tmux")
+	}
+	cfg := c.cfg
+	cfg.files = append([]string(nil), files...)
+	return splitAttachPane(ctx, cfg, rt)
+}
+
+func (c *paneTrackingClient) PlumbOther(token string) error {
+	if c == nil {
+		return fmt.Errorf("missing resident client")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	currentID := uint64(0)
+	if session := c.client.CurrentSession(); session != nil {
+		currentID = session.ID()
+	}
+	summaries, err := c.client.ListSessions()
+	if err != nil {
+		return err
+	}
+	sessionID, ok := selectAlternateResidentSession(summaries, currentID)
+	if !ok {
+		return c.OpenNewPane([]string{token})
+	}
+	aux, err := clientsession.DialUnixAs(c.socket, c.client.ID(), io.Discard, io.Discard)
+	if err != nil {
+		return err
+	}
+	defer aux.Close()
+	if err := aux.Take(sessionID); err != nil {
+		return err
+	}
+	_, execErr := aux.Session(sessionID).Execute(":ion:push " + token + "\n")
+	returnErr := aux.Return(sessionID)
+	if execErr != nil {
+		return execErr
+	}
+	return returnErr
+}
+
+func selectAlternateResidentSession(summaries []wire.SessionSummary, currentID uint64) (uint64, bool) {
+	for _, summary := range summaries {
+		if summary.ID == 0 || summary.ID == currentID || summary.Taken {
+			continue
+		}
+		return summary.ID, true
+	}
+	return 0, false
+}
+
+func bModeRuntimeFromResident(rt residentRuntime) bModeRuntime {
+	return bModeRuntime{
+		getenv:     rt.getenv,
+		getwd:      rt.getwd,
+		executable: rt.executable,
+		tempDir:    rt.tempDir,
+		spawn:      rt.spawn,
+		tmux:       rt.tmux,
+	}
 }
 
 func isRetryableResidentDialError(err error) bool {

@@ -85,6 +85,14 @@ type menuSnapshotProvider interface {
 	MenuSnapshot() (wire.MenuSnapshot, error)
 }
 
+type alternateSessionPlumber interface {
+	PlumbOther(token string) error
+}
+
+type newPaneOpener interface {
+	OpenNewPane(files []string) error
+}
+
 type Options struct {
 	AutoIndent bool
 	Refresh    <-chan struct{}
@@ -263,6 +271,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		return nil
 	}
+
+	var plumbTargetToken func(string) error
 
 	copyBufferSelectionLocal := func() error {
 		copied, status, err := copyBufferSelection(stdout, buffer)
@@ -671,6 +681,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return !ok, lines, nil
 	}
 
+	plumbTargetToken = func(token string) error {
+		if strings.TrimSpace(token) == "" {
+			return nil
+		}
+		done, _, err := executeDirect(":ion:push "+token+"\n", false)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		if err := refreshBuffer(); err != nil {
+			return err
+		}
+		if buffer != nil {
+			buffer.status = ""
+		}
+		return nil
+	}
+
 	normalizeIonAlias := func(line string) string {
 		trimmed := strings.TrimLeft(line, " \t")
 		if !strings.HasPrefix(trimmed, "::") {
@@ -810,7 +840,36 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if token == "" {
 				return true, false, nil
 			}
-			return true, false, openTargetToken(token)
+			if err := plumbTargetToken(token); err != nil {
+				buffer.status = diagnosticText(err)
+			}
+			return true, false, nil
+		case ":ion:plumb2":
+			token := plumbToken(buffer)
+			if token == "" {
+				return true, false, nil
+			}
+			plumber, ok := svc.(alternateSessionPlumber)
+			if !ok {
+				return false, false, nil
+			}
+			if err := plumber.PlumbOther(token); err != nil {
+				buffer.status = diagnosticText(err)
+			}
+			return true, false, nil
+		case ":ion:new":
+			opener, ok := svc.(newPaneOpener)
+			if !ok {
+				return false, false, nil
+			}
+			var files []string
+			if name := strings.TrimSpace(buffer.name); name != "" {
+				files = []string{name}
+			}
+			if err := opener.OpenNewPane(files); err != nil {
+				buffer.status = diagnosticText(err)
+			}
+			return true, false, nil
 		default:
 			return false, false, nil
 		}
@@ -1077,7 +1136,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if token == "" {
 				return false, nil
 			}
-			if err := openTargetToken(token); err != nil {
+			if err := plumbTargetToken(token); err != nil {
+				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			return false, nil

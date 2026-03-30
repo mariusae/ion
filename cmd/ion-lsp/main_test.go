@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,15 +86,34 @@ func TestProviderDocIncludesStatusAndLog(t *testing.T) {
 	t.Parallel()
 
 	doc := providerDoc()
-	if got, want := len(doc.Commands), 5; got != want {
+	if got, want := len(doc.Commands), 7; got != want {
 		t.Fatalf("len(providerDoc().Commands) = %d, want %d", got, want)
 	}
 	names := make([]string, 0, len(doc.Commands))
 	for _, cmd := range doc.Commands {
 		names = append(names, cmd.Name)
 	}
-	if got := strings.Join(names, ","); got != "goto,show,gototype,status,log" {
+	if got := strings.Join(names, ","); got != "goto,show,gototype,usage,fmt,status,log" {
 		t.Fatalf("providerDoc command names = %q", got)
+	}
+}
+
+func TestDecodeLocationTargetsLocationList(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`[{"uri":"file:///tmp/demo.go","range":{"start":{"line":2,"character":5},"end":{"line":2,"character":8}}},{"uri":"file:///tmp/other.go","range":{"start":{"line":4,"character":1},"end":{"line":4,"character":2}}}]`)
+	targets, err := decodeLocationTargets(raw)
+	if err != nil {
+		t.Fatalf("decodeLocationTargets() error = %v", err)
+	}
+	if got, want := len(targets), 2; got != want {
+		t.Fatalf("len(targets) = %d, want %d", got, want)
+	}
+	if got, want := targets[0].Path, "/tmp/demo.go"; got != want {
+		t.Fatalf("targets[0].Path = %q, want %q", got, want)
+	}
+	if got, want := targets[1].Line, 5; got != want {
+		t.Fatalf("targets[1].Line = %d, want %d", got, want)
 	}
 }
 
@@ -105,6 +125,63 @@ func TestOffsetForLineColumn(t *testing.T) {
 	}
 	if got, ok := offsetForLineColumn("one\ntwo\nthree\n", 3, 3); !ok || got != 10 {
 		t.Fatalf("offsetForLineColumn(line 3 col 3) = (%d, %t), want (10, true)", got, ok)
+	}
+}
+
+func TestOffsetForLSPPositionUsesUTF16Units(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := offsetForLSPPosition("a😀b\n", lspPosition{Line: 0, Character: 3}); !ok || got != 2 {
+		t.Fatalf("offsetForLSPPosition(utf16 char 3) = (%d, %t), want (2, true)", got, ok)
+	}
+}
+
+func TestApplyTextEdits(t *testing.T) {
+	t.Parallel()
+
+	got, err := applyTextEdits("package main\nfunc main(){println(\"x\")}\n", []lspTextEdit{
+		{
+			Range: lspRange{
+				Start: lspPosition{Line: 1, Character: 11},
+				End:   lspPosition{Line: 1, Character: 11},
+			},
+			NewText: " ",
+		},
+		{
+			Range: lspRange{
+				Start: lspPosition{Line: 1, Character: 12},
+				End:   lspPosition{Line: 1, Character: 12},
+			},
+			NewText: " ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("applyTextEdits() error = %v", err)
+	}
+	if want := "package main\nfunc main() { println(\"x\")}\n"; got != want {
+		t.Fatalf("applyTextEdits() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatUsageResult(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "demo.go")
+	text := "package main\n\nfunc demo() {\n\tdemo()\n}\n"
+	manager := &lspManager{root: root}
+	server := &lspServer{
+		docs: map[string]documentState{
+			pathToURI(path): {version: 1, text: text},
+		},
+	}
+	got := formatUsageResult(manager, wire.BufferView{Name: path, Text: text}, server, []locationTarget{{
+		Path:   path,
+		Line:   4,
+		Column: 2,
+	}})
+	if want := "demo.go:4:2: demo()\n"; got != want {
+		t.Fatalf("formatUsageResult() = %q, want %q", got, want)
 	}
 }
 
@@ -366,6 +443,45 @@ func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 	assertNavigationMatchesView(t, caller, view)
 	if got := stdout.String(); got != "" {
 		t.Fatalf("gototype stdout = %q, want empty output", got)
+	}
+
+	if _, err := caller.OpenTarget(mainGo, ""); err != nil {
+		t.Fatalf("OpenTarget(main.go) before usage error = %v", err)
+	}
+	if _, err := caller.SetAddress("/runServe/"); err != nil {
+		t.Fatalf("SetAddress(/runServe/) before usage error = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if _, err := caller.Execute(":lsp:usage\n"); err != nil {
+		t.Fatalf("Execute(:lsp:usage) error = %v\nstderr=%s", err, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "cmd/ion/main.go:") {
+		t.Fatalf("usage stdout = %q, want location list", got)
+	}
+
+	fmtPath := filepath.Join(root, "zz_ion_lsp_fmt_test.go")
+	if err := os.WriteFile(fmtPath, []byte("package main\nfunc bad( ){println(\"x\")}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(fmtPath) error = %v", err)
+	}
+	defer os.Remove(fmtPath)
+	if _, err := caller.OpenTarget(fmtPath, ""); err != nil {
+		t.Fatalf("OpenTarget(fmtPath) error = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if _, err := caller.Execute(":lsp:fmt\n"); err != nil {
+		t.Fatalf("Execute(:lsp:fmt) error = %v\nstderr=%s", err, stderr.String())
+	}
+	view, err = caller.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() after fmt error = %v", err)
+	}
+	if got, want := view.Text, "package main\n\nfunc bad() { println(\"x\") }\n"; got != want {
+		t.Fatalf("view.Text after fmt = %q, want %q", got, want)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("fmt stdout = %q, want empty output", got)
 	}
 
 	_ = server.Shutdown()

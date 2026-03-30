@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ var lspMenuCommands = []wire.MenuCommand{
 	{Command: ":lsp:goto", Label: "symbol"},
 	{Command: ":lsp:show", Label: "hover"},
 	{Command: ":lsp:gototype", Label: "type"},
+	{Command: ":lsp:usage", Label: "usage"},
+	{Command: ":lsp:fmt", Label: "format"},
 }
 
 func providerDoc() wire.NamespaceProviderDoc {
@@ -53,6 +56,16 @@ func providerDoc() wire.NamespaceProviderDoc {
 				Name:    "gototype",
 				Summary: "jump to the type definition under dot",
 				Help:    "Resolves the type of the symbol at dot via textDocument/typeDefinition and opens the first target in the current ion session. Takes no arguments.",
+			},
+			{
+				Name:    "usage",
+				Summary: "list usages of the symbol under dot",
+				Help:    "Requests textDocument/references for the symbol under dot and prints one usage per line as path:line:column with the matching source line. Takes no arguments.",
+			},
+			{
+				Name:    "fmt",
+				Summary: "format the current document",
+				Help:    "Requests textDocument/formatting for the current buffer, applies the returned edits to the live ion session, and preserves dot as closely as possible. Takes no arguments.",
 			},
 			{
 				Name:    "status",
@@ -548,6 +561,10 @@ func handleInvocation(client, aux *clientsession.Client, manager *lspManager, in
 		return finishGoto(client, session, manager, inv.ID, view, "textDocument/typeDefinition", "type definition")
 	case ":lsp:show":
 		return finishHover(client, manager, inv.ID, view)
+	case ":lsp:usage":
+		return finishUsage(client, manager, inv.ID, view)
+	case ":lsp:fmt":
+		return finishFormat(client, manager, inv.ID, view)
 	case ":lsp:status":
 		return finishStatus(client, manager, inv.ID, view)
 	case ":lsp:log":
@@ -652,6 +669,102 @@ func finishHover(client *clientsession.Client, manager *lspManager, invocationID
 		text += "\n"
 	}
 	return client.FinishInvocation(invocationID, "", text, "")
+}
+
+func finishUsage(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+	server, pos, uri, err := manager.currentTarget(view)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	result, err := server.Request("textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     pos,
+		"context": map[string]any{
+			"includeDeclaration": false,
+		},
+	}, 30*time.Second)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	targets, err := decodeLocationTargets(result)
+	if err != nil || len(targets) == 0 {
+		return client.FinishInvocation(invocationID, "no usages found", "", "")
+	}
+	text := formatUsageResult(manager, view, server, targets)
+	if text == "" {
+		return client.FinishInvocation(invocationID, "no usages found", "", "")
+	}
+	return client.FinishInvocation(invocationID, "", text, "")
+}
+
+func finishFormat(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+	path, server, err := manager.serverForView(view)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	canonicalView := view
+	canonicalView.Name = path
+	if err := server.EnsureView(canonicalView); err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	result, err := server.Request("textDocument/formatting", map[string]any{
+		"textDocument": map[string]any{"uri": pathToURI(path)},
+		"options": map[string]any{
+			"tabSize":                4,
+			"insertSpaces":           false,
+			"trimTrailingWhitespace": true,
+			"insertFinalNewline":     true,
+			"trimFinalNewlines":      true,
+		},
+	}, 30*time.Second)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	edits, err := decodeTextEdits(result)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if len(edits) == 0 {
+		return client.FinishInvocation(invocationID, "", "", "")
+	}
+	formatted, err := applyTextEdits(view.Text, edits)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if formatted == view.Text {
+		return client.FinishInvocation(invocationID, "", "", "")
+	}
+	startPos := positionForOffset(view.Text, view.DotStart)
+	endPos := positionForOffset(view.Text, view.DotEnd)
+	updatedView, err := client.Replace(0, len([]rune(view.Text)), formatted)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	start := clipOffset(len([]rune(formatted)), view.DotStart)
+	if next, ok := offsetForLSPPosition(formatted, startPos); ok {
+		start = next
+	}
+	end := clipOffset(len([]rune(formatted)), view.DotEnd)
+	if next, ok := offsetForLSPPosition(formatted, endPos); ok {
+		end = next
+	}
+	if start > end {
+		start, end = end, start
+	}
+	updatedView, err = client.SetDot(start, end)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if err := server.EnsureView(wire.BufferView{
+		ID:       updatedView.ID,
+		Name:     path,
+		Text:     updatedView.Text,
+		DotStart: updatedView.DotStart,
+		DotEnd:   updatedView.DotEnd,
+	}); err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	return client.FinishInvocation(invocationID, "", "", "")
 }
 
 func finishStatus(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
@@ -847,7 +960,9 @@ func (s *lspServer) ensureStarted() error {
 		"capabilities": map[string]any{
 			"textDocument": map[string]any{
 				"definition":     map[string]any{"dynamicRegistration": false, "linkSupport": true},
+				"references":     map[string]any{"dynamicRegistration": false},
 				"typeDefinition": map[string]any{"dynamicRegistration": false, "linkSupport": true},
+				"formatting":     map[string]any{"dynamicRegistration": false},
 				"hover":          map[string]any{"dynamicRegistration": false},
 				"synchronization": map[string]any{
 					"didSave": true,
@@ -1257,6 +1372,11 @@ type lspRange struct {
 	End   lspPosition `json:"end"`
 }
 
+type lspTextEdit struct {
+	Range   lspRange `json:"range"`
+	NewText string   `json:"newText"`
+}
+
 type locationTarget struct {
 	Path   string
 	Line   int
@@ -1275,23 +1395,73 @@ func (t locationTarget) DisplayPath(root string) string {
 }
 
 func decodeLocationTarget(raw json.RawMessage) (locationTarget, error) {
+	targets, err := decodeLocationTargets(raw)
+	if err != nil {
+		return locationTarget{}, err
+	}
+	return targets[0], nil
+}
+
+func decodeLocationTargets(raw json.RawMessage) ([]locationTarget, error) {
 	var links []lspLocationLink
-	if err := json.Unmarshal(raw, &links); err == nil && len(links) > 0 && links[0].TargetURI != "" {
-		return targetFromLocationLink(links[0])
+	if err := json.Unmarshal(raw, &links); err == nil {
+		targets := make([]locationTarget, 0, len(links))
+		for _, link := range links {
+			if link.TargetURI == "" {
+				continue
+			}
+			target, err := targetFromLocationLink(link)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
+		}
+		if len(targets) > 0 {
+			return targets, nil
+		}
 	}
 	var link lspLocationLink
 	if err := json.Unmarshal(raw, &link); err == nil && link.TargetURI != "" {
-		return targetFromLocationLink(link)
+		target, err := targetFromLocationLink(link)
+		if err != nil {
+			return nil, err
+		}
+		return []locationTarget{target}, nil
 	}
 	var list []lspLocation
-	if err := json.Unmarshal(raw, &list); err == nil && len(list) > 0 && list[0].URI != "" {
-		return targetFromLocation(list[0])
+	if err := json.Unmarshal(raw, &list); err == nil {
+		targets := make([]locationTarget, 0, len(list))
+		for _, loc := range list {
+			if loc.URI == "" {
+				continue
+			}
+			target, err := targetFromLocation(loc)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
+		}
+		if len(targets) > 0 {
+			return targets, nil
+		}
 	}
 	var one lspLocation
 	if err := json.Unmarshal(raw, &one); err == nil && one.URI != "" {
-		return targetFromLocation(one)
+		target, err := targetFromLocation(one)
+		if err != nil {
+			return nil, err
+		}
+		return []locationTarget{target}, nil
 	}
-	return locationTarget{}, fmt.Errorf("no target")
+	return nil, fmt.Errorf("no target")
+}
+
+func decodeTextEdits(raw json.RawMessage) ([]lspTextEdit, error) {
+	var edits []lspTextEdit
+	if err := json.Unmarshal(raw, &edits); err != nil {
+		return nil, fmt.Errorf("bad text edits")
+	}
+	return edits, nil
 }
 
 func targetFromLocation(loc lspLocation) (locationTarget, error) {
@@ -1400,11 +1570,103 @@ func offsetForLineColumn(text string, line, column int) (int, bool) {
 	return 0, false
 }
 
+func offsetForLSPPosition(text string, pos lspPosition) (int, bool) {
+	if pos.Line < 0 || pos.Character < 0 {
+		return 0, false
+	}
+	runes := []rune(text)
+	line := 0
+	character := 0
+	for i, r := range runes {
+		if line == pos.Line {
+			if character == pos.Character {
+				return i, true
+			}
+			if r == '\n' {
+				return 0, false
+			}
+			next := character + utf16Units(r)
+			if next > pos.Character {
+				return i, true
+			}
+			character = next
+			continue
+		}
+		if r == '\n' {
+			line++
+			character = 0
+		}
+	}
+	if line == pos.Line && character == pos.Character {
+		return len(runes), true
+	}
+	return 0, false
+}
+
+func clipOffset(n, offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	if offset > n {
+		return n
+	}
+	return offset
+}
+
 func utf16Units(r rune) int {
 	if r < 0x10000 {
 		return 1
 	}
 	return len(utf16.Encode([]rune{r}))
+}
+
+func applyTextEdits(text string, edits []lspTextEdit) (string, error) {
+	if len(edits) == 0 {
+		return text, nil
+	}
+	type resolvedEdit struct {
+		start   int
+		end     int
+		newText string
+	}
+	resolved := make([]resolvedEdit, 0, len(edits))
+	for _, edit := range edits {
+		start, ok := offsetForLSPPosition(text, edit.Range.Start)
+		if !ok {
+			return "", fmt.Errorf("bad formatting result")
+		}
+		end, ok := offsetForLSPPosition(text, edit.Range.End)
+		if !ok || end < start {
+			return "", fmt.Errorf("bad formatting result")
+		}
+		resolved = append(resolved, resolvedEdit{
+			start:   start,
+			end:     end,
+			newText: edit.NewText,
+		})
+	}
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].start != resolved[j].start {
+			return resolved[i].start < resolved[j].start
+		}
+		return resolved[i].end < resolved[j].end
+	})
+	for i := 1; i < len(resolved); i++ {
+		if resolved[i].start < resolved[i-1].end {
+			return "", fmt.Errorf("bad formatting result")
+		}
+	}
+	runes := []rune(text)
+	for i := len(resolved) - 1; i >= 0; i-- {
+		edit := resolved[i]
+		repl := []rune(edit.newText)
+		next := make([]rune, 0, len(runes)-(edit.end-edit.start)+len(repl))
+		next = append(next, runes[:edit.start]...)
+		next = append(next, repl...)
+		next = append(next, runes[edit.end:]...)
+		runes = next
+	}
+	return string(runes), nil
 }
 
 func formatHoverResult(raw json.RawMessage) string {
@@ -1415,6 +1677,62 @@ func formatHoverResult(raw json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(renderHoverContents(payload.Contents))
+}
+
+func formatUsageResult(manager *lspManager, view wire.BufferView, server *lspServer, targets []locationTarget) string {
+	if manager == nil || server == nil || len(targets) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(targets))
+	var b strings.Builder
+	for _, target := range targets {
+		key := fmt.Sprintf("%s:%d:%d", target.Path, target.Line, target.Column)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		line := targetLineText(manager, view, server, target)
+		if line != "" {
+			fmt.Fprintf(&b, "%s:%d:%d: %s\n", target.DisplayPath(manager.root), target.Line, target.Column, line)
+			continue
+		}
+		fmt.Fprintf(&b, "%s:%d:%d\n", target.DisplayPath(manager.root), target.Line, target.Column)
+	}
+	return b.String()
+}
+
+func targetLineText(manager *lspManager, view wire.BufferView, server *lspServer, target locationTarget) string {
+	if manager == nil || server == nil {
+		return ""
+	}
+	text, ok := manager.targetText(view, server, target.Path)
+	if !ok {
+		return ""
+	}
+	return lineText(text, target.Line)
+}
+
+func lineText(text string, line int) string {
+	if line < 1 {
+		return ""
+	}
+	current := 1
+	start := 0
+	runes := []rune(text)
+	for i, r := range runes {
+		if r != '\n' {
+			continue
+		}
+		if current == line {
+			return strings.TrimSpace(string(runes[start:i]))
+		}
+		current++
+		start = i + 1
+	}
+	if current == line {
+		return strings.TrimSpace(string(runes[start:]))
+	}
+	return ""
 }
 
 func renderHoverContents(raw json.RawMessage) string {

@@ -159,12 +159,12 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 func residentAttachKey(cfg config, rt residentRuntime) (string, error) {
 	if rt.getenv != nil && rt.getenv("TMUX") != "" {
 		targetPaneID := strings.TrimSpace(cfg.paneID)
-		sessionID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{session_id}")
+		windowID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{window_id}")
 		if err != nil {
 			return "", err
 		}
-		if sessionID != "" {
-			return "tmux-session:" + sessionID, nil
+		if windowID != "" {
+			return "tmux-window:" + windowID, nil
 		}
 	}
 	wd, err := rt.getwd()

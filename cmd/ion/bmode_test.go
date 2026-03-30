@@ -258,7 +258,7 @@ func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 		tmux:       tmux.run,
 		runTerm:    runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "tmux-session:$1")
+	paths := tmuxWindowPaths(tempDir, "tmux-window:@2")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -270,7 +270,6 @@ func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
 	wantCalls := [][]string{
-		{"display-message", "-p", "-t", "%4", "#{session_id}"},
 		{"display-message", "-p", "-t", "%4", "#{window_id}"},
 		{"display-message", "-p", "-t", "%9", "#{window_id}"},
 		{"select-window", "-t", "@7"},
@@ -324,7 +323,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 		tempDir:    func() string { return tempDir },
 		executable: func() (string, error) { return "/tmp/bin/ion", nil },
 		dial: func(path string) (bModeClient, error) {
-			want := tmuxWindowPaths(tempDir, "tmux-session:$54").socketPath
+			want := tmuxWindowPaths(tempDir, "tmux-window:@54").socketPath
 			if path != want {
 				t.Fatalf("dial path = %q, want %q", path, want)
 			}
@@ -335,7 +334,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 		tmux:    tmux.run,
 		runTerm: runTermWithTargets,
 	}
-	paths := tmuxWindowPaths(tempDir, "tmux-session:$54")
+	paths := tmuxWindowPaths(tempDir, "tmux-window:@54")
 	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -346,7 +345,7 @@ func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 	if err := runBModeWith(config{bmode: true, paneID: "%54", files: []string{"a.txt"}}, nil, io.Discard, io.Discard, rt); err != nil {
 		t.Fatalf("runBModeWith() error = %v", err)
 	}
-	if got, want := tmux.calls[0], []string{"display-message", "-p", "-t", "%54", "#{session_id}"}; !reflect.DeepEqual(got, want) {
+	if got, want := tmux.calls[0], []string{"display-message", "-p", "-t", "%54", "#{window_id}"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("first tmux call = %#v, want %#v", got, want)
 	}
 }

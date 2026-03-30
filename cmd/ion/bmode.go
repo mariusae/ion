@@ -18,14 +18,13 @@ import (
 )
 
 type tmuxContext struct {
-	SessionID    string
 	WindowID     string
 	PaneID       string
 	TargetPaneID string
 }
 
 func (c tmuxContext) Key() string {
-	return "tmux-session:" + c.SessionID
+	return "tmux-window:" + c.WindowID
 }
 
 type bModePaths struct {
@@ -273,16 +272,11 @@ func detectTmuxContext(rt bModeRuntime, paneOverride string) (tmuxContext, bool,
 	if targetPaneID == "" {
 		return tmuxContext{}, false, fmt.Errorf("TMUX_PANE not set")
 	}
-	sessionID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{session_id}")
-	if err != nil {
-		return tmuxContext{}, false, err
-	}
 	windowID, err := tmuxDisplay(rt.tmux, targetPaneID, "#{window_id}")
 	if err != nil {
 		return tmuxContext{}, false, err
 	}
 	return tmuxContext{
-		SessionID:    sessionID,
 		WindowID:     windowID,
 		PaneID:       paneID,
 		TargetPaneID: targetPaneID,

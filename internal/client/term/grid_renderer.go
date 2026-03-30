@@ -470,7 +470,7 @@ func renderOverlayGridLine(builder *GridLineBuilder, line overlayRenderLine, ove
 		renderGridText(builder, 0, line.text, hudPrefix(theme), hudTabWidth, palette)
 		return
 	}
-	baseStyle := palette.ID(overlayLinePrefix(theme, line.command))
+	baseStyle := palette.ID(overlayHistoryPrefix(theme, line))
 	if baseStyle != 0 {
 		builder.Fill(0, len(builder.cells), gridCell{r: ' ', style: baseStyle})
 	}

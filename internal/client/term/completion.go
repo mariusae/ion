@@ -30,7 +30,16 @@ func completeOverlayCommandInput(provider namespaceDocProvider, overlay *overlay
 	if err != nil {
 		return false, nil, err
 	}
-	matches := matchingCommandCompletions(commandCompletionsFromDocs(docs), prefix)
+	docs = augmentNamespaceDocs(docs)
+	var menu []wire.MenuCommand
+	if snapshotProvider, ok := provider.(menuSnapshotProvider); ok {
+		snapshot, err := snapshotProvider.MenuSnapshot()
+		if err != nil {
+			return false, nil, err
+		}
+		menu = snapshot.Commands
+	}
+	matches := matchingCommandCompletions(commandCompletionsFromDocs(docs, menu), prefix)
 	if len(matches) == 0 {
 		return true, nil, nil
 	}
@@ -150,7 +159,8 @@ func isCompletionSpace(r rune) bool {
 	}
 }
 
-func commandCompletionsFromDocs(docs []wire.NamespaceProviderDoc) []commandCompletion {
+func commandCompletionsFromDocs(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand) []commandCompletion {
+	docs = augmentNamespaceDocs(docs)
 	seen := map[string]commandCompletion{
 		":help": {name: ":help", summary: "show detailed help for a command"},
 	}
@@ -167,6 +177,20 @@ func commandCompletionsFromDocs(docs []wire.NamespaceProviderDoc) []commandCompl
 			full := ":" + namespace + ":" + name
 			seen[full] = commandCompletion{name: full, summary: strings.TrimSpace(command.Summary)}
 		}
+	}
+	for _, item := range menu {
+		command := strings.TrimSpace(item.Command)
+		if command == "" {
+			continue
+		}
+		summary := strings.TrimSpace(item.Label)
+		if summary == command {
+			summary = ""
+		}
+		if _, ok := seen[command]; ok {
+			continue
+		}
+		seen[command] = commandCompletion{name: command, summary: summary}
 	}
 	out := make([]commandCompletion, 0, len(seen))
 	for _, command := range seen {

@@ -539,6 +539,13 @@ func (t *uiTheme) commandPrefix() string {
 	return sgr("1", t.bgCode(t.hudBG))
 }
 
+func (t *uiTheme) pickerSelectionPrefix() string {
+	if t == nil {
+		return ""
+	}
+	return sgr("1", t.bgCode(t.outputBG))
+}
+
 func (t *uiTheme) titlePrefix() string {
 	if t == nil {
 		return ""

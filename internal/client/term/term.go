@@ -207,6 +207,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuSticky := menuStickyState{itemIndex: -1}
+	lastUICommand := ""
 	menuSawHover := false
 	menuLostReleaseSuspect := false
 	var menuLostReleaseTimer *time.Timer
@@ -670,7 +671,152 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return !ok, lines, nil
 	}
 
-	runOverlayCommand := func(line string, recordHistory bool) (bool, error) {
+	normalizeIonAlias := func(line string) string {
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, "::") {
+			return line
+		}
+		prefixLen := len(line) - len(trimmed)
+		return line[:prefixLen] + ":ion:" + trimmed[2:]
+	}
+
+	normalizeUICommand := func(line string) string {
+		return strings.TrimSpace(normalizeIonAlias(line))
+	}
+
+	var runOverlayCommand func(line string, recordHistory bool) (bool, error)
+
+	rememberUICommand := func(line string) {
+		if line = normalizeUICommand(line); line != "" {
+			lastUICommand = line
+		}
+	}
+
+	setPreviousUIFile := func(fileID int) {
+		menuSticky = menuStickyState{itemIndex: -1}
+		if fileID != 0 {
+			menuSticky.preferPreviousFile = true
+			menuSticky.previousFileID = fileID
+		}
+	}
+
+	rerunLastUICommand := func() (bool, error) {
+		if strings.TrimSpace(lastUICommand) == "" {
+			return false, nil
+		}
+		if menu.visible {
+			menu.dismiss()
+			clearMenuLostRelease()
+			menuSawHover = false
+		}
+		done, err := runOverlayCommand(lastUICommand, true)
+		if err != nil {
+			buffer.status = diagnosticText(err)
+			return false, bufferRedraw(redrawBufferStatus)
+		}
+		if done {
+			return true, nil
+		}
+		return false, allLayersRedraw(redrawRefresh)
+	}
+
+	uiCommandForMenuItem := func(item menuItem) string {
+		switch item.kind {
+		case menuWrite:
+			return ":ion:write"
+		case menuCut:
+			return ":ion:cut"
+		case menuSnarf:
+			return ":ion:snarf"
+		case menuPaste:
+			return ":ion:paste"
+		case menuLook:
+			return ":ion:look"
+		case menuRegexp:
+			return ":ion:regexp"
+		case menuPlumb:
+			return ":ion:plumb"
+		case menuHistoryPop:
+			return ":ion:pop"
+		case menuCommand:
+			return item.command
+		default:
+			return ""
+		}
+	}
+
+	executeLocalIonCommand := func(line string) (bool, bool, error) {
+		switch strings.TrimSpace(normalizeIonAlias(line)) {
+		case ":ion:write":
+			if strings.TrimSpace(buffer.name) == "" {
+				overlay.open("w ")
+				return true, false, nil
+			}
+			msg, lines, err := saveWithCapture()
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return true, false, nil
+			}
+			applyStatusResult(msg, lines)
+			return true, false, nil
+		case ":ion:cut":
+			if err := cutBufferSelectionLocal(); err != nil {
+				return true, false, err
+			}
+			return true, false, nil
+		case ":ion:snarf":
+			if err := copyBufferSelectionLocal(); err != nil {
+				return true, false, err
+			}
+			return true, false, nil
+		case ":ion:paste":
+			if err := pasteBufferSelectionLocal(); err != nil {
+				return true, false, err
+			}
+			return true, false, nil
+		case ":ion:look":
+			next, ok, err := lookInBuffer(svc, buffer, true)
+			if err != nil {
+				return true, false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return true, false, nil
+		case ":ion:regexp":
+			pattern := parser.LastPatternUTF8()
+			if pattern == "" {
+				buffer.status = "?no previous regexp"
+				return true, false, nil
+			}
+			done, _, err := executeDirect("/"+escapeSearchPattern(pattern)+"/\n", false)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return true, false, nil
+			}
+			if done {
+				return true, true, nil
+			}
+			if err := refreshBuffer(); err != nil {
+				return true, false, err
+			}
+			buffer.status = ""
+			return true, false, nil
+		case ":ion:plumb":
+			token := plumbToken(buffer)
+			if token == "" {
+				return true, false, nil
+			}
+			return true, false, openTargetToken(token)
+		default:
+			return false, false, nil
+		}
+	}
+
+	runRemoteOverlayCommand := func(line string, recordHistory bool) (bool, error) {
 		type overlayResult struct {
 			done bool
 			err  error
@@ -769,6 +915,53 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
+	runOverlayCommand = func(line string, recordHistory bool) (bool, error) {
+		if strings.TrimSpace(line) == "" {
+			return false, nil
+		}
+		line = normalizeIonAlias(line)
+		if handled, done, err := executeLocalIonCommand(line); handled {
+			if recordHistory {
+				overlay.addCommand(strings.TrimSuffix(line, "\n"))
+			}
+			overlay.resetInput()
+			return done, err
+		}
+		return runRemoteOverlayCommand(line, recordHistory)
+	}
+
+	openCommandPicker := func() error {
+		var docs []wire.NamespaceProviderDoc
+		if provider, ok := svc.(namespaceDocProvider); ok {
+			var err error
+			docs, err = provider.NamespaceDocs()
+			if err != nil {
+				return err
+			}
+		}
+		snapshot, err := loadMenuSnapshot(svc)
+		if err != nil {
+			return err
+		}
+		last := strings.TrimSpace(lastUICommand)
+		if last == "" {
+			last, _ = overlay.lastCommand()
+		}
+		items, preferred := buildCommandPickerItems(docs, snapshot.Commands, last)
+		overlay.openPicker(overlayModeCommandPicker, items, preferred)
+		return overlaySurfaceRedraw(redrawOverlayOpen)
+	}
+
+	openFilePicker := func() error {
+		snapshot, err := loadMenuSnapshot(svc)
+		if err != nil {
+			return err
+		}
+		items, preferred := buildFilePickerItems(snapshot.Files, menuSticky.previousFileID)
+		overlay.openPicker(overlayModeFilePicker, items, preferred)
+		return overlaySurfaceRedraw(redrawOverlayOpen)
+	}
+
 	submitOverlay := func() (bool, error) {
 		line := string(overlay.input)
 		if len(overlay.input) == 0 {
@@ -802,6 +995,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		menu.dismiss()
 		clearMenuLostRelease()
 		menuSawHover = false
+		rememberUICommand(uiCommandForMenuItem(item))
 		switch item.kind {
 		case menuWrite:
 			msg, lines, err := saveWithCapture()
@@ -888,12 +1082,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, nil
 		case menuFile:
+			previousFileID := 0
+			if buffer != nil {
+				previousFileID = buffer.fileID
+			}
 			view, err := svc.FocusFile(item.fileID)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			applyBufferView(view)
+			setPreviousUIFile(previousFileID)
 			buffer.status = ""
 			return false, nil
 		}
@@ -1141,6 +1340,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 		}
 		switch r {
+		case 0x0b:
+			return false, openCommandPicker()
+		case 0x10:
+			return false, openFilePicker()
+		case 0x04:
+			return rerunLastUICommand()
 		case 0x03:
 			if err := copyBufferSelectionLocal(); err != nil {
 				return false, err
@@ -1331,6 +1536,182 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		if inBufferMode {
 			if overlay.visible {
+				if overlay.pickerActive() {
+					if r == 0x1b {
+						key, mouse, err := readBufferEscape(reader, stdin)
+						if err != nil {
+							return err
+						}
+						if key != keyFocusIn && key != keyFocusOut {
+							clearTransientStatus()
+						}
+						switch key {
+						case keyEsc:
+							overlay.close()
+							if err := overlaySurfaceRedraw(redrawOverlayClose); err != nil {
+								return err
+							}
+							continue
+						case keyMouse:
+							if mouse != nil {
+								handled, err := handleOverlayMouse(*mouse)
+								if err != nil {
+									return err
+								}
+								if handled {
+									req := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+									if !overlay.visible {
+										req = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+									}
+									if err := redraw(req); err != nil {
+										return err
+									}
+								}
+								continue
+							}
+						case keyUp:
+							overlay.pickerMove(-1)
+						case keyDown:
+							overlay.pickerMove(1)
+						case keyPgUp, keyAltPageUp:
+							overlay.pickerMove(-max(1, overlayHistoryRows(overlay)-1))
+						case keyPgDn:
+							overlay.pickerMove(max(1, overlayHistoryRows(overlay)-1))
+						case keyLeft:
+							overlay.moveLeft()
+						case keyRight:
+							overlay.moveRight()
+						case keyAltLeft:
+							overlay.moveWordLeft()
+						case keyAltRight:
+							overlay.moveWordRight()
+						case keyHome:
+							overlay.moveHome()
+						case keyEnd:
+							overlay.moveEnd()
+						case keyDel:
+							overlay.deleteForward()
+						case keyAltBackspace:
+							overlay.killWord()
+						case keyFocusIn:
+							focused = true
+							if err := refreshThemeOnFocus(); err != nil {
+								return err
+							}
+							if err := allLayersRedraw(redrawTheme); err != nil {
+								return err
+							}
+							continue
+						case keyFocusOut:
+							focused = false
+							if err := allLayersRedraw(redrawTheme); err != nil {
+								return err
+							}
+							continue
+						default:
+							overlay.close()
+							done, err := handleBufferSpecial(key, mouse)
+							if err != nil {
+								return err
+							}
+							if done {
+								return nil
+							}
+							continue
+						}
+						if err := redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)); err != nil {
+							return err
+						}
+						continue
+					}
+					if menu.visible {
+						menu.dismiss()
+					}
+					clearTransientStatus()
+					overlayReq := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+					switch r {
+					case '\r', '\n':
+						switch overlay.pickerMode() {
+						case overlayModeFilePicker:
+							item, ok := overlay.pickerSelected()
+							overlay.close()
+							overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+							if !ok {
+								if err := redraw(overlayReq); err != nil {
+									return err
+								}
+								continue
+							}
+							previousFileID := 0
+							if buffer != nil {
+								previousFileID = buffer.fileID
+							}
+							view, err := svc.FocusFile(item.fileID)
+							if err != nil {
+								buffer.status = diagnosticText(err)
+							} else {
+								applyBufferView(view)
+								setPreviousUIFile(previousFileID)
+								buffer.status = ""
+							}
+						default:
+							item, ok := overlay.pickerSelected()
+							if !ok {
+								overlay.close()
+								overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+								if err := redraw(overlayReq); err != nil {
+									return err
+								}
+								continue
+							}
+							overlay.close()
+							rememberUICommand(item.value)
+							done, err := runOverlayCommand(item.value, true)
+							if err != nil {
+								return err
+							}
+							if done {
+								if err := exitBufferMode(stdout); err != nil {
+									return err
+								}
+								return nil
+							}
+							continue
+						}
+					case 0x7f, 0x08:
+						overlay.backspace()
+					case 0x04:
+						overlay.deleteForward()
+					case 0x02:
+						overlay.moveLeft()
+					case 0x06:
+						overlay.moveRight()
+					case 0x01:
+						overlay.moveHome()
+					case 0x05:
+						overlay.moveEnd()
+					case 0x10:
+						overlay.pickerMove(-1)
+					case 0x0e:
+						overlay.pickerMove(1)
+					case 0x15:
+						overlay.killToStart()
+					case 0x17:
+						overlay.killWord()
+					case 0x0b:
+						overlay.killLine()
+					default:
+						if r >= 32 {
+							overlay.insert([]rune{r})
+						} else {
+							continue
+						}
+					}
+					if err := redraw(overlayReq); err != nil {
+						return err
+					}
+					continue
+				}
 				if r == 0x1b {
 					key, mouse, err := readBufferEscape(reader, stdin)
 					if err != nil {
@@ -2116,6 +2497,19 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 		}
 		return false, nil
 	}
+	if overlay.pickerActive() {
+		if dir, ok := event.verticalWheelDirection(); ok {
+			if dir < 0 {
+				return overlay.pickerMove(event.count()), nil
+			}
+			return overlay.pickerMove(-event.count()), nil
+		}
+		if !event.isWheel() && !event.pressed && event.baseButton() == 0 {
+			overlay.close()
+			return true, nil
+		}
+		return false, nil
+	}
 	if dir, ok := event.verticalWheelDirection(); ok {
 		prevScroll := overlay.scroll
 		lines := event.count()
@@ -2216,7 +2610,7 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return err
 	}
 	if theme == nil {
-		prefix := overlayLinePrefix(nil, line.command)
+		prefix := overlayHistoryPrefix(nil, line)
 		runes := []rune(line.text)
 		selected := false
 		col := 0
@@ -2230,7 +2624,9 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 				break
 			}
 			wantSelected := false
-			if ok && !overlay.flashSelection && i >= line.prefixRunes {
+			if line.selected {
+				wantSelected = true
+			} else if ok && !overlay.flashSelection && i >= line.prefixRunes {
 				contentCol := line.contentStart + (i - line.prefixRunes)
 				wantSelected = line.history >= start.line && line.history <= end.line &&
 					(line.history > start.line || contentCol >= start.col) &&
@@ -2282,7 +2678,7 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		return nil
 	}
 
-	prefix := overlayLinePrefix(theme, line.command)
+	prefix := overlayHistoryPrefix(theme, line)
 	if line.running {
 		return drawShimmerHUDLine(stdout, row, line.text, prefix, theme)
 	}
@@ -2300,7 +2696,9 @@ func drawOverlayHistoryLine(stdout io.Writer, row int, line overlayRenderLine, o
 		}
 		nextPrefix := prefix
 		selected := false
-		if ok && !overlay.flashSelection && i >= line.prefixRunes {
+		if line.selected {
+			selected = true
+		} else if ok && !overlay.flashSelection && i >= line.prefixRunes {
 			contentCol := line.contentStart + (i - line.prefixRunes)
 			selected = line.history >= start.line && line.history <= end.line &&
 				(line.history > start.line || contentCol >= start.col) &&
@@ -2452,6 +2850,16 @@ func overlayLinePrefix(theme *uiTheme, command bool) string {
 		return theme.hudPrefix()
 	}
 	return ""
+}
+
+func overlayHistoryPrefix(theme *uiTheme, line overlayRenderLine) string {
+	if line.pickerActive {
+		if theme != nil {
+			return theme.pickerSelectionPrefix()
+		}
+		return "\x1b[1m"
+	}
+	return overlayLinePrefix(theme, line.command)
 }
 
 func drawHUDLine(stdout io.Writer, row int, text, prefix string, theme *uiTheme) error {

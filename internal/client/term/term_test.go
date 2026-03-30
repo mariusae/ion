@@ -1026,6 +1026,36 @@ func TestDrawOverlayHistoryLineBoldsCommittedCommand(t *testing.T) {
 	}
 }
 
+func TestDrawOverlayHistoryLineBoldsSelectedPickerItem(t *testing.T) {
+	prevCols := termCols
+	termCols = 24
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	line := overlayRenderLine{
+		text:         "█ :lsp:goto - jump",
+		history:      0,
+		pickerActive: true,
+		prefixRunes:  2,
+		contentEnd:   len([]rune(":lsp:goto - jump")),
+	}
+
+	var out bytes.Buffer
+	if err := drawOverlayHistoryLine(&out, 0, line, overlay, theme); err != nil {
+		t.Fatalf("drawOverlayHistoryLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.outputPrefix()+" ") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want picker gutter block styling", got)
+	}
+	if !strings.Contains(got, theme.pickerSelectionPrefix()+" :lsp:goto - jump") {
+		t.Fatalf("drawOverlayHistoryLine() = %q, want bold picker entry text on gutter tint", got)
+	}
+}
+
 func TestDrawOverlayPromptUsesOverlayTintWithoutPromptGlyph(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20

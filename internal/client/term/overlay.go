@@ -20,6 +20,7 @@ type overlayEntry struct {
 
 type overlayState struct {
 	visible        bool
+	mode           overlayMode
 	input          []rune
 	cursor         int
 	history        []overlayEntry
@@ -32,6 +33,7 @@ type overlayState struct {
 	selectEnd      overlaySelectionPos
 	recallIdx      int
 	savedInput     []rune
+	picker         *overlayPicker
 }
 
 type overlaySelectionPos struct {
@@ -43,6 +45,8 @@ type overlayRenderLine struct {
 	text         string
 	history      int
 	command      bool
+	selected     bool
+	pickerActive bool
 	offset       int
 	running      bool
 	prefixRunes  int
@@ -60,15 +64,18 @@ func newOverlayState() *overlayState {
 
 func (o *overlayState) open(prefill string) {
 	o.visible = true
+	o.mode = overlayModeCommand
 	o.input = []rune(prefill)
 	o.cursor = len(o.input)
 	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
+	o.picker = nil
 }
 
 func (o *overlayState) reopen() {
 	o.visible = true
+	o.mode = overlayModeCommand
 	o.scroll = 0
 	o.running = false
 	o.selecting = false
@@ -83,10 +90,12 @@ func (o *overlayState) reopen() {
 	if o.cursor > len(o.input) {
 		o.cursor = len(o.input)
 	}
+	o.picker = nil
 }
 
 func (o *overlayState) close() {
 	o.visible = false
+	o.mode = overlayModeCommand
 	o.scroll = 0
 	o.running = false
 	o.selecting = false
@@ -95,6 +104,7 @@ func (o *overlayState) close() {
 	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
+	o.picker = nil
 }
 
 func (o *overlayState) clearHistory() {
@@ -107,6 +117,7 @@ func (o *overlayState) clearHistory() {
 	o.selectEnd = overlaySelectionPos{line: -1}
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
+	o.picker = nil
 }
 
 func (o *overlayState) insert(text []rune) {
@@ -118,6 +129,7 @@ func (o *overlayState) insert(text []rune) {
 	next = append(next, o.input[o.cursor:]...)
 	o.input = next
 	o.cursor += len(text)
+	o.refreshPicker()
 }
 
 func (o *overlayState) replaceRange(start, end int, text []rune) {
@@ -138,6 +150,7 @@ func (o *overlayState) replaceRange(start, end int, text []rune) {
 	next = append(next, o.input[end:]...)
 	o.input = next
 	o.cursor = start + len(text)
+	o.refreshPicker()
 }
 
 func (o *overlayState) backspace() {
@@ -147,6 +160,7 @@ func (o *overlayState) backspace() {
 	copy(o.input[o.cursor-1:], o.input[o.cursor:])
 	o.cursor--
 	o.input = o.input[:len(o.input)-1]
+	o.refreshPicker()
 }
 
 func (o *overlayState) deleteForward() {
@@ -155,6 +169,7 @@ func (o *overlayState) deleteForward() {
 	}
 	copy(o.input[o.cursor:], o.input[o.cursor+1:])
 	o.input = o.input[:len(o.input)-1]
+	o.refreshPicker()
 }
 
 func (o *overlayState) killLine() {
@@ -162,6 +177,7 @@ func (o *overlayState) killLine() {
 		return
 	}
 	o.input = o.input[:o.cursor]
+	o.refreshPicker()
 }
 
 func (o *overlayState) killToStart() {
@@ -171,6 +187,7 @@ func (o *overlayState) killToStart() {
 	next := append([]rune{}, o.input[o.cursor:]...)
 	o.input = next
 	o.cursor = 0
+	o.refreshPicker()
 }
 
 func (o *overlayState) killWord() {
@@ -182,6 +199,7 @@ func (o *overlayState) killWord() {
 	next = append(next, o.input[o.cursor:]...)
 	o.input = next
 	o.cursor = start
+	o.refreshPicker()
 }
 
 func (o *overlayState) moveLeft() {
@@ -321,6 +339,7 @@ func (o *overlayState) recallNext() bool {
 		o.recallIdx = -1
 		o.input = append(o.input[:0], o.savedInput...)
 		o.cursor = len(o.input)
+		o.refreshPicker()
 		return true
 	}
 	return false
@@ -332,6 +351,7 @@ func (o *overlayState) resetInput() {
 	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
+	o.refreshPicker()
 }
 
 func (o *overlayState) promptLine() string {
@@ -389,6 +409,23 @@ func wrapOverlayRunes(content []rune, prefix string) []overlayRenderLine {
 }
 
 func (o *overlayState) renderAllLines() []overlayRenderLine {
+	if o != nil && o.picker != nil {
+		lines := make([]overlayRenderLine, 0, len(o.picker.filtered))
+		for order, idx := range o.picker.filtered {
+			item := o.picker.items[idx]
+			prefix := "  "
+			if order == o.picker.selected {
+				prefix = "█ "
+			}
+			wrapped := wrapOverlayRunes([]rune(item.label), prefix)
+			for i := range wrapped {
+				wrapped[i].history = order
+				wrapped[i].pickerActive = order == o.picker.selected
+			}
+			lines = append(lines, wrapped...)
+		}
+		return lines
+	}
 	if o == nil || len(o.history) == 0 {
 		return nil
 	}
@@ -425,6 +462,40 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 		return nil
 	}
 	all := o.renderAllLines()
+	if o != nil && o.picker != nil {
+		if len(all) <= limit {
+			return append([]overlayRenderLine(nil), all...)
+		}
+		selected := o.picker.selected
+		if selected < 0 {
+			return append([]overlayRenderLine(nil), all[:limit]...)
+		}
+		selStart := 0
+		for i, line := range all {
+			if line.history == selected {
+				selStart = i
+				break
+			}
+		}
+		selEnd := selStart + 1
+		for selEnd < len(all) && all[selEnd].history == selected {
+			selEnd++
+		}
+		start := selStart - limit/2
+		if start < 0 {
+			start = 0
+		}
+		if selEnd > start+limit {
+			start = selEnd - limit
+		}
+		if start+limit > len(all) {
+			start = len(all) - limit
+		}
+		if start < 0 {
+			start = 0
+		}
+		return append([]overlayRenderLine(nil), all[start:start+limit]...)
+	}
 	end := len(all) - o.scroll
 	if end < 0 {
 		end = 0

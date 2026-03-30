@@ -907,6 +907,8 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 			s.changeNotify()
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "terminal-only":
+		return writeError(conn, frame.RequestID, frame.SessionID, fmt.Errorf("command %q requires the terminal HUD", cmd.arg))
 	case "push":
 		managed, err := s.waitForControlledSession(frame.SessionID, clientID, &wire.CommandRequest{})
 		if err != nil {
@@ -994,6 +996,14 @@ func parseSessionCommand(script string) (sessionCommand, bool, error) {
 		return sessionCommand{name: "push", arg: target}, true, nil
 	case trimmed == ":ion:pop":
 		return sessionCommand{name: "pop"}, true, nil
+	case trimmed == ":ion:write",
+		trimmed == ":ion:cut",
+		trimmed == ":ion:snarf",
+		trimmed == ":ion:paste",
+		trimmed == ":ion:look",
+		trimmed == ":ion:regexp",
+		trimmed == ":ion:plumb":
+		return sessionCommand{name: "terminal-only", arg: trimmed}, true, nil
 	case strings.HasPrefix(trimmed, ":ion:menudel "):
 		command := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menudel "))
 		if !validMenuCommand(command) {
@@ -1353,6 +1363,48 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "remove a shared custom context-menu item",
 			help:    "Removes one previously registered server-global menu item identified by its command text.",
 		}, true
+	case ":ion:write":
+		return commandHelpDoc{
+			usage:   ":ion:write",
+			summary: "save the current buffer",
+			help:    "Terminal HUD command that saves the current buffer using the same path as the context-menu write action.",
+		}, true
+	case ":ion:cut":
+		return commandHelpDoc{
+			usage:   ":ion:cut",
+			summary: "cut the current selection",
+			help:    "Terminal HUD command that cuts the current selection into the snarf buffer and clipboard.",
+		}, true
+	case ":ion:snarf":
+		return commandHelpDoc{
+			usage:   ":ion:snarf",
+			summary: "copy the current selection",
+			help:    "Terminal HUD command that copies the current selection into the snarf buffer and clipboard.",
+		}, true
+	case ":ion:paste":
+		return commandHelpDoc{
+			usage:   ":ion:paste",
+			summary: "paste the current snarf buffer",
+			help:    "Terminal HUD command that pastes the current snarf buffer at the current selection or cursor.",
+		}, true
+	case ":ion:look":
+		return commandHelpDoc{
+			usage:   ":ion:look",
+			summary: "find the current selection or token",
+			help:    "Terminal HUD command that searches forward for the current selection, or the token under the cursor if there is no selection.",
+		}, true
+	case ":ion:regexp":
+		return commandHelpDoc{
+			usage:   ":ion:regexp",
+			summary: "repeat the previous regexp search",
+			help:    "Terminal HUD command that re-runs the most recently used sam regexp search pattern.",
+		}, true
+	case ":ion:plumb":
+		return commandHelpDoc{
+			usage:   ":ion:plumb",
+			summary: "open the current token as a target",
+			help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing.",
+		}, true
 	default:
 		return commandHelpDoc{}, false
 	}
@@ -1392,6 +1444,41 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Args:    "<command>",
 					Summary: "remove a shared custom context-menu item",
 					Help:    "Removes one previously registered server-global menu item identified by its command text.",
+				},
+				{
+					Name:    "write",
+					Summary: "save the current buffer",
+					Help:    "Terminal HUD command that saves the current buffer using the same path as the context-menu write action.",
+				},
+				{
+					Name:    "cut",
+					Summary: "cut the current selection",
+					Help:    "Terminal HUD command that cuts the current selection into the snarf buffer and clipboard.",
+				},
+				{
+					Name:    "snarf",
+					Summary: "copy the current selection",
+					Help:    "Terminal HUD command that copies the current selection into the snarf buffer and clipboard.",
+				},
+				{
+					Name:    "paste",
+					Summary: "paste the current snarf buffer",
+					Help:    "Terminal HUD command that pastes the current snarf buffer at the current selection or cursor.",
+				},
+				{
+					Name:    "look",
+					Summary: "find the current selection or token",
+					Help:    "Terminal HUD command that searches forward for the current selection, or the token under the cursor if there is no selection.",
+				},
+				{
+					Name:    "regexp",
+					Summary: "repeat the previous regexp search",
+					Help:    "Terminal HUD command that re-runs the most recently used sam regexp search pattern.",
+				},
+				{
+					Name:    "plumb",
+					Summary: "open the current token as a target",
+					Help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing.",
 				},
 			},
 		},

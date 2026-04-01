@@ -24,6 +24,8 @@ type overlayState struct {
 	input          []rune
 	cursor         int
 	history        []overlayEntry
+	commandIdx     []int
+	commandIdxLen  int
 	scroll         int
 	running        bool
 	flashSelection bool
@@ -109,6 +111,8 @@ func (o *overlayState) close() {
 
 func (o *overlayState) clearHistory() {
 	o.history = nil
+	o.commandIdx = nil
+	o.commandIdxLen = 0
 	o.scroll = 0
 	o.running = false
 	o.selecting = false
@@ -231,12 +235,21 @@ func (o *overlayState) moveWordRight() {
 }
 
 func (o *overlayState) addCommand(text string) {
+	if o.commandIdxLen != len(o.history) {
+		o.rebuildCommandIdx()
+	}
 	o.history = append(o.history, overlayEntry{command: true, text: text})
+	o.commandIdx = append(o.commandIdx, len(o.history)-1)
+	o.commandIdxLen = len(o.history)
 	o.scroll = 0
 }
 
 func (o *overlayState) addOutput(text string) {
+	if o.commandIdxLen != len(o.history) {
+		o.rebuildCommandIdx()
+	}
 	o.history = append(o.history, overlayEntry{text: sanitizeOverlayOutput(text)})
+	o.commandIdxLen = len(o.history)
 	o.scroll = 0
 }
 
@@ -304,49 +317,50 @@ func skipANSIEscape(text string, start int) int {
 }
 
 func (o *overlayState) lastCommand() (string, bool) {
-	idx := o.findCommand(0)
-	if idx < 0 {
+	indices := o.commandIndices()
+	if len(indices) == 0 {
 		return "", false
 	}
-	return o.history[idx].text, true
+	return o.history[indices[len(indices)-1]].text, true
 }
 
 func (o *overlayState) commandHistory() []string {
 	if o == nil {
 		return nil
 	}
-	commands := make([]string, 0, len(o.history))
-	for _, entry := range o.history {
-		if !entry.command {
+	indices := o.commandIndices()
+	commands := make([]string, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(o.history) {
 			continue
 		}
-		commands = append(commands, entry.text)
+		commands = append(commands, o.history[idx].text)
 	}
 	return commands
 }
 
 func (o *overlayState) recallPrev() bool {
+	indices := o.commandIndices()
 	next := o.recallIdx + 1
-	idx := o.findCommand(next)
-	if idx < 0 {
+	if next < 0 || next >= len(indices) {
 		return false
 	}
 	if o.recallIdx == -1 {
 		o.savedInput = append(o.savedInput[:0], o.input...)
 	}
 	o.recallIdx = next
-	o.loadCommand(idx)
+	o.loadCommand(indices[len(indices)-1-next])
 	return true
 }
 
 func (o *overlayState) recallNext() bool {
+	indices := o.commandIndices()
 	if o.recallIdx > 0 {
 		o.recallIdx--
-		idx := o.findCommand(o.recallIdx)
-		if idx < 0 {
+		if o.recallIdx < 0 || o.recallIdx >= len(indices) {
 			return false
 		}
-		o.loadCommand(idx)
+		o.loadCommand(indices[len(indices)-1-o.recallIdx])
 		return true
 	}
 	if o.recallIdx == 0 {
@@ -446,7 +460,10 @@ func (o *overlayState) renderAllLines() []overlayRenderLine {
 	lines := make([]overlayRenderLine, 0, len(o.history))
 	runningIdx := -1
 	if o.running {
-		runningIdx = o.findCommand(0)
+		indices := o.commandIndices()
+		if len(indices) > 0 {
+			runningIdx = indices[len(indices)-1]
+		}
 	}
 	for idx, entry := range o.history {
 		prefix := ""
@@ -779,18 +796,33 @@ func (o *overlayState) setRunning(running bool) {
 	o.running = running
 }
 
-func (o *overlayState) findCommand(n int) int {
-	count := 0
-	for i := len(o.history) - 1; i >= 0; i-- {
-		if !o.history[i].command {
-			continue
-		}
-		if count == n {
-			return i
-		}
-		count++
+func (o *overlayState) commandIndices() []int {
+	if o == nil {
+		return nil
 	}
-	return -1
+	if o.commandIdxLen != len(o.history) {
+		o.rebuildCommandIdx()
+	}
+	for _, idx := range o.commandIdx {
+		if idx < 0 || idx >= len(o.history) {
+			o.rebuildCommandIdx()
+			break
+		}
+	}
+	return o.commandIdx
+}
+
+func (o *overlayState) rebuildCommandIdx() {
+	if o == nil {
+		return
+	}
+	o.commandIdx = o.commandIdx[:0]
+	for i, entry := range o.history {
+		if entry.command {
+			o.commandIdx = append(o.commandIdx, i)
+		}
+	}
+	o.commandIdxLen = len(o.history)
 }
 
 func (o *overlayState) loadCommand(idx int) {

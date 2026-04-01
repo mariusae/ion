@@ -73,7 +73,7 @@ func bufferViewRows(overlay *overlayState) int {
 }
 
 func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, error) {
-	if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+	if ok, err := ensureBufferedByte(reader, stdin, escSequenceWait); err != nil {
 		return 0, nil, err
 	} else if !ok {
 		return keyEsc, nil, nil
@@ -84,7 +84,7 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 	}
 	switch b {
 	case '[':
-		if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+		if ok, err := ensureBufferedByte(reader, stdin, escContinuationWait); err != nil {
 			return 0, nil, err
 		} else if !ok {
 			return keyEsc, nil, nil
@@ -137,7 +137,7 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 			return keyEsc, nil, nil
 		}
 	case 'O':
-		if ok, err := ensureBufferedByte(reader, stdin); err != nil {
+		if ok, err := ensureBufferedByte(reader, stdin, escContinuationWait); err != nil {
 			return 0, nil, err
 		} else if !ok {
 			return keyEsc, nil, nil
@@ -223,20 +223,21 @@ func readBufferKey(reader *bufio.Reader) (int, error) {
 	return key, err
 }
 
-func ensureBufferedByte(reader *bufio.Reader, stdin *os.File) (bool, error) {
+func ensureBufferedByte(reader *bufio.Reader, stdin *os.File, timeoutUsec int64) (bool, error) {
 	if reader.Buffered() > 0 {
 		return true, nil
 	}
 	if stdin == nil {
 		return false, nil
 	}
-	return waitForInputByte(stdin, escSequenceWait)
+	return waitForInputByte(stdin, timeoutUsec)
 }
 
-// Neovim waits a bit longer before deciding that a bare ESC is really ESC.
-// A shorter timeout lets fragmented mouse sequences leak into the buffer as
-// literal "[<...M" text when the terminal delivers the prefix late.
-const escSequenceWait = 50_000 // 50ms in microseconds
+// Keep the initial ESC wait long enough to catch delayed terminal prefixes,
+// but use a shorter continuation wait so fragmented arrow-key sequences do
+// not pay the full timeout twice.
+const escSequenceWait = 45_000     // 45ms in microseconds
+const escContinuationWait = 35_000 // 35ms in microseconds
 const (
 	passiveMotionCoalesceWait = 20_000
 )

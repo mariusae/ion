@@ -1007,6 +1007,41 @@ func TestNormalizeStatusResultRoutesWarningsToHUD(t *testing.T) {
 	}
 }
 
+func TestAppendOverlayOutputLinesRevealsHiddenOverlayOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	if opened := appendOverlayOutputLines(overlay, nil, true); opened {
+		t.Fatal("appendOverlayOutputLines(nil) opened overlay, want false")
+	}
+	if overlay.visible {
+		t.Fatal("overlay.visible = true, want false with no output")
+	}
+
+	opened := appendOverlayOutputLines(overlay, []string{"goto foo.go:10:1"}, true)
+	if !opened {
+		t.Fatal("appendOverlayOutputLines(output, reveal) = false, want true")
+	}
+	if !overlay.visible {
+		t.Fatal("overlay.visible = false, want true after revealed output")
+	}
+	if got, want := len(overlay.history), 1; got != want {
+		t.Fatalf("len(history) = %d, want %d", got, want)
+	}
+
+	hidden := newOverlayState()
+	opened = appendOverlayOutputLines(hidden, []string{"goto foo.go:10:1"}, false)
+	if opened {
+		t.Fatal("appendOverlayOutputLines(output, no reveal) = true, want false")
+	}
+	if hidden.visible {
+		t.Fatal("hidden.visible = true, want false without reveal")
+	}
+	if got, want := len(hidden.history), 1; got != want {
+		t.Fatalf("len(hidden.history) = %d, want %d", got, want)
+	}
+}
+
 func TestDrawOverlayHistoryLineTintsOutputGutter(t *testing.T) {
 	prevCols := termCols
 	termCols = 20

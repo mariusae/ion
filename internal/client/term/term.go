@@ -555,6 +555,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return redraw(renderRequestForLayers(class, renderInvalidateOverlayInput))
 	}
 
+	overlayRecallRedraw := func(previousHeight, previousPromptRows int) error {
+		req := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
+		if overlayHeight(overlay) != previousHeight || overlayPromptRows(overlay) != previousPromptRows {
+			req = renderRequestForLayers(redrawOverlayInput, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+		}
+		return redraw(req)
+	}
+
 	overlaySurfaceRedraw := func(class redrawClass) error {
 		return redraw(renderRequestForLayers(class, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
 	}
@@ -783,7 +791,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return strings.TrimSpace(normalizeIonAlias(line))
 	}
 
-	var runOverlayCommand func(line string, recordHistory bool) (bool, error)
+	var runOverlayCommand func(line string, recordHistory bool, revealOnOutput bool) (bool, error)
 
 	setPreviousUIFile := func(fileID int) {
 		menuSticky = menuStickyState{itemIndex: -1}
@@ -838,7 +846,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			clearMenuLostRelease()
 			menuSawHover = false
 		}
-		done, err := runOverlayCommand(lastCommand, true)
+		done, err := runOverlayCommand(lastCommand, true, false)
 		if err != nil {
 			buffer.status = diagnosticText(err)
 			return false, bufferRedraw(redrawBufferStatus)
@@ -974,7 +982,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
-	runRemoteOverlayCommand := func(line string, recordHistory bool) (bool, error) {
+	runRemoteOverlayCommand := func(line string, recordHistory bool, revealOnOutput bool) (bool, error) {
 		type overlayResult struct {
 			done bool
 			err  error
@@ -986,7 +994,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if !strings.HasSuffix(line, "\n") {
 			line += "\n"
 		}
-		if !overlay.visible {
+		if !revealOnOutput && !overlay.visible {
 			overlay.open("")
 		}
 		if recordHistory {
@@ -996,14 +1004,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		overlay.resetInput()
 		queue := newOverlayOutputQueue()
 		resultCh := make(chan overlayResult, 1)
-		drainOverlayLines := func() {
-			for _, line := range queue.popAll() {
-				overlay.addOutput(line)
-			}
+		drainOverlayLines := func() (bool, int) {
+			lines := queue.popAll()
+			opened := appendOverlayOutputLines(overlay, lines, revealOnOutput)
+			return opened, len(lines)
 		}
 		overlay.setRunning(true)
-		if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
-			return false, err
+		if overlay.visible {
+			if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
+				return false, err
+			}
 		}
 
 		checkOverlayInterrupt := func() error {
@@ -1014,7 +1024,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if !canceled {
 				return nil
 			}
-			overlay.addOutput("^C")
+			opened := appendOverlayOutputLines(overlay, []string{"^C"}, revealOnOutput)
+			if opened {
+				return overlaySurfaceRedraw(redrawOverlayOpen)
+			}
 			return overlayHistoryRedraw(redrawOverlayHistory)
 		}
 
@@ -1040,7 +1053,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		for {
 			select {
 			case <-queue.notify:
-				drainOverlayLines()
+				opened, added := drainOverlayLines()
+				if added == 0 {
+					continue
+				}
+				if opened {
+					if err := overlaySurfaceRedraw(redrawOverlayOpen); err != nil {
+						overlay.setRunning(false)
+						return false, err
+					}
+					continue
+				}
 				if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 					overlay.setRunning(false)
 					return false, err
@@ -1055,7 +1078,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, err
 				}
 			case result := <-resultCh:
-				drainOverlayLines()
+				opened, _ := drainOverlayLines()
 				overlay.setRunning(false)
 				if result.err != nil {
 					return false, result.err
@@ -1065,6 +1088,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return false, err
 					}
 				}
+				if !overlay.visible {
+					return result.done, nil
+				}
+				if opened {
+					if err := overlaySurfaceRedraw(redrawOverlayOpen); err != nil {
+						return false, err
+					}
+					return result.done, nil
+				}
 				if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
 					return false, err
 				}
@@ -1073,7 +1105,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
-	runOverlayCommand = func(line string, recordHistory bool) (bool, error) {
+	runOverlayCommand = func(line string, recordHistory bool, revealOnOutput bool) (bool, error) {
 		if strings.TrimSpace(line) == "" {
 			return false, nil
 		}
@@ -1085,7 +1117,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			overlay.resetInput()
 			return done, err
 		}
-		return runRemoteOverlayCommand(line, recordHistory)
+		return runRemoteOverlayCommand(line, recordHistory, revealOnOutput)
 	}
 
 	openCommandPicker := func() error {
@@ -1138,7 +1170,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			line = last
 		}
-		return runOverlayCommand(line, len(overlay.input) != 0)
+		return runOverlayCommand(line, len(overlay.input) != 0, false)
 	}
 
 	showMenu := func(clickX, clickY int) error {
@@ -1164,7 +1196,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		clearMenuLostRelease()
 		menuSawHover = false
 		if line := normalizeUICommand(uiCommandForMenuItem(item)); line != "" {
-			done, err := runOverlayCommand(line, true)
+			done, err := runOverlayCommand(line, true, true)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
@@ -1788,7 +1820,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								continue
 							}
 							overlay.close()
-							done, err := runOverlayCommand(item.value, true)
+							done, err := runOverlayCommand(item.value, true, false)
 							if err != nil {
 								return err
 							}
@@ -1920,9 +1952,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					case keyEnd:
 						overlay.moveEnd()
 					case keyUp:
-						overlay.recallPrev()
+						previousHeight := overlayHeight(overlay)
+						previousPromptRows := overlayPromptRows(overlay)
+						if !overlay.recallPrev() {
+							continue
+						}
+						if err := overlayRecallRedraw(previousHeight, previousPromptRows); err != nil {
+							return err
+						}
+						continue
 					case keyDown:
-						overlay.recallNext()
+						previousHeight := overlayHeight(overlay)
+						previousPromptRows := overlayPromptRows(overlay)
+						if !overlay.recallNext() {
+							continue
+						}
+						if err := overlayRecallRedraw(previousHeight, previousPromptRows); err != nil {
+							return err
+						}
+						continue
 					case keyPgUp:
 						overlay.scrollOlder(5)
 					case keyAltPageUp:
@@ -1970,7 +2018,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					overlayReq := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
 					switch key {
-					case keyUp, keyDown, keyPgUp, keyAltPageUp, keyPgDn:
+					case keyPgUp, keyAltPageUp, keyPgDn:
 						overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
 					}
 					if !overlay.visible {
@@ -2020,11 +2068,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				case 0x05:
 					overlay.moveEnd()
 				case 0x10:
-					overlay.recallPrev()
-					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
+					previousHeight := overlayHeight(overlay)
+					previousPromptRows := overlayPromptRows(overlay)
+					if !overlay.recallPrev() {
+						continue
+					}
+					if err := overlayRecallRedraw(previousHeight, previousPromptRows); err != nil {
+						return err
+					}
+					continue
 				case 0x0e:
-					overlay.recallNext()
-					overlayReq = renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
+					previousHeight := overlayHeight(overlay)
+					previousPromptRows := overlayPromptRows(overlay)
+					if !overlay.recallNext() {
+						continue
+					}
+					if err := overlayRecallRedraw(previousHeight, previousPromptRows); err != nil {
+						return err
+					}
+					continue
 				case 0x15:
 					overlay.killToStart()
 				case 0x17:
@@ -2219,6 +2281,21 @@ func normalizeStatusResult(status string, captured []string) (string, []string) 
 		appendHUD(line)
 	}
 	return inline, hud
+}
+
+func appendOverlayOutputLines(overlay *overlayState, lines []string, revealOnOutput bool) bool {
+	if overlay == nil || len(lines) == 0 {
+		return false
+	}
+	opened := false
+	if revealOnOutput && !overlay.visible {
+		overlay.open("")
+		opened = true
+	}
+	for _, line := range lines {
+		overlay.addOutput(line)
+	}
+	return opened
 }
 
 func isTTY(f *os.File) bool {

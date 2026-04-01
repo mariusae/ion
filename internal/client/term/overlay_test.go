@@ -40,6 +40,36 @@ func TestOverlayRecallRestoresSavedInput(t *testing.T) {
 	}
 }
 
+func TestOverlayRecallSkipsOutputEntries(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.open("draft")
+	overlay.addCommand(",p")
+	overlay.addOutput("alpha")
+	overlay.addCommand("w")
+	overlay.addOutput("beta")
+
+	if got, want := overlay.commandHistory(), []string{",p", "w"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("commandHistory() = %#v, want %#v", got, want)
+	}
+	if got, ok := overlay.lastCommand(); !ok || got != "w" {
+		t.Fatalf("lastCommand() = (%q, %t), want (%q, true)", got, ok, "w")
+	}
+	if ok := overlay.recallPrev(); !ok {
+		t.Fatalf("recallPrev() = false, want true")
+	}
+	if got, want := string(overlay.input), "w"; got != want {
+		t.Fatalf("first recall = %q, want %q", got, want)
+	}
+	if ok := overlay.recallPrev(); !ok {
+		t.Fatalf("second recallPrev() = false, want true")
+	}
+	if got, want := string(overlay.input), ",p"; got != want {
+		t.Fatalf("second recall = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayReopenPreservesDraftAndCursor(t *testing.T) {
 	t.Parallel()
 

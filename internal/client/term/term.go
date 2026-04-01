@@ -1274,11 +1274,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		btn := event.baseButton()
-		if !event.pressed && (btn == 2 || btn == 3) {
+		item := menu.itemAt(event.x, event.y)
+		if !event.pressed && (btn == 0 || btn == 2 || btn == 3) {
 			clearMenuLostRelease()
 			menuSawHover = false
-			if menu.hover >= 0 && menu.hover < len(menu.items) {
-				done, err := executeMenuItem(menu.hover, menu.items[menu.hover])
+			itemIndex := item
+			if itemIndex < 0 && (btn == 2 || btn == 3) {
+				itemIndex = menu.hover
+			}
+			if itemIndex >= 0 && itemIndex < len(menu.items) {
+				done, err := executeMenuItem(itemIndex, menu.items[itemIndex])
 				if err != nil {
 					return false, err
 				}
@@ -1294,7 +1299,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, menuRedraw(redrawMenuClose)
 		}
 		if event.isMotion() {
-			item := menu.itemAt(event.x, event.y)
 			if item >= 0 {
 				menuSawHover = true
 				clearMenuLostRelease()
@@ -1313,7 +1317,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, nil
 		}
-		if _, wheel := event.verticalWheelDirection(); event.pressed || wheel {
+		if _, wheel := event.verticalWheelDirection(); wheel {
+			menu.dismiss()
+			clearMenuLostRelease()
+			menuSawHover = false
+			return false, menuRedraw(redrawMenuClose)
+		}
+		if event.pressed {
+			if item >= 0 {
+				menuSawHover = true
+				clearMenuLostRelease()
+				if menu.hover != item {
+					menu.hover = item
+					return false, menuRedraw(redrawMenuHover)
+				}
+				return false, nil
+			}
 			menu.dismiss()
 			clearMenuLostRelease()
 			menuSawHover = false

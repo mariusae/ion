@@ -242,12 +242,12 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		overlay.addOutput("line")
 	}
-	if got, want := overlayHeight(overlay), termRows/2; got != want {
+	if got, want := overlayHeight(overlay), 6; got != want {
 		t.Fatalf("overlayHeight(full) = %d, want %d", got, want)
 	}
 
 	overlay.setRunning(true)
-	if got, want := overlayHeight(overlay), termRows/2; got != want {
+	if got, want := overlayHeight(overlay), 6; got != want {
 		t.Fatalf("overlayHeight(running) = %d, want %d", got, want)
 	}
 }
@@ -326,7 +326,7 @@ func TestOverlayRenderLinesWrapLongHistoryEntries(t *testing.T) {
 
 func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 	prev := termRows
-	termRows = 10
+	termRows = 15
 	t.Cleanup(func() {
 		termRows = prev
 	})
@@ -354,7 +354,7 @@ func TestOverlayScreenToPosMapsRenderedRows(t *testing.T) {
 
 func TestOverlayScreenToPosMapsWrappedRows(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
-	termRows, termCols = 12, 6
+	termRows, termCols = 18, 6
 	t.Cleanup(func() {
 		termRows, termCols = prevRows, prevCols
 	})

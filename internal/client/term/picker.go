@@ -17,6 +17,7 @@ const (
 )
 
 type overlayPickerItem struct {
+	key     string
 	label   string
 	value   string
 	search  string
@@ -124,10 +125,33 @@ func augmentNamespaceDocs(docs []wire.NamespaceProviderDoc) []wire.NamespaceProv
 	return out
 }
 
-func buildCommandPickerItems(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand, lastCommand string) ([]overlayPickerItem, string) {
+func buildCommandPickerItems(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand, history []string) ([]overlayPickerItem, string) {
+	summaries := commandSummaryIndex(docs, menu)
+	dedupedHistory := dedupeCommandPickerHistory(history)
+	items := make([]overlayPickerItem, 0, len(dedupedHistory)+len(summaries)+1)
+	preferred := ""
+	seenCatalog := make(map[string]struct{}, len(dedupedHistory))
+	historyCount := 0
+	for _, value := range dedupedHistory {
+		label := value
+		if summary := strings.TrimSpace(summaries[value]); summary != "" {
+			label += " - " + summary
+		}
+		key := fmt.Sprintf("history:%06d", historyCount)
+		items = append(items, overlayPickerItem{
+			key:    key,
+			label:  label,
+			value:  value,
+			search: strings.ToLower(label),
+		})
+		preferred = key
+		seenCatalog[value] = struct{}{}
+		historyCount++
+	}
 	docs = augmentNamespaceDocs(docs)
 	seen := make(map[string]overlayPickerItem)
 	seen[":help"] = overlayPickerItem{
+		key:    "catalog::help",
 		label:  ":help - show detailed help for a command",
 		value:  ":help",
 		search: ":help show detailed help for a command",
@@ -148,7 +172,11 @@ func buildCommandPickerItems(docs []wire.NamespaceProviderDoc, menu []wire.MenuC
 			if summary != "" {
 				label += " - " + summary
 			}
+			if _, ok := seenCatalog[value]; ok {
+				continue
+			}
 			seen[value] = overlayPickerItem{
+				key:    "catalog:" + value,
 				label:  label,
 				value:  value,
 				search: strings.ToLower(value + " " + summary),
@@ -160,6 +188,9 @@ func buildCommandPickerItems(docs []wire.NamespaceProviderDoc, menu []wire.MenuC
 		if command == "" {
 			continue
 		}
+		if _, ok := seenCatalog[command]; ok {
+			continue
+		}
 		if _, ok := seen[command]; ok {
 			continue
 		}
@@ -169,34 +200,50 @@ func buildCommandPickerItems(docs []wire.NamespaceProviderDoc, menu []wire.MenuC
 			label += " - " + menuLabel
 		}
 		seen[command] = overlayPickerItem{
+			key:    "catalog:" + command,
 			label:  label,
 			value:  command,
 			search: strings.ToLower(command + " " + menuLabel),
 		}
 	}
-	items := make([]overlayPickerItem, 0, len(seen)+1)
 	for _, item := range seen {
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].value < items[j].value
-	})
-
-	preferred := strings.TrimSpace(lastCommand)
-	if preferred == "" {
-		return items, ""
+	if historyCount < len(items) {
+		sort.Slice(items[historyCount:], func(i, j int) bool {
+			left := items[historyCount+i]
+			right := items[historyCount+j]
+			return left.value < right.value
+		})
 	}
-	for _, item := range items {
-		if item.value == preferred {
-			return items, preferred
-		}
-	}
-	items = append([]overlayPickerItem{{
-		label:  preferred + " - last command",
-		value:  preferred,
-		search: strings.ToLower(preferred + " last command"),
-	}}, items...)
 	return items, preferred
+}
+
+func dedupeCommandPickerHistory(history []string) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	trimmed := make([]string, len(history))
+	lastIndex := make(map[string]int, len(history))
+	for i, command := range history {
+		value := strings.TrimSpace(command)
+		trimmed[i] = value
+		if value == "" {
+			continue
+		}
+		lastIndex[value] = i
+	}
+	out := make([]string, 0, len(lastIndex))
+	for i, value := range trimmed {
+		if value == "" {
+			continue
+		}
+		if lastIndex[value] != i {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlayPickerItem, string) {
@@ -208,6 +255,7 @@ func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlay
 			name = "(unnamed)"
 		}
 		items = append(items, overlayPickerItem{
+			key:     fmt.Sprintf("file:%d", file.ID),
 			label:   fmt.Sprintf("%c%c %s", dirtyMark(file.Dirty, file.Changed), currentMark(file.Current), name),
 			value:   name,
 			search:  strings.ToLower(name + " " + strings.TrimSpace(file.Path)),
@@ -215,12 +263,43 @@ func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlay
 			current: file.Current,
 		})
 		if preferredFileID != 0 && file.ID == preferredFileID {
-			preferred = name
+			preferred = fmt.Sprintf("file:%d", file.ID)
 		} else if preferred == "" && file.Current {
-			preferred = name
+			preferred = fmt.Sprintf("file:%d", file.ID)
 		}
 	}
 	return items, preferred
+}
+
+func commandSummaryIndex(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand) map[string]string {
+	docs = augmentNamespaceDocs(docs)
+	summaries := map[string]string{
+		":help": "show detailed help for a command",
+	}
+	for _, provider := range docs {
+		namespace := strings.TrimSpace(provider.Namespace)
+		if namespace == "" {
+			continue
+		}
+		for _, command := range provider.Commands {
+			name := strings.TrimSpace(command.Name)
+			if name == "" {
+				continue
+			}
+			summaries[":"+namespace+":"+name] = strings.TrimSpace(command.Summary)
+		}
+	}
+	for _, item := range menu {
+		command := strings.TrimSpace(item.Command)
+		if command == "" {
+			continue
+		}
+		if _, ok := summaries[command]; ok {
+			continue
+		}
+		summaries[command] = strings.TrimSpace(item.Label)
+	}
+	return summaries
 }
 
 func (o *overlayState) pickerActive() bool {
@@ -294,9 +373,9 @@ func (o *overlayState) refreshPicker() {
 	if o == nil || o.picker == nil {
 		return
 	}
-	previousValue := ""
+	previousKey := ""
 	if selected, ok := o.pickerSelected(); ok {
-		previousValue = selected.value
+		previousKey = selected.key
 	}
 	query := strings.ToLower(strings.TrimSpace(string(o.input)))
 	filtered := make([]int, 0, len(o.picker.items))
@@ -310,13 +389,13 @@ func (o *overlayState) refreshPicker() {
 	if len(filtered) == 0 {
 		return
 	}
-	preferred := previousValue
+	preferred := previousKey
 	if query == "" && strings.TrimSpace(o.picker.preferred) != "" {
 		preferred = o.picker.preferred
 	}
 	if preferred != "" {
 		for i, idx := range filtered {
-			if o.picker.items[idx].value == preferred {
+			if o.picker.items[idx].key == preferred {
 				o.picker.selected = i
 				return
 			}

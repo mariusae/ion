@@ -64,7 +64,7 @@ func (m *menuState) dismiss() {
 	m.hover = -1
 }
 
-func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wire.MenuCommand, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
+func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wire.MenuCommand, latestCommand string, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
 	menu := newMenuState()
 	if buffer == nil {
 		return menu
@@ -102,6 +102,13 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		if i == len(commands)-1 {
 			item.sepAfter = true
 		}
+		menu.items = append(menu.items, item)
+	}
+	if item, ok := latestMenuCommandItem(commands, latestCommand, strings.TrimSpace(buffer.name) != "", popNavigationAvailable(nav, len(files) == 0)); ok {
+		if len(menu.items) > 0 {
+			menu.items[len(menu.items)-1].sepAfter = false
+		}
+		item.sepAfter = true
 		menu.items = append(menu.items, item)
 	}
 	if pop, ok := popNavigationMenuItem(nav, len(files) == 0); ok {
@@ -191,6 +198,39 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 	}
 	menu.visible = true
 	return menu
+}
+
+func latestMenuCommandItem(commands []wire.MenuCommand, latestCommand string, hasWrite bool, hasPop bool) (menuItem, bool) {
+	latestCommand = strings.TrimSpace(latestCommand)
+	if latestCommand == "" {
+		return menuItem{}, false
+	}
+	if builtInMenuCommandPresent(latestCommand, hasWrite, hasPop) {
+		return menuItem{}, false
+	}
+	for _, cmd := range commands {
+		if strings.TrimSpace(cmd.Command) == latestCommand {
+			return menuItem{}, false
+		}
+	}
+	return menuItem{
+		label:   " " + latestCommand,
+		kind:    menuCommand,
+		command: latestCommand,
+	}, true
+}
+
+func builtInMenuCommandPresent(command string, hasWrite bool, hasPop bool) bool {
+	switch command {
+	case ":ion:cut", ":ion:snarf", ":ion:paste", ":ion:look", ":ion:regexp", ":ion:plumb":
+		return true
+	case ":ion:write":
+		return hasWrite
+	case ":ion:pop":
+		return hasPop
+	default:
+		return false
+	}
 }
 
 func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
@@ -397,12 +437,17 @@ func currentMark(current bool) rune {
 	return ' '
 }
 
+func popNavigationAvailable(nav wire.NavigationStack, lastSection bool) bool {
+	_, ok := popNavigationMenuItem(nav, lastSection)
+	return ok
+}
+
 func popNavigationMenuItem(nav wire.NavigationStack, lastSection bool) (menuItem, bool) {
 	if nav.Current <= 0 || nav.Current > len(nav.Entries)-1 {
 		return menuItem{}, false
 	}
 	return menuItem{
-		label:    " pop " + nav.Entries[nav.Current-1].Label,
+		label:    " " + nav.Entries[nav.Current-1].Label,
 		shortcut: "(P)",
 		kind:     menuHistoryPop,
 		sepAfter: !lastSection,

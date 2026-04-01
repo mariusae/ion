@@ -20,7 +20,7 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	menu := buildContextMenu(state, []wire.MenuFile{
 		{ID: 0, Name: "in.txt", Dirty: true, Current: true},
 		{ID: 1, Name: "", Dirty: false, Current: false},
-	}, nil, wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+	}, nil, "", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
 
 	if !menu.visible {
 		t.Fatalf("menu.visible = false, want true")
@@ -50,7 +50,7 @@ func TestBuildContextMenuIncludesCustomCommands(t *testing.T) {
 	menu := buildContextMenu(state, nil, []wire.MenuCommand{
 		{Command: ":lsp:goto", Label: "symbol"},
 		{Command: ":lsp:show", Label: ""},
-	}, wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+	}, "", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
 
 	var labels []string
 	for _, item := range menu.items {
@@ -67,6 +67,83 @@ func TestBuildContextMenuIncludesCustomCommands(t *testing.T) {
 	}
 	if got, want := labels[1], " :lsp:show"; got != want {
 		t.Fatalf("second custom label = %q, want %q", got, want)
+	}
+}
+
+func TestBuildContextMenuIncludesLatestCommandWhenMissingFromMenu(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "in.txt",
+	})
+
+	menu := buildContextMenu(state, nil, []wire.MenuCommand{
+		{Command: ":lsp:goto", Label: "symbol"},
+	}, "!ls -la", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	var labels []string
+	found := false
+	for _, item := range menu.items {
+		if item.kind != menuCommand {
+			continue
+		}
+		labels = append(labels, item.label)
+		if item.command == "!ls -la" {
+			found = true
+			if !item.sepAfter {
+				t.Fatalf("latest command sepAfter = false, want true")
+			}
+		}
+	}
+	if got, want := len(labels), 2; got != want {
+		t.Fatalf("custom menu item count = %d, want %d", got, want)
+	}
+	if got, want := labels[1], " !ls -la"; got != want {
+		t.Fatalf("latest command label = %q, want %q", got, want)
+	}
+	if !found {
+		t.Fatal("latest command item missing from menu")
+	}
+}
+
+func TestBuildContextMenuDoesNotDuplicateLatestCatalogCommand(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "in.txt",
+	})
+
+	menu := buildContextMenu(state, nil, []wire.MenuCommand{
+		{Command: ":lsp:goto", Label: "symbol"},
+	}, ":lsp:goto", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	commandCount := 0
+	for _, item := range menu.items {
+		if item.kind == menuCommand {
+			commandCount++
+		}
+	}
+	if got, want := commandCount, 1; got != want {
+		t.Fatalf("command count = %d, want %d", got, want)
+	}
+}
+
+func TestBuildContextMenuDoesNotDuplicateLatestBuiltInCommand(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "in.txt",
+	})
+
+	menu := buildContextMenu(state, nil, nil, ":ion:write", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	for _, item := range menu.items {
+		if item.kind == menuCommand && item.command == ":ion:write" {
+			t.Fatal("unexpected transient latest-command entry for built-in write command")
+		}
 	}
 }
 
@@ -176,7 +253,7 @@ func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 		previousFileID:     1,
 	}
 
-	menu := buildContextMenu(state, files, nil, wire.NavigationStack{}, 10, 10, sticky)
+	menu := buildContextMenu(state, files, nil, "", wire.NavigationStack{}, 10, 10, sticky)
 	if got, want := menu.hover, menuItemIndexByFileID(menu.items, 1); got != want {
 		t.Fatalf("menu.hover = %d, want previous file index %d", got, want)
 	}
@@ -199,12 +276,12 @@ func TestBuildContextMenuIncludesPopNavigationItem(t *testing.T) {
 		Current: 1,
 	}
 
-	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, nav, 10, 10, menuStickyState{itemIndex: -1})
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, "", nav, 10, 10, menuStickyState{itemIndex: -1})
 	foundPop := false
 	for _, item := range menu.items {
 		if item.kind == menuHistoryPop {
 			foundPop = true
-			if got, want := item.label, " pop a.txt:#0"; got != want {
+			if got, want := item.label, " a.txt:#0"; got != want {
 				t.Fatalf("pop item label = %q, want %q", got, want)
 			}
 		}
@@ -259,7 +336,7 @@ func TestBuildContextMenuStickyHistoryHoverPrefersPop(t *testing.T) {
 		historyKind:   menuHistoryPop,
 	}
 
-	menu := buildContextMenu(state, nil, nil, nav, 10, 10, sticky)
+	menu := buildContextMenu(state, nil, nil, "", nav, 10, 10, sticky)
 	if got, want := menu.hover, menuItemIndexByKind(menu.items, menuHistoryPop); got != want {
 		t.Fatalf("menu.hover = %d, want pop history index %d", got, want)
 	}
@@ -308,7 +385,7 @@ func TestStickyHistoryMissingPopSelectsNothing(t *testing.T) {
 		historyKind:   menuHistoryPop,
 	}
 
-	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, nav, 10, 10, sticky)
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, "", nav, 10, 10, sticky)
 	if got := menu.hover; got != -1 {
 		t.Fatalf("menu.hover = %d, want -1 when pop item is absent", got)
 	}
@@ -329,7 +406,7 @@ func TestStickyHistoryEmptyStackSelectsNothing(t *testing.T) {
 		historyKind:   menuHistoryPop,
 	}
 
-	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, wire.NavigationStack{}, 10, 10, sticky)
+	menu := buildContextMenu(state, []wire.MenuFile{{ID: 2, Name: "b.txt", Current: true}}, nil, "", wire.NavigationStack{}, 10, 10, sticky)
 	if got := menu.hover; got != -1 {
 		t.Fatalf("menu.hover = %d, want -1 (no selection)", got)
 	}

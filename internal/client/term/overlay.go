@@ -311,6 +311,20 @@ func (o *overlayState) lastCommand() (string, bool) {
 	return o.history[idx].text, true
 }
 
+func (o *overlayState) commandHistory() []string {
+	if o == nil {
+		return nil
+	}
+	commands := make([]string, 0, len(o.history))
+	for _, entry := range o.history {
+		if !entry.command {
+			continue
+		}
+		commands = append(commands, entry.text)
+	}
+	return commands
+}
+
 func (o *overlayState) recallPrev() bool {
 	next := o.recallIdx + 1
 	idx := o.findCommand(next)
@@ -588,7 +602,7 @@ func overlayHeight(o *overlayState) int {
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
-	maxHeight := termRows / 2
+	maxHeight := termRows / 3
 	minVisible := topPad + prompt + bottomPad
 	if historyLines > 0 {
 		minVisible++

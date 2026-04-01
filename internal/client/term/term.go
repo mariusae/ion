@@ -105,6 +105,16 @@ type overlayOutputQueue struct {
 	notify chan struct{}
 }
 
+type fileFocusService interface {
+	FocusFile(id int) (wire.BufferView, error)
+}
+
+type filePickerPreviewState struct {
+	active        bool
+	startFileID   int
+	previewFileID int
+}
+
 func newOverlayOutputQueue() *overlayOutputQueue {
 	return &overlayOutputQueue{
 		notify: make(chan struct{}, 1),
@@ -130,6 +140,65 @@ func (q *overlayOutputQueue) popAll() []string {
 	lines := append([]string(nil), q.lines...)
 	q.lines = q.lines[:0]
 	return lines
+}
+
+func (s *filePickerPreviewState) begin(startFileID int) {
+	*s = filePickerPreviewState{
+		active:        true,
+		startFileID:   startFileID,
+		previewFileID: startFileID,
+	}
+}
+
+func (s *filePickerPreviewState) clear() {
+	*s = filePickerPreviewState{}
+}
+
+func (s *filePickerPreviewState) syncSelection(svc fileFocusService, item overlayPickerItem, apply func(wire.BufferView)) (bool, error) {
+	if !s.active || item.fileID == 0 || item.fileID == s.previewFileID {
+		return false, nil
+	}
+	view, err := svc.FocusFile(item.fileID)
+	if err != nil {
+		return false, err
+	}
+	apply(view)
+	s.previewFileID = item.fileID
+	return true, nil
+}
+
+func (s *filePickerPreviewState) finish(svc fileFocusService, commit bool, item overlayPickerItem, apply func(wire.BufferView), setPrevious func(int)) (bool, error) {
+	if !s.active {
+		return false, nil
+	}
+	startFileID := s.startFileID
+	previewFileID := s.previewFileID
+	s.clear()
+	if commit {
+		selectedFileID := item.fileID
+		changed := false
+		if selectedFileID != 0 && selectedFileID != previewFileID {
+			view, err := svc.FocusFile(selectedFileID)
+			if err != nil {
+				return false, err
+			}
+			apply(view)
+			changed = true
+		}
+		if startFileID != 0 && selectedFileID != 0 && selectedFileID != startFileID {
+			setPrevious(startFileID)
+		}
+		return changed, nil
+	}
+	if startFileID == 0 || previewFileID == startFileID {
+		return false, nil
+	}
+	view, err := svc.FocusFile(startFileID)
+	if err != nil {
+		return false, err
+	}
+	apply(view)
+	return true, nil
 }
 
 // Run executes the initial terminal-client slice.
@@ -215,10 +284,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	overlay := newOverlayState()
 	menu := newMenuState()
 	menuSticky := menuStickyState{itemIndex: -1}
-	lastUICommand := ""
 	menuSawHover := false
 	menuLostReleaseSuspect := false
 	var menuLostReleaseTimer *time.Timer
+	var filePickerPreview filePickerPreviewState
 	renderer := newGridRenderer()
 	var renderQueue renderScheduler
 	renderStats := newFrameRenderStats(stderr)
@@ -716,12 +785,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	var runOverlayCommand func(line string, recordHistory bool) (bool, error)
 
-	rememberUICommand := func(line string) {
-		if line = normalizeUICommand(line); line != "" {
-			lastUICommand = line
-		}
-	}
-
 	setPreviousUIFile := func(fileID int) {
 		menuSticky = menuStickyState{itemIndex: -1}
 		if fileID != 0 {
@@ -730,8 +793,44 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
+	clearBufferStatus := func() {
+		if buffer != nil {
+			buffer.status = ""
+		}
+	}
+
+	syncFilePickerPreview := func() (bool, error) {
+		if !filePickerPreview.active || overlay.pickerMode() != overlayModeFilePicker {
+			return false, nil
+		}
+		item, ok := overlay.pickerSelected()
+		if !ok {
+			return false, nil
+		}
+		changed, err := filePickerPreview.syncSelection(svc, item, applyBufferView)
+		if err != nil {
+			return false, err
+		}
+		if changed {
+			clearBufferStatus()
+		}
+		return changed, nil
+	}
+
+	finishFilePickerPreview := func(commit bool, item overlayPickerItem) (bool, error) {
+		changed, err := filePickerPreview.finish(svc, commit, item, applyBufferView, setPreviousUIFile)
+		if err != nil {
+			return false, err
+		}
+		if changed {
+			clearBufferStatus()
+		}
+		return changed, nil
+	}
+
 	rerunLastUICommand := func() (bool, error) {
-		if strings.TrimSpace(lastUICommand) == "" {
+		lastCommand, ok := overlay.lastCommand()
+		if !ok || strings.TrimSpace(lastCommand) == "" {
 			return false, nil
 		}
 		if menu.visible {
@@ -739,7 +838,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			clearMenuLostRelease()
 			menuSawHover = false
 		}
-		done, err := runOverlayCommand(lastUICommand, true)
+		done, err := runOverlayCommand(lastCommand, true)
 		if err != nil {
 			buffer.status = diagnosticText(err)
 			return false, bufferRedraw(redrawBufferStatus)
@@ -1002,11 +1101,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		last := strings.TrimSpace(lastUICommand)
-		if last == "" {
-			last, _ = overlay.lastCommand()
-		}
-		items, preferred := buildCommandPickerItems(docs, snapshot.Commands, last)
+		items, preferred := buildCommandPickerItems(docs, snapshot.Commands, overlay.commandHistory())
 		overlay.openPicker(overlayModeCommandPicker, items, preferred)
 		return overlaySurfaceRedraw(redrawOverlayOpen)
 	}
@@ -1017,8 +1112,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		items, preferred := buildFilePickerItems(snapshot.Files, menuSticky.previousFileID)
+		startFileID := 0
+		if buffer != nil {
+			startFileID = buffer.fileID
+		}
 		overlay.openPicker(overlayModeFilePicker, items, preferred)
-		return overlaySurfaceRedraw(redrawOverlayOpen)
+		filePickerPreview.begin(startFileID)
+		previewChanged, err := syncFilePickerPreview()
+		if err != nil {
+			return err
+		}
+		flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+		if previewChanged {
+			flags |= renderInvalidateBuffer
+		}
+		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
 	}
 
 	submitOverlay := func() (bool, error) {
@@ -1043,7 +1151,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		menu = buildContextMenu(buffer, snapshot.Files, snapshot.Commands, nav, clickX, clickY, menuSticky)
+		lastCommand, _ := overlay.lastCommand()
+		menu = buildContextMenu(buffer, snapshot.Files, snapshot.Commands, lastCommand, nav, clickX, clickY, menuSticky)
 		clearMenuLostRelease()
 		menuSawHover = menu.hover >= 0
 		return menuRedraw(redrawMenuOpen)
@@ -1054,93 +1163,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		menu.dismiss()
 		clearMenuLostRelease()
 		menuSawHover = false
-		rememberUICommand(uiCommandForMenuItem(item))
-		switch item.kind {
-		case menuWrite:
-			msg, lines, err := saveWithCapture()
-			if err != nil {
-				buffer.status = diagnosticText(err)
-			} else {
-				applyStatusResult(msg, lines)
-			}
-			return false, nil
-		case menuCut:
-			if err := cutBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, nil
-		case menuSnarf:
-			if err := copyBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, nil
-		case menuPaste:
-			if err := pasteBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, nil
-		case menuLook:
-			next, ok, err := lookInBuffer(svc, buffer, true)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				buffer = next
-				buffer.status = ""
-			} else {
-				buffer.status = "?no match"
-			}
-			return false, nil
-		case menuRegexp:
-			pattern := parser.LastPatternUTF8()
-			if pattern == "" {
-				buffer.status = "?no previous regexp"
-				return false, nil
-			}
-			done, _, err := executeDirect("/"+escapeSearchPattern(pattern)+"/\n", false)
-			if err != nil {
-				buffer.status = diagnosticText(err)
-				return false, nil
-			}
-			if done {
-				return true, nil
-			}
-			if err := refreshBuffer(); err != nil {
-				return false, err
-			}
-			buffer.status = ""
-			return false, nil
-		case menuHistoryPop:
-			done, _, err := executeDirect(":ion:pop\n", true)
-			if err != nil {
-				buffer.status = diagnosticText(err)
-				return false, nil
-			}
-			if done {
-				return true, nil
-			}
-			if err := refreshBuffer(); err != nil {
-				return false, err
-			}
-			buffer.status = ""
-			return false, nil
-		case menuCommand:
-			done, err := runOverlayCommand(strings.TrimSpace(item.command), true)
+		if line := normalizeUICommand(uiCommandForMenuItem(item)); line != "" {
+			done, err := runOverlayCommand(line, true)
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
 			}
 			return done, nil
-		case menuPlumb:
-			token := plumbToken(buffer)
-			if token == "" {
-				return false, nil
-			}
-			if err := plumbTargetToken(token); err != nil {
-				buffer.status = diagnosticText(err)
-				return false, nil
-			}
-			return false, nil
+		}
+		switch item.kind {
 		case menuFile:
 			previousFileID := 0
 			if buffer != nil {
@@ -1608,7 +1639,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						switch key {
 						case keyEsc:
 							overlay.close()
-							if err := overlaySurfaceRedraw(redrawOverlayClose); err != nil {
+							previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+							if err != nil {
+								return err
+							}
+							flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+							if previewChanged {
+								flags |= renderInvalidateBuffer
+							}
+							if err := redraw(renderRequestForLayers(redrawOverlayClose, flags)); err != nil {
 								return err
 							}
 							continue
@@ -1618,8 +1657,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								if err != nil {
 									return err
 								}
+								previewChanged := false
+								if !overlay.visible || !overlay.pickerActive() {
+									previewChanged, err = finishFilePickerPreview(false, overlayPickerItem{})
+								} else if overlay.pickerMode() == overlayModeFilePicker {
+									previewChanged, err = syncFilePickerPreview()
+								}
+								if err != nil {
+									return err
+								}
 								if handled {
 									req := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+									if previewChanged {
+										req.invalidation |= renderInvalidateBuffer
+									}
 									if !overlay.visible {
 										req = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 									}
@@ -1670,6 +1721,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						default:
 							overlay.close()
+							if _, err := finishFilePickerPreview(false, overlayPickerItem{}); err != nil {
+								return err
+							}
 							done, err := handleBufferSpecial(key, mouse)
 							if err != nil {
 								return err
@@ -1679,7 +1733,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							}
 							continue
 						}
-						if err := redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)); err != nil {
+						previewChanged, err := syncFilePickerPreview()
+						if err != nil {
+							return err
+						}
+						flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+						if previewChanged {
+							flags |= renderInvalidateBuffer
+						}
+						if err := redraw(renderRequestForLayers(redrawOverlayHistory, flags)); err != nil {
 							return err
 						}
 						continue
@@ -1695,24 +1757,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						case overlayModeFilePicker:
 							item, ok := overlay.pickerSelected()
 							overlay.close()
-							overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+							previewChanged := false
+							if ok {
+								previewChanged, err = finishFilePickerPreview(true, item)
+							} else {
+								previewChanged, err = finishFilePickerPreview(false, overlayPickerItem{})
+							}
+							if err != nil {
+								return err
+							}
+							flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+							if previewChanged {
+								flags |= renderInvalidateBuffer
+							}
+							overlayReq = renderRequestForLayers(redrawOverlayClose, flags)
 							if !ok {
 								if err := redraw(overlayReq); err != nil {
 									return err
 								}
 								continue
-							}
-							previousFileID := 0
-							if buffer != nil {
-								previousFileID = buffer.fileID
-							}
-							view, err := svc.FocusFile(item.fileID)
-							if err != nil {
-								buffer.status = diagnosticText(err)
-							} else {
-								applyBufferView(view)
-								setPreviousUIFile(previousFileID)
-								buffer.status = ""
 							}
 						default:
 							item, ok := overlay.pickerSelected()
@@ -1725,7 +1788,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								continue
 							}
 							overlay.close()
-							rememberUICommand(item.value)
 							done, err := runOverlayCommand(item.value, true)
 							if err != nil {
 								return err
@@ -1765,6 +1827,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							overlay.insert([]rune{r})
 						} else {
 							continue
+						}
+					}
+					previewChanged := false
+					if overlay.pickerMode() == overlayModeFilePicker {
+						previewChanged, err = syncFilePickerPreview()
+						if err != nil {
+							return err
+						}
+						if previewChanged {
+							overlayReq.invalidation |= renderInvalidateBuffer
 						}
 					}
 					if err := redraw(overlayReq); err != nil {

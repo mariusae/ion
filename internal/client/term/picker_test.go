@@ -36,7 +36,7 @@ func TestCommandCompletionsFromDocsIncludesLocalIonAndMenuCommands(t *testing.T)
 	}
 }
 
-func TestBuildCommandPickerItemsPrefersLastCommand(t *testing.T) {
+func TestBuildCommandPickerItemsDedupesHistoryAndPrefersLatest(t *testing.T) {
 	t.Parallel()
 
 	items, preferred := buildCommandPickerItems([]wire.NamespaceProviderDoc{{
@@ -45,16 +45,19 @@ func TestBuildCommandPickerItemsPrefersLastCommand(t *testing.T) {
 			Name:    "goto",
 			Summary: "jump to definition",
 		}},
-	}}, nil, ":help :lsp:goto")
+	}}, nil, []string{"!ls", ":help :lsp:goto", "!ls"})
 
-	if got, want := preferred, ":help :lsp:goto"; got != want {
+	if got, want := preferred, "history:000001"; got != want {
 		t.Fatalf("preferred = %q, want %q", got, want)
 	}
 	if got, want := items[0].value, ":help :lsp:goto"; got != want {
 		t.Fatalf("first picker item = %q, want %q", got, want)
 	}
-	if got, want := items[0].label, ":help :lsp:goto - last command"; got != want {
-		t.Fatalf("first picker label = %q, want %q", got, want)
+	if got, want := items[1].value, "!ls"; got != want {
+		t.Fatalf("second picker item = %q, want %q", got, want)
+	}
+	if got, want := items[2].value, ":help"; got != want {
+		t.Fatalf("first catalog picker item = %q, want %q", got, want)
 	}
 }
 
@@ -63,10 +66,10 @@ func TestOverlayCommandPickerDefaultsToPreferredAndFilters(t *testing.T) {
 
 	overlay := newOverlayState()
 	overlay.openPicker(overlayModeCommandPicker, []overlayPickerItem{
-		{label: ":help - show detailed help", value: ":help", search: ":help show detailed help"},
-		{label: ":ion:snarf - copy the current selection", value: ":ion:snarf", search: ":ion:snarf copy selection"},
-		{label: ":lsp:goto - jump to definition", value: ":lsp:goto", search: ":lsp:goto jump definition"},
-	}, ":ion:snarf")
+		{key: "catalog::help", label: ":help - show detailed help", value: ":help", search: ":help show detailed help"},
+		{key: "catalog::ion:snarf", label: ":ion:snarf - copy the current selection", value: ":ion:snarf", search: ":ion:snarf copy selection"},
+		{key: "catalog::lsp:goto", label: ":lsp:goto - jump to definition", value: ":lsp:goto", search: ":lsp:goto jump definition"},
+	}, "catalog::ion:snarf")
 
 	selected, ok := overlay.pickerSelected()
 	if !ok {
@@ -98,7 +101,7 @@ func TestBuildFilePickerItemsPrefersCurrentFile(t *testing.T) {
 		{ID: 3, Name: "c.txt", Changed: true},
 	}, 0)
 
-	if got, want := preferred, "b.txt"; got != want {
+	if got, want := preferred, "file:2"; got != want {
 		t.Fatalf("preferred = %q, want %q", got, want)
 	}
 	if got, want := len(items), 3; got != want {
@@ -121,7 +124,7 @@ func TestBuildFilePickerItemsPrefersPreviousUIFile(t *testing.T) {
 		{ID: 3, Name: "c.txt"},
 	}, 1)
 
-	if got, want := preferred, "a.txt"; got != want {
+	if got, want := preferred, "file:1"; got != want {
 		t.Fatalf("preferred = %q, want %q", got, want)
 	}
 }
@@ -131,8 +134,8 @@ func TestOverlayPickerPromptHasNoPrefix(t *testing.T) {
 
 	overlay := newOverlayState()
 	overlay.openPicker(overlayModeCommandPicker, []overlayPickerItem{
-		{label: ":help", value: ":help", search: ":help"},
-	}, ":help")
+		{key: "catalog::help", label: ":help", value: ":help", search: ":help"},
+	}, "catalog::help")
 	overlay.insert([]rune("abc"))
 
 	lines := overlay.renderPromptLines()

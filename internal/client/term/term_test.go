@@ -118,6 +118,90 @@ func (f *fakeTermService) Save() (string, error) {
 	return "saved", nil
 }
 
+func TestFilePickerPreviewStateSyncAndCancelRestoresStartFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{ID: 1, Name: "a.txt"},
+		menuFiles: []wire.MenuFile{
+			{ID: 1, Name: "a.txt", Current: true},
+			{ID: 2, Name: "b.txt"},
+		},
+	}
+	var applied []int
+	apply := func(view wire.BufferView) {
+		applied = append(applied, view.ID)
+	}
+
+	var preview filePickerPreviewState
+	preview.begin(1)
+
+	changed, err := preview.syncSelection(svc, overlayPickerItem{fileID: 2}, apply)
+	if err != nil {
+		t.Fatalf("syncSelection() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("syncSelection() changed = false, want true")
+	}
+	if got, want := preview.previewFileID, 2; got != want {
+		t.Fatalf("previewFileID = %d, want %d", got, want)
+	}
+
+	changed, err = preview.finish(svc, false, overlayPickerItem{}, apply, func(int) {})
+	if err != nil {
+		t.Fatalf("finish(cancel) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("finish(cancel) changed = false, want true")
+	}
+	if preview.active {
+		t.Fatal("preview.active = true, want false after cancel")
+	}
+	if got, want := applied, []int{2, 1}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("applied focus sequence = %v, want %v", got, want)
+	}
+}
+
+func TestFilePickerPreviewStateCommitKeepsPreviewAndRecordsPreviousFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{ID: 1, Name: "a.txt"},
+		menuFiles: []wire.MenuFile{
+			{ID: 1, Name: "a.txt", Current: true},
+			{ID: 2, Name: "b.txt"},
+		},
+	}
+	var applied []int
+	apply := func(view wire.BufferView) {
+		applied = append(applied, view.ID)
+	}
+	var previous int
+
+	var preview filePickerPreviewState
+	preview.begin(1)
+
+	if _, err := preview.syncSelection(svc, overlayPickerItem{fileID: 2}, apply); err != nil {
+		t.Fatalf("syncSelection() error = %v", err)
+	}
+
+	changed, err := preview.finish(svc, true, overlayPickerItem{fileID: 2}, apply, func(id int) {
+		previous = id
+	})
+	if err != nil {
+		t.Fatalf("finish(commit) error = %v", err)
+	}
+	if changed {
+		t.Fatal("finish(commit) changed = true, want false when selection was already previewed")
+	}
+	if got, want := previous, 1; got != want {
+		t.Fatalf("previous file = %d, want %d", got, want)
+	}
+	if got, want := applied, []int{2}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("applied focus sequence = %v, want %v", got, want)
+	}
+}
+
 func TestNewBufferStateStartsAtDot(t *testing.T) {
 	t.Parallel()
 
@@ -1156,7 +1240,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 		DotStart: 1,
 		DotEnd:   1,
 	})
-	menu := buildContextMenu(state, nil, nil, wire.NavigationStack{}, 5, 8, menuStickyState{})
+	menu := buildContextMenu(state, nil, nil, "", wire.NavigationStack{}, 5, 8, menuStickyState{})
 
 	var out bytes.Buffer
 	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, menu, theme, true); err != nil {
@@ -1425,7 +1509,7 @@ func TestOverlayRenderLinesRespectsUpdatedTerminalHeight(t *testing.T) {
 	}
 
 	termRows = 20
-	if got, want := overlayHeight(overlay), 10; got != want {
+	if got, want := overlayHeight(overlay), 6; got != want {
 		t.Fatalf("overlayHeight(after resize) = %d, want %d", got, want)
 	}
 }

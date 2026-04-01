@@ -41,8 +41,81 @@ func TestParseArgsParsesServersAndMatches(t *testing.T) {
 	if got, want := cfg.servers["rust"], "rust-analyzer"; got != want {
 		t.Fatalf("rust server = %q, want %q", got, want)
 	}
-	if got, want := len(cfg.matches), 2; got != want {
+	if got, want := len(cfg.matches), 2; got < want {
+		t.Fatalf("len(matches) = %d, want at least %d", got, want)
+	}
+	last := cfg.matches[len(cfg.matches)-2:]
+	if got, want := last[0].server, "go"; got != want {
+		t.Fatalf("second-last match server = %q, want %q", got, want)
+	}
+	if got, want := last[1].server, "rust"; got != want {
+		t.Fatalf("last match server = %q, want %q", got, want)
+	}
+}
+
+func TestParseArgsIncludesDefaultServersAndMatches(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-socket", "/tmp/ion.sock"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	for name, want := range map[string]string{
+		"go":     "gopls serve",
+		"rust":   "rust-analyzer",
+		"python": "pylsp",
+		"clang":  "clangd",
+	} {
+		if got := cfg.servers[name]; got != want {
+			t.Fatalf("server %q = %q, want %q", name, got, want)
+		}
+	}
+	if got, want := len(cfg.matches), 4; got != want {
 		t.Fatalf("len(matches) = %d, want %d", got, want)
+	}
+}
+
+func TestParseArgsUserServerOverridesDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{
+		"-socket", "/tmp/ion.sock",
+		"-server=go:custom-gopls --stdio",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if got, want := cfg.servers["go"], "custom-gopls --stdio"; got != want {
+		t.Fatalf("go server = %q, want %q", got, want)
+	}
+}
+
+func TestMatchViewUsesLastMatchingRule(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manager := &lspManager{
+		root: root,
+		matches: []matchRule{
+			{pattern: `\.h$`, re: regexp.MustCompile(`\.h$`), server: "clang"},
+			{pattern: `special\.h$`, re: regexp.MustCompile(`special\.h$`), server: "go"},
+		},
+		servers: map[string]*lspServer{
+			"clang": {name: "clang"},
+			"go":    {name: "go"},
+		},
+	}
+
+	path := filepath.Join(root, "pkg", "special.h")
+	gotPath, gotServer, ok := manager.matchView(wire.BufferView{Name: path})
+	if !ok {
+		t.Fatal("matchView() ok = false, want true")
+	}
+	if got, want := gotPath, path; got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	if got, want := gotServer.name, "go"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
 	}
 }
 

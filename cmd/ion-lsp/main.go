@@ -99,6 +99,23 @@ type matchRule struct {
 	server  string
 }
 
+var defaultLSPServers = map[string]string{
+	"go":     "gopls serve",
+	"rust":   "rust-analyzer",
+	"python": "pylsp",
+	"clang":  "clangd",
+}
+
+var defaultLSPMatchRules = []struct {
+	pattern string
+	server  string
+}{
+	{pattern: `\.go$`, server: "go"},
+	{pattern: `\.rs$`, server: "rust"},
+	{pattern: `\.pyi?$`, server: "python"},
+	{pattern: `\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$`, server: "clang"},
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	cfg, err := parseArgs(args)
 	if err != nil {
@@ -125,8 +142,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func parseArgs(args []string) (config, error) {
-	cfg := config{
-		servers: make(map[string]string),
+	cfg, err := defaultConfig()
+	if err != nil {
+		return config{}, err
 	}
 	fs := flag.NewFlagSet("ion-lsp", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -141,9 +159,6 @@ func parseArgs(args []string) (config, error) {
 		name = normalizeServerName(name)
 		if name == "" {
 			return fmt.Errorf("bad -server %q", value)
-		}
-		if _, exists := cfg.servers[name]; exists {
-			return fmt.Errorf("duplicate -server %q", name)
 		}
 		cfg.servers[name] = strings.TrimSpace(command)
 		return nil
@@ -180,16 +195,32 @@ func parseArgs(args []string) (config, error) {
 	if cfg.socketPath == "" {
 		return config{}, fmt.Errorf("missing ion socket; run from ion or pass -socket")
 	}
-	if len(cfg.servers) == 0 {
-		return config{}, fmt.Errorf("at least one -server is required")
-	}
-	if len(cfg.matches) == 0 {
-		return config{}, fmt.Errorf("at least one -match is required")
-	}
 	for _, rule := range cfg.matches {
 		if _, ok := cfg.servers[rule.server]; !ok {
 			return config{}, fmt.Errorf("-match %q references unknown server %q", rule.pattern, rule.server)
 		}
+	}
+	return cfg, nil
+}
+
+func defaultConfig() (config, error) {
+	cfg := config{
+		servers: make(map[string]string, len(defaultLSPServers)),
+		matches: make([]matchRule, 0, len(defaultLSPMatchRules)),
+	}
+	for name, command := range defaultLSPServers {
+		cfg.servers[name] = command
+	}
+	for _, rule := range defaultLSPMatchRules {
+		re, err := regexp.Compile(rule.pattern)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.matches = append(cfg.matches, matchRule{
+			pattern: rule.pattern,
+			re:      re,
+			server:  rule.server,
+		})
 	}
 	return cfg, nil
 }
@@ -497,6 +528,7 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 	if err != nil || path == "" {
 		return "", nil, false
 	}
+	var matched *lspServer
 	for _, rule := range m.matches {
 		if !rule.re.MatchString(path) {
 			continue
@@ -505,9 +537,12 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 		if server == nil {
 			return "", nil, false
 		}
-		return path, server, true
+		matched = server
 	}
-	return "", nil, false
+	if matched == nil {
+		return "", nil, false
+	}
+	return path, matched, true
 }
 
 func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPosition, string, error) {

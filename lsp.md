@@ -11,7 +11,20 @@ server for the current buffer.
 Run `ion-lsp` from the project root you want the language servers to treat as
 their workspace root.
 
-Example:
+Default startup:
+
+```sh
+ion-lsp
+```
+
+Built-in defaults:
+
+- `go` -> `gopls serve` for `\.go$`
+- `rust` -> `rust-analyzer` for `\.rs$`
+- `python` -> `pylsp` for `\.pyi?$`
+- `clang` -> `clangd` for `\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$`
+
+Explicit example:
 
 ```sh
 ion-lsp \
@@ -25,7 +38,12 @@ Notes:
 
 - `-server=name:command` may be repeated.
 - `-match=regexp:name` may be repeated.
-- match rules choose which configured server handles a file path.
+- `ion-lsp` starts with the default server and match set above even when no
+  options are passed.
+- user `-server` flags override defaults with the same name.
+- match rules are evaluated in order with last-match-wins semantics.
+- default match rules are installed first; user `-match` flags come after them
+  in command-line order, so user rules take precedence.
 - `rootUri` and `workspaceFolders` are both set to the current working
   directory of `ion-lsp`.
 
@@ -65,7 +83,7 @@ From this repo root:
 
 ```sh
 ion -N
-ion-lsp -server=go:"gopls serve" -match='\.go$':go
+ion-lsp
 ```
 
 Then in ion:

@@ -35,14 +35,15 @@ type menuItem struct {
 }
 
 type menuState struct {
-	visible bool
-	x       int
-	y       int
-	width   int
-	height  int
-	hover   int
-	title   string
-	items   []menuItem
+	visible   bool
+	x         int
+	y         int
+	width     int
+	height    int
+	hover     int
+	title     string
+	titleBase string
+	items     []menuItem
 }
 
 type menuStickyState struct {
@@ -86,6 +87,7 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
 		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp, sepAfter: true},
 	)
+	commandShortcutIndex := 0
 	for i, cmd := range commands {
 		label := strings.TrimSpace(cmd.Label)
 		if label == "" {
@@ -95,10 +97,12 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 			continue
 		}
 		item := menuItem{
-			label:   " " + label,
-			kind:    menuCommand,
-			command: strings.TrimSpace(cmd.Command),
+			label:    " " + label,
+			kind:     menuCommand,
+			command:  strings.TrimSpace(cmd.Command),
+			shortcut: menuCommandShortcutLabel(commandShortcutIndex),
 		}
+		commandShortcutIndex++
 		if i == len(commands)-1 {
 			item.sepAfter = true
 		}
@@ -108,6 +112,8 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		if len(menu.items) > 0 {
 			menu.items[len(menu.items)-1].sepAfter = false
 		}
+		item.shortcut = menuCommandShortcutLabel(commandShortcutIndex)
+		commandShortcutIndex++
 		item.sepAfter = true
 		menu.items = append(menu.items, item)
 	}
@@ -116,14 +122,17 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 	} else if len(menu.items) > 0 && len(files) > 0 {
 		menu.items[len(menu.items)-1].sepAfter = true
 	}
+	fileShortcutIndex := 0
 	for _, f := range files {
 		label := menuDisplayFileName(f.Name)
 		menu.items = append(menu.items, menuItem{
-			label:   fmt.Sprintf(" %c%c %s", dirtyMark(f.Dirty, f.Changed), currentMark(f.Current), label),
-			kind:    menuFile,
-			fileID:  f.ID,
-			current: f.Current,
+			label:    fmt.Sprintf(" %c%c %s", dirtyMark(f.Dirty, f.Changed), currentMark(f.Current), label),
+			shortcut: menuFileShortcutLabel(fileShortcutIndex),
+			kind:     menuFile,
+			fileID:   f.ID,
+			current:  f.Current,
 		})
+		fileShortcutIndex++
 	}
 	if len(menu.items) == 0 {
 		return menu
@@ -137,7 +146,8 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 	if titleName == "" {
 		titleName = "(unnamed)"
 	}
-	menu.title = fmt.Sprintf(" %s (%d%%) ", titleName, pct)
+	menu.titleBase = fmt.Sprintf(" %s (%d%%) ", titleName, pct)
+	menu.title = menu.titleBase
 
 	menu.width = len([]rune(menu.title)) + 2
 	for _, item := range menu.items {
@@ -243,12 +253,14 @@ func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 		return err
 	}
 	row++
-	for i, item := range menu.items {
-		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == i, theme); err != nil {
+	visible := menu.visibleItemIndices()
+	for i, idx := range visible {
+		item := menu.items[idx]
+		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == idx, theme); err != nil {
 			return err
 		}
 		row++
-		if item.sepAfter && i < len(menu.items)-1 {
+		if item.sepAfter && i < len(visible)-1 {
 			if err := writeMenuLine(stdout, row, menu.x, formatMenuBorder("", inner, '├', '┤', '─'), theme.subtlePrefix(), theme); err != nil {
 				return err
 			}
@@ -380,12 +392,14 @@ func (m *menuState) itemAt(x, y int) int {
 		return -1
 	}
 	r := 0
-	for i, item := range m.items {
+	visible := m.visibleItemIndices()
+	for i, idx := range visible {
+		item := m.items[idx]
 		if r == row {
-			return i
+			return idx
 		}
 		r++
-		if item.sepAfter && i < len(m.items)-1 {
+		if item.sepAfter && i < len(visible)-1 {
 			r++
 		}
 	}
@@ -454,6 +468,83 @@ func popNavigationMenuItem(nav wire.NavigationStack, lastSection bool) (menuItem
 	}, true
 }
 
+func (m *menuState) visibleItemIndices() []int {
+	if m == nil {
+		return nil
+	}
+	all := make([]int, len(m.items))
+	for i := range m.items {
+		all[i] = i
+	}
+	return all
+}
+
+func (m *menuState) selectedItem() (menuItem, int, bool) {
+	if m == nil {
+		return menuItem{}, -1, false
+	}
+	for _, idx := range m.visibleItemIndices() {
+		if idx == m.hover && idx >= 0 && idx < len(m.items) {
+			return m.items[idx], idx, true
+		}
+	}
+	visible := m.visibleItemIndices()
+	if len(visible) == 0 {
+		return menuItem{}, -1, false
+	}
+	idx := visible[0]
+	return m.items[idx], idx, true
+}
+
+func (m *menuState) move(delta int) bool {
+	if m == nil || delta == 0 {
+		return false
+	}
+	if len(m.items) == 0 {
+		return false
+	}
+	if m.hover < 0 || m.hover >= len(m.items) {
+		m.hover = 0
+		return true
+	}
+	next := m.hover + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.items) {
+		next = len(m.items) - 1
+	}
+	if next == m.hover {
+		return false
+	}
+	m.hover = next
+	return true
+}
+
+func (m *menuState) clampToScreen() {
+	if m == nil {
+		return
+	}
+	if m.x < 0 {
+		m.x = 0
+	}
+	if m.y < 0 {
+		m.y = 0
+	}
+	if m.x+m.width > termCols {
+		m.x = termCols - m.width
+	}
+	if m.y+m.height > termRows {
+		m.y = termRows - m.height
+	}
+	if m.x < 0 {
+		m.x = 0
+	}
+	if m.y < 0 {
+		m.y = 0
+	}
+}
+
 func resolveMenuStickyHover(items []menuItem, sticky menuStickyState) int {
 	if sticky.preferHistory {
 		if idx := menuItemIndexByKind(items, sticky.historyKind); idx >= 0 {
@@ -518,6 +609,97 @@ func menuItemIndexByKind(items []menuItem, kind menuItemKind) int {
 		}
 	}
 	return -1
+}
+
+func menuCommandShortcutLabel(index int) string {
+	if r, ok := menuCommandShortcutRune(index); ok {
+		return fmt.Sprintf("(M-%c)", r)
+	}
+	return ""
+}
+
+func menuCommandShortcutRune(index int) (rune, bool) {
+	if index < 0 || index >= 26 {
+		return 0, false
+	}
+	return rune('a' + index), true
+}
+
+func menuFileShortcutLabel(index int) string {
+	if r, ok := menuFileShortcutRune(index); ok {
+		return fmt.Sprintf("(M-%c)", r)
+	}
+	return ""
+}
+
+func menuFileShortcutRune(index int) (rune, bool) {
+	digits := []rune("1234567890")
+	if index < 0 || index >= len(digits) {
+		return 0, false
+	}
+	return digits[index], true
+}
+
+func menuBuiltinShortcutRune(item menuItem) (rune, bool) {
+	switch item.kind {
+	case menuWrite:
+		return 'w', true
+	case menuCut:
+		return 'x', true
+	case menuSnarf:
+		return 'c', true
+	case menuPaste:
+		return 'v', true
+	case menuLook:
+		return 'l', true
+	case menuPlumb:
+		return 'b', true
+	case menuRegexp:
+		return '/', true
+	case menuHistoryPop:
+		return 'P', true
+	default:
+		return 0, false
+	}
+}
+
+func (m *menuState) itemForShortcut(r rune) (menuItem, int, bool) {
+	if m == nil {
+		return menuItem{}, -1, false
+	}
+	for i, item := range m.items {
+		if shortcut, ok := menuBuiltinShortcutRune(item); ok && shortcut == r {
+			return item, i, true
+		}
+	}
+	return menuItem{}, -1, false
+}
+
+func (m *menuState) itemForMetaShortcut(r rune) (menuItem, int, bool) {
+	if m == nil {
+		return menuItem{}, -1, false
+	}
+	commandIndex := 0
+	for i, item := range m.items {
+		if item.kind != menuCommand {
+			continue
+		}
+		if shortcut, ok := menuCommandShortcutRune(commandIndex); ok && shortcut == r {
+			return item, i, true
+		}
+		commandIndex++
+	}
+	fileIndex := 0
+	for i, item := range m.items {
+		if item.kind != menuFile {
+			continue
+		}
+		if shortcut, ok := menuFileShortcutRune(fileIndex); ok && shortcut == r {
+			return item, i, true
+		}
+		fileIndex++
+	}
+	return menuItem{}, -1, false
 }
 
 func escapeSearchPattern(pattern string) string {

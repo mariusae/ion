@@ -1190,8 +1190,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return menuRedraw(redrawMenuOpen)
 	}
 
-	executeMenuItem := func(item menuItem) (bool, error) {
-		menuSticky = nextMenuStickyState(menu, menu.hover, item)
+	showKeyboardMenu := func() error {
+		row, col := terminalCursorPosition(buffer, nil)
+		return showMenu(col, row)
+	}
+
+	executeMenuItem := func(itemIndex int, item menuItem) (bool, error) {
+		menuSticky = nextMenuStickyState(menu, itemIndex, item)
 		menu.dismiss()
 		clearMenuLostRelease()
 		menuSawHover = false
@@ -1222,6 +1227,45 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return false, nil
 	}
 
+	executeMenuSelection := func() (bool, error) {
+		item, itemIndex, ok := menu.selectedItem()
+		if !ok {
+			return false, nil
+		}
+		done, err := executeMenuItem(itemIndex, item)
+		if err != nil {
+			return false, err
+		}
+		if done {
+			return true, nil
+		}
+		return false, redraw(renderRequestForLayers(redrawMenuClose, renderInvalidateAllLayers))
+	}
+
+	executeMenuShortcut := func(r rune, meta bool) (bool, bool, error) {
+		var (
+			item      menuItem
+			itemIndex int
+			ok        bool
+		)
+		if meta {
+			item, itemIndex, ok = menu.itemForMetaShortcut(r)
+		} else {
+			item, itemIndex, ok = menu.itemForShortcut(r)
+		}
+		if !ok {
+			return false, false, nil
+		}
+		done, err := executeMenuItem(itemIndex, item)
+		if err != nil {
+			return false, false, err
+		}
+		if done {
+			return true, true, nil
+		}
+		return true, false, redraw(renderRequestForLayers(redrawMenuClose, renderInvalidateAllLayers))
+	}
+
 	handleMenuMouse := func(event mouseEvent) (bool, error) {
 		if renderer != nil && renderer.trace != nil {
 			renderer.trace.Printf("menu-mouse button=%d repeat=%d pressed=%t x=%d y=%d visible=%t hover=%d suspect=%t sawHover=%t", event.button, event.count(), event.pressed, event.x, event.y, menu.visible, menu.hover, menuLostReleaseSuspect, menuSawHover)
@@ -1234,7 +1278,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			clearMenuLostRelease()
 			menuSawHover = false
 			if menu.hover >= 0 && menu.hover < len(menu.items) {
-				done, err := executeMenuItem(menu.items[menu.hover])
+				done, err := executeMenuItem(menu.hover, menu.items[menu.hover])
 				if err != nil {
 					return false, err
 				}
@@ -1465,6 +1509,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		switch r {
 		case 0x0b:
 			return false, openCommandPicker()
+		case 0x07:
+			return false, showKeyboardMenu()
 		case 0x10:
 			return false, openFilePicker()
 		case 0x04:
@@ -1665,6 +1711,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						if err != nil {
 							return err
 						}
+						key = legacyAltKey(key)
 						if key != keyFocusIn && key != keyFocusOut {
 							clearTransientStatus()
 						}
@@ -1881,6 +1928,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					if err != nil {
 						return err
 					}
+					key = legacyAltKey(key)
 					if key != keyFocusIn && key != keyFocusOut {
 						clearTransientStatus()
 					}
@@ -2125,11 +2173,140 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				continue
 			}
+			if menu.visible {
+				if r == 0x1b {
+					key, mouse, err := readBufferEscape(reader, stdin)
+					if err != nil {
+						return err
+					}
+					if key != keyFocusIn && key != keyFocusOut {
+						clearTransientStatus()
+					}
+					switch key {
+					case keyEsc:
+						menu.dismiss()
+						clearMenuLostRelease()
+						menuSawHover = false
+						if err := menuRedraw(redrawMenuClose); err != nil {
+							return err
+						}
+						continue
+					case keyMouse:
+						if mouse != nil {
+							done, err := handleMenuMouse(*mouse)
+							if err != nil {
+								return err
+							}
+							if done {
+								if err := exitBufferMode(stdout); err != nil {
+									return err
+								}
+								return nil
+							}
+							continue
+						}
+					case keyUp:
+						if !menu.move(-1) {
+							continue
+						}
+					case keyDown:
+						if !menu.move(1) {
+							continue
+						}
+					case keyPgUp, keyHome:
+						if !menu.move(-len(menu.items)) {
+							continue
+						}
+					case keyPgDn, keyEnd:
+						if !menu.move(len(menu.items)) {
+							continue
+						}
+					case keyFocusIn:
+						focused = true
+						if err := refreshThemeOnFocus(); err != nil {
+							return err
+						}
+						if err := allLayersRedraw(redrawTheme); err != nil {
+							return err
+						}
+						continue
+					case keyFocusOut:
+						focused = false
+						if err := allLayersRedraw(redrawTheme); err != nil {
+							return err
+						}
+						continue
+					default:
+						if meta, ok := metaRune(key); ok {
+							handled, done, err := executeMenuShortcut(meta, true)
+							if err != nil {
+								return err
+							}
+							if handled {
+								if done {
+									if err := exitBufferMode(stdout); err != nil {
+										return err
+									}
+									return nil
+								}
+								continue
+							}
+						}
+						continue
+					}
+					if err := menuRedraw(redrawMenuHover); err != nil {
+						return err
+					}
+					continue
+				}
+				clearTransientStatus()
+				switch r {
+				case '\r', '\n':
+					done, err := executeMenuSelection()
+					if err != nil {
+						return err
+					}
+					if done {
+						if err := exitBufferMode(stdout); err != nil {
+							return err
+						}
+						return nil
+					}
+				case 0x10:
+					if !menu.move(-1) {
+						continue
+					}
+				case 0x0e:
+					if !menu.move(1) {
+						continue
+					}
+				default:
+					handled, done, err := executeMenuShortcut(r, false)
+					if err != nil {
+						return err
+					}
+					if handled {
+						if done {
+							if err := exitBufferMode(stdout); err != nil {
+								return err
+							}
+							return nil
+						}
+						continue
+					}
+					continue
+				}
+				if err := menuRedraw(redrawMenuHover); err != nil {
+					return err
+				}
+				continue
+			}
 			if r == 0x1b {
 				key, mouse, err := readBufferEscape(reader, stdin)
 				if err != nil {
 					return err
 				}
+				key = legacyAltKey(key)
 				if key != keyFocusIn && key != keyFocusOut {
 					clearTransientStatus()
 				}

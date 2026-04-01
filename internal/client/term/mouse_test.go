@@ -123,6 +123,63 @@ func TestReadBufferEscapeCSIArrowWithModifier(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeMetaShortcuts(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1ba\x1b2"))
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC for alt-a: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(alt-a) error = %v", err)
+	}
+	if got, want := key, metaKey('a'); got != want {
+		t.Fatalf("alt-a key = %d, want %d", got, want)
+	}
+	if mouse != nil {
+		t.Fatalf("alt-a mouse = %#v, want nil", mouse)
+	}
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC for alt-2: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(alt-2) error = %v", err)
+	}
+	if got, want := key, metaKey('2'); got != want {
+		t.Fatalf("alt-2 key = %d, want %d", got, want)
+	}
+	if mouse != nil {
+		t.Fatalf("alt-2 mouse = %#v, want nil", mouse)
+	}
+}
+
+func TestLegacyAltKeyTranslatesEditorMetaBindings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  int
+		want int
+	}{
+		{name: "alt-b", key: metaKey('b'), want: keyAltLeft},
+		{name: "alt-f", key: metaKey('f'), want: keyAltRight},
+		{name: "alt-v", key: metaKey('v'), want: keyAltPageUp},
+		{name: "alt-w", key: metaKey('w'), want: keyAltSnarf},
+		{name: "alt-backspace", key: metaKey(0x7f), want: keyAltBackspace},
+		{name: "alt-a passthrough", key: metaKey('a'), want: metaKey('a')},
+	}
+
+	for _, tt := range tests {
+		if got := legacyAltKey(tt.key); got != tt.want {
+			t.Fatalf("%s legacyAltKey() = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestHandleMouseEventDragSelectsRange(t *testing.T) {
 	t.Parallel()
 

@@ -160,16 +160,11 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 		case 'F':
 			return keyEnd, nil, nil
 		}
-	case 'b':
-		return keyAltLeft, nil, nil
-	case 'f':
-		return keyAltRight, nil, nil
-	case 'v':
-		return keyAltPageUp, nil, nil
-	case 'w':
-		return keyAltSnarf, nil, nil
-	case 0x08, 0x7f:
-		return keyAltBackspace, nil, nil
+	case 'b', 'f', 'v', 'w', 0x08, 0x7f:
+		return metaKey(rune(b)), nil, nil
+	}
+	if b >= 0x20 && b <= 0x7e {
+		return metaKey(rune(b)), nil, nil
 	}
 	return keyEsc, nil, nil
 }
@@ -221,6 +216,40 @@ func decodeCSIKey(seq []byte) int {
 func readBufferKey(reader *bufio.Reader) (int, error) {
 	key, _, err := readBufferEscape(reader, nil)
 	return key, err
+}
+
+const keyMetaBase = 0x2000
+
+func metaKey(r rune) int {
+	return keyMetaBase + int(r)
+}
+
+func metaRune(key int) (rune, bool) {
+	if key < keyMetaBase || key > keyMetaBase+0xff {
+		return 0, false
+	}
+	return rune(key - keyMetaBase), true
+}
+
+func legacyAltKey(key int) int {
+	r, ok := metaRune(key)
+	if !ok {
+		return key
+	}
+	switch r {
+	case 'b':
+		return keyAltLeft
+	case 'f':
+		return keyAltRight
+	case 'v':
+		return keyAltPageUp
+	case 'w':
+		return keyAltSnarf
+	case 0x08, 0x7f:
+		return keyAltBackspace
+	default:
+		return key
+	}
 }
 
 func ensureBufferedByte(reader *bufio.Reader, stdin *os.File, timeoutUsec int64) (bool, error) {

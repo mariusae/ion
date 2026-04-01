@@ -259,6 +259,89 @@ func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 	}
 }
 
+func TestBuildContextMenuAssignsMetaShortcuts(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "b.txt",
+	})
+
+	menu := buildContextMenu(state, []wire.MenuFile{
+		{ID: 1, Name: "short.go", Path: "/tmp/project/pkg/target/short.go"},
+		{ID: 2, Name: "other.go", Path: "/tmp/project/pkg/other/other.go", Current: true},
+	}, []wire.MenuCommand{
+		{Command: ":lsp:goto", Label: "symbol"},
+		{Command: ":lsp:show", Label: "hover"},
+	}, "!ls", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	var gotCommandShortcuts []string
+	var gotFileShortcuts []string
+	for _, item := range menu.items {
+		switch item.kind {
+		case menuCommand:
+			gotCommandShortcuts = append(gotCommandShortcuts, item.shortcut)
+		case menuFile:
+			gotFileShortcuts = append(gotFileShortcuts, item.shortcut)
+		}
+	}
+	if got, want := strings.Join(gotCommandShortcuts, ","), "(M-a),(M-b),(M-c)"; got != want {
+		t.Fatalf("command shortcuts = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(gotFileShortcuts, ","), "(M-1),(M-2)"; got != want {
+		t.Fatalf("file shortcuts = %q, want %q", got, want)
+	}
+}
+
+func TestMenuShortcutLookup(t *testing.T) {
+	t.Parallel()
+
+	menu := &menuState{
+		visible: true,
+		items: []menuItem{
+			{label: " look", shortcut: "(l)", kind: menuLook},
+			{label: " symbol", shortcut: "(M-a)", kind: menuCommand, command: ":lsp:goto"},
+			{label: " hover", shortcut: "(M-b)", kind: menuCommand, command: ":lsp:show"},
+			{label: " '. main.go", shortcut: "(M-1)", kind: menuFile, fileID: 1, current: true},
+			{label: "    util.go", shortcut: "(M-2)", kind: menuFile, fileID: 2},
+		},
+		hover: 0,
+	}
+
+	item, idx, ok := menu.itemForShortcut('l')
+	if !ok {
+		t.Fatal("itemForShortcut('l') = false, want true")
+	}
+	if got, want := idx, 0; got != want {
+		t.Fatalf("builtin shortcut index = %d, want %d", got, want)
+	}
+	if got, want := item.kind, menuLook; got != want {
+		t.Fatalf("builtin shortcut kind = %v, want %v", got, want)
+	}
+
+	item, idx, ok = menu.itemForMetaShortcut('b')
+	if !ok {
+		t.Fatal("itemForMetaShortcut('b') = false, want true")
+	}
+	if got, want := idx, 2; got != want {
+		t.Fatalf("meta command index = %d, want %d", got, want)
+	}
+	if got, want := item.command, ":lsp:show"; got != want {
+		t.Fatalf("meta command = %q, want %q", got, want)
+	}
+
+	item, idx, ok = menu.itemForMetaShortcut('2')
+	if !ok {
+		t.Fatal("itemForMetaShortcut('2') = false, want true")
+	}
+	if got, want := idx, 4; got != want {
+		t.Fatalf("meta file index = %d, want %d", got, want)
+	}
+	if got, want := item.fileID, 2; got != want {
+		t.Fatalf("meta fileID = %d, want %d", got, want)
+	}
+}
+
 func TestBuildContextMenuIncludesPopNavigationItem(t *testing.T) {
 	t.Parallel()
 

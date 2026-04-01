@@ -409,6 +409,13 @@ func (c *paneTrackingClient) OpenNewPane(files []string) error {
 	}
 	cfg := c.cfg
 	cfg.files = append([]string(nil), files...)
+	if rt.getwd != nil {
+		wd, err := rt.getwd()
+		if err != nil {
+			return err
+		}
+		cfg.files = resolveBModeTargets(cfg.files, wd)
+	}
 	return splitAttachPane(ctx, cfg, rt)
 }
 

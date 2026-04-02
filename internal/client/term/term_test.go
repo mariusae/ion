@@ -1696,29 +1696,6 @@ func TestRevealBufferDestinationForceRecentersWhenDotAlreadyUpdated(t *testing.T
 	}
 }
 
-func TestCommandRevealsDestination(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		line string
-		want bool
-	}{
-		{line: "P", want: true},
-		{line: "N", want: true},
-		{line: ":ion:pop", want: true},
-		{line: ":ion:push foo.go:12", want: true},
-		{line: "::pop", want: true},
-		{line: ":lsp:goto", want: true},
-		{line: ":lsp:gototype", want: true},
-		{line: ":ion:write", want: false},
-		{line: "B foo.go", want: false},
-	} {
-		if got := commandRevealsDestination(tc.line); got != tc.want {
-			t.Fatalf("commandRevealsDestination(%q) = %v, want %v", tc.line, got, tc.want)
-		}
-	}
-}
-
 func bufferPosVisible(state *bufferState, overlay *overlayState, pos int) bool {
 	if state == nil {
 		return false

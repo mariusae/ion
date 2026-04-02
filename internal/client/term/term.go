@@ -72,6 +72,7 @@ type bufferState struct {
 	dotStart       int
 	dotEnd         int
 	flashSelection bool
+	pulseCursor    bool
 	markMode       bool
 	markPos        int
 	status         string
@@ -629,6 +630,23 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		time.Sleep(80 * time.Millisecond)
 		buffer.flashSelection = false
 		return bufferRedraw(redrawBufferSelection)
+	}
+
+	pulseBufferCursor := func() error {
+		if buffer == nil || !buffer.pulseCursor {
+			return nil
+		}
+		time.Sleep(80 * time.Millisecond)
+		previous := snapshotBufferState(buffer)
+		buffer.pulseCursor = false
+		return classifiedBufferRedraw(previous)
+	}
+
+	redrawBufferAfterEdit := func(previous *bufferState) error {
+		if err := classifiedBufferRedraw(previous); err != nil {
+			return err
+		}
+		return pulseBufferCursor()
 	}
 
 	flashOverlaySelection := func() error {
@@ -1543,7 +1561,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return false, err
 		}
-		return false, classifiedBufferRedraw(previous)
+		return false, redrawBufferAfterEdit(previous)
 	}
 
 	handleBufferRune := func(r rune) (bool, error) {
@@ -1662,7 +1680,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, err
 		}
 		buffer = next
-		return false, classifiedBufferRedraw(previous)
+		return false, redrawBufferAfterEdit(previous)
 	}
 
 	for {
@@ -2854,7 +2872,10 @@ func applyBufferKeyWithOptions(svc wire.TermService, state *bufferState, key int
 		if err != nil {
 			return nil, err
 		}
-		next := newBufferState(view)
+		next := newBufferStateWithPrevious(view, state)
+		next.origin = restoreBufferOrigin(next, state.origin)
+		next.status = state.status
+		next.pulseCursor = true
 		refreshCurrentBufferDirty(svc, next)
 		return next, nil
 	case 11:
@@ -2919,6 +2940,7 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	next.markMode = state.markMode
 	next.markPos = clampIndex(state.markPos, len(next.text))
 	next.flashSelection = state.flashSelection
+	next.pulseCursor = state.pulseCursor
 	next.status = state.status
 	refreshCurrentBufferDirty(svc, next)
 	return next, nil
@@ -3221,7 +3243,7 @@ const (
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, inactive bool, theme *uiTheme) error {
 	current := bufferHighlightNone
 	col := 0
-	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive, start)
+	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive || bufferCursorPulseActive(state), start)
 	collapsedPainted := false
 	switchHighlight := func(next bufferHighlightKind) error {
 		if next == current {
@@ -3735,6 +3757,10 @@ func collapsedInactiveSelection(state *bufferState, inactive bool, rowStart int)
 		return 0, 0, false
 	}
 	return pos, visualColumnForPos(state.text, cursorRow, pos), true
+}
+
+func bufferCursorPulseActive(state *bufferState) bool {
+	return state != nil && state.pulseCursor
 }
 
 func bufferInactive(overlay *overlayState, menu *menuState, focused bool) bool {

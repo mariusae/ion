@@ -1380,6 +1380,36 @@ func TestDrawBufferLineShowsDarkerCollapsedSelectionInOverlay(t *testing.T) {
 	}
 }
 
+func TestDrawBufferLineUsesCollapsedCursorTintWhenPulsing(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	state.pulseCursor = true
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, false, theme); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want pulsing cursor to use collapsed-selection tint", got)
+	}
+	if strings.Contains(got, theme.selectionPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want pulsing cursor to avoid normal selection tint", got)
+	}
+}
+
 func TestDrawBufferLineKeepsOneRuneSelectionDistinctFromCollapsedSelection(t *testing.T) {
 	t.Parallel()
 
@@ -1880,6 +1910,43 @@ func TestApplyBufferKeyMovementSyncsDotToService(t *testing.T) {
 	}
 	if got, want := next.dotEnd, 1; got != want {
 		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestApplyBufferKeyUndoPreservesViewportAndPulsesCursor(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			ID:       7,
+			Name:     "alpha.txt",
+			Text:     "line1\nline2\nline3\nline4\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "line1\nline2\nline3\nline4\n",
+		DotStart: 18,
+		DotEnd:   18,
+	})
+	state.origin = 6
+	state.status = "saved"
+
+	next, err := applyBufferKey(svc, state, 21)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := next.origin, 6; got != want {
+		t.Fatalf("origin = %d, want %d", got, want)
+	}
+	if !next.pulseCursor {
+		t.Fatal("pulseCursor = false, want true after undo")
+	}
+	if got, want := next.status, "saved"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
 	}
 }
 

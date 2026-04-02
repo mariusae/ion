@@ -44,7 +44,8 @@ func classifyBufferRedraw(previous, next *bufferState) redrawClass {
 		previous.dotEnd != next.dotEnd ||
 		previous.markMode != next.markMode ||
 		previous.markPos != next.markPos ||
-		previous.flashSelection != next.flashSelection {
+		previous.flashSelection != next.flashSelection ||
+		previous.pulseCursor != next.pulseCursor {
 		if previous.dotStart == previous.dotEnd &&
 			next.dotStart == next.dotEnd &&
 			previous.cursor != next.cursor {

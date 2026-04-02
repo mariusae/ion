@@ -710,7 +710,11 @@ func TestServerNamespaceHelpCommands(t *testing.T) {
 		t.Fatal("NamespaceDocs() returned no providers")
 	}
 	foundDemo := false
+	foundTerm := false
 	for _, doc := range docs {
+		if doc.Namespace == "term" {
+			foundTerm = true
+		}
 		if doc.Namespace != "demolsp" {
 			continue
 		}
@@ -718,10 +722,12 @@ func TestServerNamespaceHelpCommands(t *testing.T) {
 		if got, want := doc.Summary, "demo LSP commands"; got != want {
 			t.Fatalf("demolsp summary = %q, want %q", got, want)
 		}
-		break
 	}
 	if !foundDemo {
 		t.Fatalf("NamespaceDocs() missing demolsp provider: %#v", docs)
+	}
+	if !foundTerm {
+		t.Fatalf("NamespaceDocs() missing term provider: %#v", docs)
 	}
 
 	if _, err := caller.Execute(":ns:list\n"); err != nil {
@@ -747,6 +753,24 @@ func TestServerNamespaceHelpCommands(t *testing.T) {
 	gotNSHelp := stderr.String()
 	if !strings.Contains(gotNSHelp, ":ns\n") || !strings.Contains(gotNSHelp, "Summary: namespace discovery commands\n") || !strings.Contains(gotNSHelp, "Built-in commands for discovering registered namespaces and their documented commands.\n") || !strings.Contains(gotNSHelp, ":ns:list\tlist registered namespaces\n") || !strings.Contains(gotNSHelp, ":ns:show\tlist commands in one namespace\n") {
 		t.Fatalf("stderr after :help :ns = %q", gotNSHelp)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":help :term\n"); err != nil {
+		t.Fatalf("Execute(:help :term) error = %v", err)
+	}
+	gotTermHelp := stderr.String()
+	if !strings.Contains(gotTermHelp, ":term\n") || !strings.Contains(gotTermHelp, "Summary: terminal HUD commands\n") || !strings.Contains(gotTermHelp, "Commands implemented locally by the interactive terminal HUD.") || !strings.Contains(gotTermHelp, ":term:write\tsave the current buffer\n") {
+		t.Fatalf("stderr after :help :term = %q", gotTermHelp)
+	}
+
+	stderr.Reset()
+	if _, err := caller.Execute(":help :term:write\n"); err != nil {
+		t.Fatalf("Execute(:help :term:write) error = %v", err)
+	}
+	gotTermCommandHelp := stderr.String()
+	if !strings.Contains(gotTermCommandHelp, ":term:write\n") || !strings.Contains(gotTermCommandHelp, "Summary: save the current buffer\n") {
+		t.Fatalf("stderr after :help :term:write = %q", gotTermCommandHelp)
 	}
 
 	stderr.Reset()

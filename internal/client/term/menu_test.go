@@ -138,10 +138,10 @@ func TestBuildContextMenuDoesNotDuplicateLatestBuiltInCommand(t *testing.T) {
 		Name: "in.txt",
 	})
 
-	menu := buildContextMenu(state, nil, nil, ":ion:write", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+	menu := buildContextMenu(state, nil, nil, ":term:write", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
 
 	for _, item := range menu.items {
-		if item.kind == menuCommand && item.command == ":ion:write" {
+		if item.kind == menuCommand && item.command == ":term:write" {
 			t.Fatal("unexpected transient latest-command entry for built-in write command")
 		}
 	}

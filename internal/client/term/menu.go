@@ -232,9 +232,9 @@ func latestMenuCommandItem(commands []wire.MenuCommand, latestCommand string, ha
 
 func builtInMenuCommandPresent(command string, hasWrite bool, hasPop bool) bool {
 	switch command {
-	case ":ion:cut", ":ion:snarf", ":ion:paste", ":ion:look", ":ion:regexp", ":ion:plumb":
+	case ":term:cut", ":term:snarf", ":term:paste", ":term:look", ":term:regexp", ":term:plumb":
 		return true
-	case ":ion:write":
+	case ":term:write":
 		return hasWrite
 	case ":ion:pop":
 		return hasPop

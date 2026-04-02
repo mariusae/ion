@@ -33,11 +33,11 @@ type overlayPicker struct {
 	preferred string
 }
 
-func localIonNamespaceDoc() wire.NamespaceProviderDoc {
+func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 	return wire.NamespaceProviderDoc{
-		Namespace: "ion",
-		Summary:   "core ion server and terminal commands",
-		Help:      "Built-in commands implemented directly by ion. Some commands are terminal-local HUD actions that mirror context-menu behavior.",
+		Namespace: "term",
+		Summary:   "terminal HUD commands",
+		Help:      "Commands implemented locally by the interactive terminal HUD. These commands depend on terminal state such as the current selection, token under the cursor, snarf buffer, or tmux pane context.",
 		Commands: []wire.NamespaceCommandDoc{
 			{
 				Name:    "write",
@@ -90,37 +90,37 @@ func localIonNamespaceDoc() wire.NamespaceProviderDoc {
 
 func augmentNamespaceDocs(docs []wire.NamespaceProviderDoc) []wire.NamespaceProviderDoc {
 	out := append([]wire.NamespaceProviderDoc(nil), docs...)
-	local := localIonNamespaceDoc()
-	ionIdx := -1
+	local := localTermNamespaceDoc()
+	termIdx := -1
 	for i := range out {
 		if strings.TrimSpace(out[i].Namespace) == local.Namespace {
-			ionIdx = i
+			termIdx = i
 			break
 		}
 	}
-	if ionIdx < 0 {
+	if termIdx < 0 {
 		out = append(out, local)
 		return out
 	}
-	existing := make(map[string]int, len(out[ionIdx].Commands))
-	for i := range out[ionIdx].Commands {
-		existing[strings.TrimSpace(out[ionIdx].Commands[i].Name)] = i
+	existing := make(map[string]int, len(out[termIdx].Commands))
+	for i := range out[termIdx].Commands {
+		existing[strings.TrimSpace(out[termIdx].Commands[i].Name)] = i
 	}
 	for _, command := range local.Commands {
 		name := strings.TrimSpace(command.Name)
 		if idx, ok := existing[name]; ok {
-			if strings.TrimSpace(out[ionIdx].Commands[idx].Summary) == "" {
-				out[ionIdx].Commands[idx].Summary = command.Summary
+			if strings.TrimSpace(out[termIdx].Commands[idx].Summary) == "" {
+				out[termIdx].Commands[idx].Summary = command.Summary
 			}
-			if strings.TrimSpace(out[ionIdx].Commands[idx].Help) == "" {
-				out[ionIdx].Commands[idx].Help = command.Help
+			if strings.TrimSpace(out[termIdx].Commands[idx].Help) == "" {
+				out[termIdx].Commands[idx].Help = command.Help
 			}
-			if strings.TrimSpace(out[ionIdx].Commands[idx].Args) == "" {
-				out[ionIdx].Commands[idx].Args = command.Args
+			if strings.TrimSpace(out[termIdx].Commands[idx].Args) == "" {
+				out[termIdx].Commands[idx].Args = command.Args
 			}
 			continue
 		}
-		out[ionIdx].Commands = append(out[ionIdx].Commands, command)
+		out[termIdx].Commands = append(out[termIdx].Commands, command)
 	}
 	return out
 }

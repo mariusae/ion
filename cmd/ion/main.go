@@ -284,6 +284,7 @@ func helpText() string {
 		"\n" +
 		"notes:\n" +
 		"  :: is a synonym for :ion:\n" +
+		"  terminal HUD-only commands live under :term:\n" +
 		"  ion :sess:list     is the same as ion -C :sess:list\n" +
 		"  ion ::Q            is the same as ion -C :ion:Q\n"
 }

@@ -8,7 +8,7 @@ import (
 	"ion/internal/proto/wire"
 )
 
-func TestCommandCompletionsFromDocsIncludesLocalIonAndMenuCommands(t *testing.T) {
+func TestCommandCompletionsFromDocsIncludesLocalTermAndMenuCommands(t *testing.T) {
 	t.Parallel()
 
 	completions := commandCompletionsFromDocs([]wire.NamespaceProviderDoc{{
@@ -26,7 +26,7 @@ func TestCommandCompletionsFromDocsIncludesLocalIonAndMenuCommands(t *testing.T)
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":ion:snarf", ":ion:regexp", ":ion:new", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":term:snarf", ":term:regexp", ":term:new", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -67,15 +67,15 @@ func TestOverlayCommandPickerDefaultsToPreferredAndFilters(t *testing.T) {
 	overlay := newOverlayState()
 	overlay.openPicker(overlayModeCommandPicker, []overlayPickerItem{
 		{key: "catalog::help", label: ":help - show detailed help", value: ":help", search: ":help show detailed help"},
-		{key: "catalog::ion:snarf", label: ":ion:snarf - copy the current selection", value: ":ion:snarf", search: ":ion:snarf copy selection"},
+		{key: "catalog::term:snarf", label: ":term:snarf - copy the current selection", value: ":term:snarf", search: ":term:snarf copy selection"},
 		{key: "catalog::lsp:goto", label: ":lsp:goto - jump to definition", value: ":lsp:goto", search: ":lsp:goto jump definition"},
-	}, "catalog::ion:snarf")
+	}, "catalog::term:snarf")
 
 	selected, ok := overlay.pickerSelected()
 	if !ok {
 		t.Fatal("pickerSelected() = false, want selected preferred entry")
 	}
-	if got, want := selected.value, ":ion:snarf"; got != want {
+	if got, want := selected.value, ":term:snarf"; got != want {
 		t.Fatalf("selected value = %q, want %q", got, want)
 	}
 
@@ -147,7 +147,7 @@ func TestOverlayPickerPromptHasNoPrefix(t *testing.T) {
 	}
 }
 
-func TestAugmentNamespaceDocsAddsLocalIonCommands(t *testing.T) {
+func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 	t.Parallel()
 
 	docs := augmentNamespaceDocs([]wire.NamespaceProviderDoc{{
@@ -157,14 +157,24 @@ func TestAugmentNamespaceDocsAddsLocalIonCommands(t *testing.T) {
 			Summary: "quit",
 		}},
 	}})
-	if got, want := len(docs), 1; got != want {
+	if got, want := len(docs), 2; got != want {
 		t.Fatalf("len(docs) = %d, want %d", got, want)
 	}
+	termIdx := -1
+	for i := range docs {
+		if docs[i].Namespace == "term" {
+			termIdx = i
+			break
+		}
+	}
+	if termIdx < 0 {
+		t.Fatalf("missing term namespace in %#v", docs)
+	}
 	var names []string
-	for _, command := range docs[0].Commands {
+	for _, command := range docs[termIdx].Commands {
 		names = append(names, command.Name)
 	}
-	for _, want := range []string{"Q", "write", "cut", "snarf", "paste", "look", "regexp", "plumb", "plumb2", "new"} {
+	for _, want := range []string{"write", "cut", "snarf", "paste", "look", "regexp", "plumb", "plumb2", "new"} {
 		found := false
 		for _, got := range names {
 			if got == want {
@@ -173,7 +183,7 @@ func TestAugmentNamespaceDocsAddsLocalIonCommands(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("missing local ion command %q in %#v", want, names)
+			t.Fatalf("missing local term command %q in %#v", want, names)
 		}
 	}
 	if !reflect.DeepEqual(docs[0].Commands[0], wire.NamespaceCommandDoc{Name: "Q", Summary: "quit"}) {

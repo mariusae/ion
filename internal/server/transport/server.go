@@ -1039,7 +1039,7 @@ func parseSessionCommand(cmd colonCommand) (sessionCommand, bool, error) {
 			return sessionCommand{}, false, nil
 		}
 		return sessionCommand{name: "pop"}, true, nil
-	case "ion:write", "ion:cut", "ion:snarf", "ion:paste", "ion:look", "ion:regexp", "ion:plumb", "ion:plumb2", "ion:new":
+	case "term:write", "term:cut", "term:snarf", "term:paste", "term:look", "term:regexp", "term:plumb", "term:plumb2", "term:new":
 		if cmd.hasRest {
 			return sessionCommand{}, false, nil
 		}
@@ -1476,57 +1476,57 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "remove a shared custom context-menu item",
 			help:    "Removes one previously registered server-global menu item identified by its command text.",
 		}, true
-	case ":ion:write":
+	case ":term:write":
 		return commandHelpDoc{
-			usage:   ":ion:write",
+			usage:   ":term:write",
 			summary: "save the current buffer",
 			help:    "Terminal HUD command that saves the current buffer using the same path as the context-menu write action.",
 		}, true
-	case ":ion:cut":
+	case ":term:cut":
 		return commandHelpDoc{
-			usage:   ":ion:cut",
+			usage:   ":term:cut",
 			summary: "cut the current selection",
 			help:    "Terminal HUD command that cuts the current selection into the snarf buffer and clipboard.",
 		}, true
-	case ":ion:snarf":
+	case ":term:snarf":
 		return commandHelpDoc{
-			usage:   ":ion:snarf",
+			usage:   ":term:snarf",
 			summary: "copy the current selection",
 			help:    "Terminal HUD command that copies the current selection into the snarf buffer and clipboard.",
 		}, true
-	case ":ion:paste":
+	case ":term:paste":
 		return commandHelpDoc{
-			usage:   ":ion:paste",
+			usage:   ":term:paste",
 			summary: "paste the current snarf buffer",
 			help:    "Terminal HUD command that pastes the current snarf buffer at the current selection or cursor.",
 		}, true
-	case ":ion:look":
+	case ":term:look":
 		return commandHelpDoc{
-			usage:   ":ion:look",
+			usage:   ":term:look",
 			summary: "find the current selection or token",
 			help:    "Terminal HUD command that searches forward for the current selection, or the token under the cursor if there is no selection.",
 		}, true
-	case ":ion:regexp":
+	case ":term:regexp":
 		return commandHelpDoc{
-			usage:   ":ion:regexp",
+			usage:   ":term:regexp",
 			summary: "repeat the previous regexp search",
 			help:    "Terminal HUD command that re-runs the most recently used sam regexp search pattern.",
 		}, true
-	case ":ion:plumb":
+	case ":term:plumb":
 		return commandHelpDoc{
-			usage:   ":ion:plumb",
+			usage:   ":term:plumb",
 			summary: "open the current token as a target",
 			help:    "Terminal HUD command that opens the current selection or token under the cursor using B-style target plumbing and pushes the destination onto the navigation stack.",
 		}, true
-	case ":ion:plumb2":
+	case ":term:plumb2":
 		return commandHelpDoc{
-			usage:   ":ion:plumb2",
+			usage:   ":term:plumb2",
 			summary: "open the current token in another session",
 			help:    "Terminal HUD command that opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, it opens a new attached pane as in ion -N.",
 		}, true
-	case ":ion:new":
+	case ":term:new":
 		return commandHelpDoc{
-			usage:   ":ion:new",
+			usage:   ":term:new",
 			summary: "open a new attached pane for the current file",
 			help:    "Terminal HUD command that opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 		}, true
@@ -1570,6 +1570,13 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Summary: "remove a shared custom context-menu item",
 					Help:    "Removes one previously registered server-global menu item identified by its command text.",
 				},
+			},
+		},
+		{
+			Namespace: "term",
+			Summary:   "terminal HUD commands",
+			Help:      "Commands implemented locally by the interactive terminal HUD. These commands depend on terminal state such as the current selection, token under the cursor, snarf buffer, or tmux pane context.",
+			Commands: []wire.NamespaceCommandDoc{
 				{
 					Name:    "write",
 					Summary: "save the current buffer",

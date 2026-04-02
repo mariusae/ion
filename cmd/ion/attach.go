@@ -405,7 +405,7 @@ func (c *paneTrackingClient) OpenNewPane(files []string) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("command :ion:new requires tmux")
+		return fmt.Errorf("command :term:new requires tmux")
 	}
 	cfg := c.cfg
 	cfg.files = append([]string(nil), files...)

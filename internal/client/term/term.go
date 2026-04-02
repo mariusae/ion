@@ -794,7 +794,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	normalizeUICommand := func(line string) string {
-		return strings.TrimSpace(normalizeIonAlias(line))
+		return strings.TrimSpace(normalizeTerminalPseudoAlias(normalizeIonAlias(line)))
 	}
 
 	var runOverlayCommand func(line string, recordHistory bool, revealOnOutput bool) (bool, error)
@@ -866,19 +866,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	uiCommandForMenuItem := func(item menuItem) string {
 		switch item.kind {
 		case menuWrite:
-			return ":ion:write"
+			return ":term:write"
 		case menuCut:
-			return ":ion:cut"
+			return ":term:cut"
 		case menuSnarf:
-			return ":ion:snarf"
+			return ":term:snarf"
 		case menuPaste:
-			return ":ion:paste"
+			return ":term:paste"
 		case menuLook:
-			return ":ion:look"
+			return ":term:look"
 		case menuRegexp:
-			return ":ion:regexp"
+			return ":term:regexp"
 		case menuPlumb:
-			return ":ion:plumb"
+			return ":term:plumb"
 		case menuHistoryPop:
 			return ":ion:pop"
 		case menuCommand:
@@ -889,8 +889,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	executeLocalIonCommand := func(line string) (bool, bool, error) {
-		switch strings.TrimSpace(normalizeIonAlias(line)) {
-		case ":ion:write":
+		switch strings.TrimSpace(normalizeTerminalPseudoAlias(normalizeIonAlias(line))) {
+		case ":term:write":
 			if strings.TrimSpace(buffer.name) == "" {
 				overlay.open("w ")
 				return true, false, nil
@@ -902,22 +902,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			applyStatusResult(msg, lines)
 			return true, false, nil
-		case ":ion:cut":
+		case ":term:cut":
 			if err := cutBufferSelectionLocal(); err != nil {
 				return true, false, err
 			}
 			return true, false, nil
-		case ":ion:snarf":
+		case ":term:snarf":
 			if err := copyBufferSelectionLocal(); err != nil {
 				return true, false, err
 			}
 			return true, false, nil
-		case ":ion:paste":
+		case ":term:paste":
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return true, false, err
 			}
 			return true, false, nil
-		case ":ion:look":
+		case ":term:look":
 			next, ok, err := lookInBuffer(svc, buffer, true)
 			if err != nil {
 				return true, false, err
@@ -929,7 +929,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = "?no match"
 			}
 			return true, false, nil
-		case ":ion:regexp":
+		case ":term:regexp":
 			pattern := parser.LastPatternUTF8()
 			if pattern == "" {
 				buffer.status = "?no previous regexp"
@@ -948,7 +948,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			buffer.status = ""
 			return true, false, nil
-		case ":ion:plumb":
+		case ":term:plumb":
 			token := plumbToken(buffer)
 			if token == "" {
 				return true, false, nil
@@ -957,7 +957,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = diagnosticText(err)
 			}
 			return true, false, nil
-		case ":ion:plumb2":
+		case ":term:plumb2":
 			token := plumbToken(buffer)
 			if token == "" {
 				return true, false, nil
@@ -970,7 +970,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = diagnosticText(err)
 			}
 			return true, false, nil
-		case ":ion:new":
+		case ":term:new":
 			opener, ok := svc.(newPaneOpener)
 			if !ok {
 				return false, false, nil
@@ -1112,7 +1112,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if strings.TrimSpace(line) == "" {
 			return false, nil
 		}
-		line = normalizeIonAlias(line)
+		line = normalizeTerminalPseudoAlias(normalizeIonAlias(line))
 		if handled, done, err := executeLocalIonCommand(line); handled {
 			if recordHistory {
 				overlay.addCommand(strings.TrimSuffix(line, "\n"))
@@ -2483,6 +2483,39 @@ func normalizeStatusResult(status string, captured []string) (string, []string) 
 		appendHUD(line)
 	}
 	return inline, hud
+}
+
+func normalizeTerminalPseudoAlias(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return line
+	}
+	newline := ""
+	if strings.HasSuffix(line, "\n") {
+		newline = "\n"
+	}
+	switch trimmed {
+	case ":ion:write":
+		return ":term:write" + newline
+	case ":ion:cut":
+		return ":term:cut" + newline
+	case ":ion:snarf":
+		return ":term:snarf" + newline
+	case ":ion:paste":
+		return ":term:paste" + newline
+	case ":ion:look":
+		return ":term:look" + newline
+	case ":ion:regexp":
+		return ":term:regexp" + newline
+	case ":ion:plumb":
+		return ":term:plumb" + newline
+	case ":ion:plumb2":
+		return ":term:plumb2" + newline
+	case ":ion:new":
+		return ":term:new" + newline
+	default:
+		return line
+	}
 }
 
 func appendOverlayOutputLines(overlay *overlayState, lines []string, revealOnOutput bool) bool {

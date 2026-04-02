@@ -29,11 +29,11 @@ const lspNamespace = "lsp"
 const maxServerLogEntries = 200
 
 var lspMenuCommands = []wire.MenuCommand{
-	{Command: ":lsp:goto", Label: "symbol"},
+	{Command: ":lsp:goto", Label: "symbol", Shortcut: "g"},
 	{Command: ":lsp:show", Label: "hover"},
 	{Command: ":lsp:gototype", Label: "type"},
 	{Command: ":lsp:usage", Label: "usage"},
-	{Command: ":lsp:fmt", Label: "format"},
+	{Command: ":lsp:fmt", Label: "format", Shortcut: "f"},
 }
 
 func providerDoc() wire.NamespaceProviderDoc {
@@ -400,6 +400,9 @@ func installSharedMenuItems(socketPath string, items []wire.MenuCommand) {
 			line := ":ion:menuadd " + strings.TrimSpace(item.Command)
 			if label := strings.TrimSpace(item.Label); label != "" {
 				line += " " + strconv.Quote(label)
+			}
+			if shortcut := strings.TrimSpace(item.Shortcut); shortcut != "" {
+				line += " " + shortcut
 			}
 			if _, err := session.Execute(line + "\n"); err != nil {
 				return err

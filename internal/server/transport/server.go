@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
@@ -94,6 +95,7 @@ type sessionCommand struct {
 	sessionID uint64
 	arg       string
 	arg2      string
+	arg3      string
 }
 
 type colonCommand struct {
@@ -916,7 +918,7 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
 	case "menuadd":
-		if err := s.addMenuCommand(wire.MenuCommand{Command: cmd.arg, Label: cmd.arg2}); err != nil {
+		if err := s.addMenuCommand(wire.MenuCommand{Command: cmd.arg, Label: cmd.arg2, Shortcut: cmd.arg3}); err != nil {
 			return writeError(conn, frame.RequestID, frame.SessionID, err)
 		}
 		if s.changeNotify != nil {
@@ -1021,11 +1023,11 @@ func parseSessionCommand(cmd colonCommand) (sessionCommand, bool, error) {
 		if !cmd.hasRest {
 			return sessionCommand{}, false, nil
 		}
-		command, label, err := parseMenuAddArgs(arg)
+		command, label, shortcut, err := parseMenuAddArgs(arg)
 		if err != nil {
 			return sessionCommand{}, true, err
 		}
-		return sessionCommand{name: "menuadd", arg: command, arg2: label}, true, nil
+		return sessionCommand{name: "menuadd", arg: command, arg2: label, arg3: shortcut}, true, nil
 	case "ion:push":
 		if !cmd.hasRest {
 			return sessionCommand{}, false, nil
@@ -1158,22 +1160,26 @@ func shouldMarkActive(msg any) bool {
 	}
 }
 
-func parseMenuAddArgs(text string) (command string, label string, err error) {
+func parseMenuAddArgs(text string) (command string, label string, shortcut string, err error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return "", "", fmt.Errorf("menu command expected")
+		return "", "", "", fmt.Errorf("menu command expected")
 	}
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
-		return "", "", fmt.Errorf("menu command expected")
+		return "", "", "", fmt.Errorf("menu command expected")
 	}
 	command = fields[0]
 	if !validMenuCommand(command) {
-		return "", "", fmt.Errorf("bad menu command %q", command)
+		return "", "", "", fmt.Errorf("bad menu command %q", command)
 	}
 	rest := strings.TrimSpace(text[len(command):])
 	if rest == "" {
-		return command, command, nil
+		return command, command, "", nil
+	}
+	shortcut, rest, err = splitMenuAddShortcut(rest)
+	if err != nil {
+		return "", "", "", err
 	}
 	if unquoted, unquoteErr := strconv.Unquote(rest); unquoteErr == nil {
 		label = strings.TrimSpace(unquoted)
@@ -1183,7 +1189,7 @@ func parseMenuAddArgs(text string) (command string, label string, err error) {
 	if label == "" {
 		label = command
 	}
-	return command, label, nil
+	return command, label, shortcut, nil
 }
 
 func validMenuCommand(command string) bool {
@@ -1200,9 +1206,14 @@ func normalizeMenuCommand(item wire.MenuCommand) (wire.MenuCommand, error) {
 	if label == "" {
 		label = command
 	}
+	shortcut, err := normalizeMenuShortcut(item.Shortcut)
+	if err != nil {
+		return wire.MenuCommand{}, err
+	}
 	return wire.MenuCommand{
-		Command: command,
-		Label:   label,
+		Command:  command,
+		Label:    label,
+		Shortcut: shortcut,
 	}, nil
 }
 
@@ -1214,6 +1225,9 @@ func (s *Server) addMenuCommand(item wire.MenuCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.menuCommands {
+		if normalized.Shortcut != "" && s.menuCommands[i].Command != normalized.Command && strings.EqualFold(s.menuCommands[i].Shortcut, normalized.Shortcut) {
+			return fmt.Errorf("menu shortcut %q already used by %s", normalized.Shortcut, s.menuCommands[i].Command)
+		}
 		if s.menuCommands[i].Command != normalized.Command {
 			continue
 		}
@@ -1222,6 +1236,71 @@ func (s *Server) addMenuCommand(item wire.MenuCommand) error {
 	}
 	s.menuCommands = append(s.menuCommands, normalized)
 	return nil
+}
+
+func splitMenuAddShortcut(rest string) (shortcut, label string, err error) {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", "", nil
+	}
+	if rest[0] == '"' || rest[0] == '`' {
+		quoted, tail, ok := splitQuotedPrefix(rest)
+		if !ok {
+			return "", "", fmt.Errorf("bad menu label %q", rest)
+		}
+		tail = strings.TrimSpace(tail)
+		if tail == "" {
+			return "", quoted, nil
+		}
+		shortcut, err := normalizeMenuShortcut(tail)
+		if err != nil {
+			return "", "", err
+		}
+		return shortcut, quoted, nil
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 1 {
+		if shortcut, err := normalizeMenuShortcut(fields[0]); err == nil {
+			return shortcut, "", nil
+		}
+		return "", rest, nil
+	}
+	last := fields[len(fields)-1]
+	shortcut, err = normalizeMenuShortcut(last)
+	if err != nil {
+		return "", rest, nil
+	}
+	idx := strings.LastIndex(rest, last)
+	if idx < 0 {
+		return "", "", fmt.Errorf("bad menuadd args %q", rest)
+	}
+	return shortcut, strings.TrimSpace(rest[:idx]), nil
+}
+
+func splitQuotedPrefix(text string) (quoted string, tail string, ok bool) {
+	if text == "" {
+		return "", "", false
+	}
+	for i := 1; i <= len(text); i++ {
+		unquoted, err := strconv.Unquote(text[:i])
+		if err != nil {
+			continue
+		}
+		return unquoted, text[i:], true
+	}
+	return "", "", false
+}
+
+func normalizeMenuShortcut(shortcut string) (string, error) {
+	shortcut = strings.TrimSpace(shortcut)
+	if shortcut == "" {
+		return "", nil
+	}
+	runes := []rune(shortcut)
+	if len(runes) != 1 || !unicode.IsLetter(runes[0]) {
+		return "", fmt.Errorf("bad menu shortcut %q", shortcut)
+	}
+	return string(unicode.ToLower(runes[0])), nil
 }
 
 func (s *Server) removeMenuCommand(command string) {
@@ -1454,9 +1533,9 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 		}, true
 	case ":ion:menuadd":
 		return commandHelpDoc{
-			usage:   `:ion:menuadd <command> ["label"]`,
+			usage:   `:ion:menuadd <command> ["label"] [letter]`,
 			summary: "add a shared custom context-menu item",
-			help:    "Registers one server-global menu item for all attached clients. The first argument is the command to run when the item is selected. The optional label defaults to the command text.",
+			help:    "Registers one server-global menu item for all attached clients. The first argument is the command to run when the item is selected. The optional label defaults to the command text. The optional final single-letter shortcut binds the item to M-<letter> in the keyboard menu.",
 		}, true
 	case ":ion:push":
 		return commandHelpDoc{
@@ -1549,9 +1628,9 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 				},
 				{
 					Name:    "menuadd",
-					Args:    `<command> ["label"]`,
+					Args:    `<command> ["label"] [letter]`,
 					Summary: "add a shared custom context-menu item",
-					Help:    "Registers one server-global menu item for all attached clients. The optional label defaults to the command text.",
+					Help:    "Registers one server-global menu item for all attached clients. The optional label defaults to the command text. The optional final single-letter shortcut binds the item to M-<letter> in the keyboard menu.",
 				},
 				{
 					Name:    "push",

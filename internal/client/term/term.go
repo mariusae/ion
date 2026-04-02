@@ -1269,6 +1269,25 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return true, false, redraw(renderRequestForLayers(redrawMenuClose, renderInvalidateAllLayers))
 	}
 
+	executeGlobalMenuMetaShortcut := func(r rune) (bool, bool, error) {
+		snapshot, err := loadMenuSnapshot(svc)
+		if err != nil {
+			return false, false, err
+		}
+		command, ok := menuCommandByMetaShortcut(snapshot.Commands, r)
+		if !ok || strings.TrimSpace(command.Command) == "" {
+			return false, false, nil
+		}
+		done, err := runOverlayCommand(strings.TrimSpace(command.Command), true, true)
+		if err != nil {
+			return true, false, err
+		}
+		if done {
+			return true, true, nil
+		}
+		return true, false, allLayersRedraw(redrawRefresh)
+	}
+
 	handleMenuMouse := func(event mouseEvent) (bool, error) {
 		if renderer != nil && renderer.trace != nil {
 			renderer.trace.Printf("menu-mouse button=%d repeat=%d pressed=%t x=%d y=%d visible=%t hover=%d suspect=%t sawHover=%t", event.button, event.count(), event.pressed, event.x, event.y, menu.visible, menu.hover, menuLostReleaseSuspect, menuSawHover)
@@ -2330,6 +2349,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				key, mouse, err := readBufferEscape(reader, stdin)
 				if err != nil {
 					return err
+				}
+				if meta, ok := metaRune(key); ok {
+					handled, done, err := executeGlobalMenuMetaShortcut(meta)
+					if err != nil {
+						return err
+					}
+					if handled {
+						if done {
+							return nil
+						}
+						continue
+					}
 				}
 				key = legacyAltKey(key)
 				if key != keyFocusIn && key != keyFocusOut {

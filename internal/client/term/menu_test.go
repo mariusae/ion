@@ -293,7 +293,7 @@ func TestBuildContextMenuAssignsMenuShortcuts(t *testing.T) {
 		{ID: 1, Name: "short.go", Path: "/tmp/project/pkg/target/short.go"},
 		{ID: 2, Name: "other.go", Path: "/tmp/project/pkg/other/other.go", Current: true},
 	}, []wire.MenuCommand{
-		{Command: ":lsp:goto", Label: "symbol"},
+		{Command: ":lsp:goto", Label: "symbol", Shortcut: "g"},
 		{Command: ":lsp:show", Label: "hover"},
 	}, "!ls", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
 
@@ -307,7 +307,7 @@ func TestBuildContextMenuAssignsMenuShortcuts(t *testing.T) {
 			gotFileShortcuts = append(gotFileShortcuts, item.shortcut)
 		}
 	}
-	if got, want := strings.Join(gotCommandShortcuts, ","), "(M-a),(M-b),(M-c)"; got != want {
+	if got, want := strings.Join(gotCommandShortcuts, ","), "(M-g),,"; got != want {
 		t.Fatalf("command shortcuts = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(gotFileShortcuts, ","), "(1),(2)"; got != want {
@@ -322,8 +322,8 @@ func TestMenuShortcutLookup(t *testing.T) {
 		visible: true,
 		items: []menuItem{
 			{label: " look", shortcut: "(l)", kind: menuLook},
-			{label: " symbol", shortcut: "(M-a)", kind: menuCommand, command: ":lsp:goto"},
-			{label: " hover", shortcut: "(M-b)", kind: menuCommand, command: ":lsp:show"},
+			{label: " symbol", shortcut: "(M-g)", keyRune: 'g', kind: menuCommand, command: ":lsp:goto"},
+			{label: " hover", shortcut: "(M-h)", keyRune: 'h', kind: menuCommand, command: ":lsp:show"},
 			{label: " '. main.go", shortcut: "(1)", kind: menuFile, fileID: 1, current: true},
 			{label: "    util.go", shortcut: "(2)", kind: menuFile, fileID: 2},
 		},
@@ -341,9 +341,9 @@ func TestMenuShortcutLookup(t *testing.T) {
 		t.Fatalf("builtin shortcut kind = %v, want %v", got, want)
 	}
 
-	item, idx, ok = menu.itemForMetaShortcut('b')
+	item, idx, ok = menu.itemForMetaShortcut('h')
 	if !ok {
-		t.Fatal("itemForMetaShortcut('b') = false, want true")
+		t.Fatal("itemForMetaShortcut('h') = false, want true")
 	}
 	if got, want := idx, 2; got != want {
 		t.Fatalf("meta command index = %d, want %d", got, want)
@@ -361,6 +361,28 @@ func TestMenuShortcutLookup(t *testing.T) {
 	}
 	if got, want := item.fileID, 2; got != want {
 		t.Fatalf("file shortcut fileID = %d, want %d", got, want)
+	}
+}
+
+func TestMenuCommandByMetaShortcutUsesExplicitShortcutOnly(t *testing.T) {
+	t.Parallel()
+
+	command, ok := menuCommandByMetaShortcut([]wire.MenuCommand{
+		{Command: ":lsp:goto", Label: "symbol", Shortcut: "g"},
+		{Command: ":lsp:show", Label: "hover"},
+	}, 'g')
+	if !ok {
+		t.Fatal("menuCommandByMetaShortcut('g') = false, want true")
+	}
+	if got, want := command.Command, ":lsp:goto"; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+
+	if _, ok := menuCommandByMetaShortcut([]wire.MenuCommand{
+		{Command: ":lsp:goto", Label: "symbol", Shortcut: "g"},
+		{Command: ":lsp:show", Label: "hover"},
+	}, 'h'); ok {
+		t.Fatal("menuCommandByMetaShortcut('h') = true, want false without explicit shortcut")
 	}
 }
 

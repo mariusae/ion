@@ -1096,6 +1096,9 @@ func (m *MenuFilesMessage) MarshalBinary() ([]byte, error) {
 		if err := writeString(&b, cmd.Label); err != nil {
 			return nil, err
 		}
+		if err := writeString(&b, cmd.Shortcut); err != nil {
+			return nil, err
+		}
 	}
 	return b.Bytes(), nil
 }
@@ -1155,9 +1158,14 @@ func (m *MenuFilesMessage) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return err
 		}
+		shortcut, err := readString(r)
+		if err != nil {
+			return err
+		}
 		commands = append(commands, MenuCommand{
-			Command: command,
-			Label:   label,
+			Command:  command,
+			Label:    label,
+			Shortcut: shortcut,
 		})
 	}
 	if r.Len() != 0 {

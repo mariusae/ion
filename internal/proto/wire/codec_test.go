@@ -193,7 +193,7 @@ func TestBufferAndMenuMessagesRoundTrip(t *testing.T) {
 			{ID: 1, Name: "", Path: "", Dirty: true, Current: false},
 		},
 		Commands: []MenuCommand{
-			{Command: ":lsp:goto", Label: "symbol"},
+			{Command: ":lsp:goto", Label: "symbol", Shortcut: "g"},
 			{Command: ":lsp:show", Label: ":lsp:show"},
 		},
 	}

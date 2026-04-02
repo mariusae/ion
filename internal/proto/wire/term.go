@@ -27,8 +27,9 @@ type MenuFile struct {
 
 // MenuCommand is one shared custom menu action exposed by the server.
 type MenuCommand struct {
-	Command string
-	Label   string
+	Command  string
+	Label    string
+	Shortcut string
 }
 
 // MenuSnapshot is the full context-menu model shared with terminal clients.

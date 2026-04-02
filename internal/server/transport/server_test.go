@@ -941,7 +941,7 @@ func TestServerMenuAddAndDeleteCommandsAffectSharedMenuSnapshot(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
 
-	if _, err := caller.Execute(":ion:menuadd :lsp:goto \"symbol\"\n"); err != nil {
+	if _, err := caller.Execute(":ion:menuadd :lsp:goto \"symbol\" g\n"); err != nil {
 		t.Fatalf("Execute(:ion:menuadd) error = %v", err)
 	}
 	snapshot, err := caller.MenuSnapshot()
@@ -957,6 +957,9 @@ func TestServerMenuAddAndDeleteCommandsAffectSharedMenuSnapshot(t *testing.T) {
 	if got, want := snapshot.Commands[0].Label, "symbol"; got != want {
 		t.Fatalf("label = %q, want %q", got, want)
 	}
+	if got, want := snapshot.Commands[0].Shortcut, "g"; got != want {
+		t.Fatalf("shortcut = %q, want %q", got, want)
+	}
 
 	if _, err := caller.Execute(":ion:menuadd :lsp:show\n"); err != nil {
 		t.Fatalf("Execute(:ion:menuadd default label) error = %v", err)
@@ -970,6 +973,9 @@ func TestServerMenuAddAndDeleteCommandsAffectSharedMenuSnapshot(t *testing.T) {
 	}
 	if got, want := snapshot.Commands[1].Label, ":lsp:show"; got != want {
 		t.Fatalf("default label = %q, want %q", got, want)
+	}
+	if got := snapshot.Commands[1].Shortcut; got != "" {
+		t.Fatalf("default shortcut = %q, want empty", got)
 	}
 
 	if _, err := caller.Execute(":ion:menudel :lsp:goto\n"); err != nil {

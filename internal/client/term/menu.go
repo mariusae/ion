@@ -27,6 +27,7 @@ const (
 type menuItem struct {
 	label    string
 	shortcut string
+	keyRune  rune
 	kind     menuItemKind
 	fileID   int
 	command  string
@@ -87,7 +88,6 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
 		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp, sepAfter: true},
 	)
-	commandShortcutIndex := 0
 	for i, cmd := range commands {
 		label := strings.TrimSpace(cmd.Label)
 		if label == "" {
@@ -97,12 +97,14 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 			continue
 		}
 		item := menuItem{
-			label:    " " + label,
-			kind:     menuCommand,
-			command:  strings.TrimSpace(cmd.Command),
-			shortcut: menuCommandShortcutLabel(commandShortcutIndex),
+			label:   " " + label,
+			kind:    menuCommand,
+			command: strings.TrimSpace(cmd.Command),
 		}
-		commandShortcutIndex++
+		if shortcut, ok := menuCommandShortcutRune(cmd.Shortcut); ok {
+			item.keyRune = shortcut
+			item.shortcut = menuCommandShortcutLabel(shortcut)
+		}
 		if i == len(commands)-1 {
 			item.sepAfter = true
 		}
@@ -112,8 +114,6 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		if len(menu.items) > 0 {
 			menu.items[len(menu.items)-1].sepAfter = false
 		}
-		item.shortcut = menuCommandShortcutLabel(commandShortcutIndex)
-		commandShortcutIndex++
 		item.sepAfter = true
 		menu.items = append(menu.items, item)
 	}
@@ -628,18 +628,37 @@ func menuItemIndexByKind(items []menuItem, kind menuItemKind) int {
 	return -1
 }
 
-func menuCommandShortcutLabel(index int) string {
-	if r, ok := menuCommandShortcutRune(index); ok {
-		return fmt.Sprintf("(M-%c)", r)
+func menuCommandShortcutLabel(r rune) string {
+	if r == 0 {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("(M-%c)", r)
 }
 
-func menuCommandShortcutRune(index int) (rune, bool) {
-	if index < 0 || index >= 26 {
+func menuCommandShortcutRune(shortcut string) (rune, bool) {
+	runes := []rune(strings.TrimSpace(shortcut))
+	if len(runes) != 1 {
 		return 0, false
 	}
-	return rune('a' + index), true
+	r := runes[0]
+	if r >= 'A' && r <= 'Z' {
+		r = r - 'A' + 'a'
+	}
+	if r < 'a' || r > 'z' {
+		return 0, false
+	}
+	return r, true
+}
+
+func menuCommandByMetaShortcut(commands []wire.MenuCommand, r rune) (wire.MenuCommand, bool) {
+	for _, command := range commands {
+		shortcut, ok := menuCommandShortcutRune(command.Shortcut)
+		if !ok || shortcut != r {
+			continue
+		}
+		return command, true
+	}
+	return wire.MenuCommand{}, false
 }
 
 func menuFileShortcutLabel(index int) string {
@@ -706,15 +725,13 @@ func (m *menuState) itemForMetaShortcut(r rune) (menuItem, int, bool) {
 	if m == nil {
 		return menuItem{}, -1, false
 	}
-	commandIndex := 0
 	for i, item := range m.items {
 		if item.kind != menuCommand {
 			continue
 		}
-		if shortcut, ok := menuCommandShortcutRune(commandIndex); ok && shortcut == r {
+		if item.keyRune == r {
 			return item, i, true
 		}
-		commandIndex++
 	}
 	return menuItem{}, -1, false
 }

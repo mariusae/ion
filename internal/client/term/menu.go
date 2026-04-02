@@ -364,23 +364,40 @@ func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill run
 }
 
 func formatMenuItemLine(item menuItem, inner int) string {
-	content := item.label
+	label := fitMenuItemLabel(item, inner)
+	content := label
 	if item.shortcut != "" {
-		padding := inner - len([]rune(item.label)) - len([]rune(item.shortcut)) - 1
+		padding := inner - len([]rune(label)) - len([]rune(item.shortcut))
 		if padding < 1 {
 			padding = 1
 		}
 		content += strings.Repeat(" ", padding) + item.shortcut
 	}
-	runes := []rune(content)
-	if len(runes) > inner {
-		runes = runes[len(runes)-inner:]
-	}
-	content = string(runes)
 	if pad := inner - len([]rune(content)); pad > 0 {
 		content += strings.Repeat(" ", pad)
 	}
 	return "│" + content + "│"
+}
+
+func fitMenuItemLabel(item menuItem, inner int) string {
+	label := []rune(item.label)
+	limit := inner
+	if item.shortcut != "" {
+		limit -= len([]rune(item.shortcut)) + 1
+	}
+	if limit <= 0 || len(label) <= limit {
+		return string(label)
+	}
+	if item.kind == menuFile {
+		const filePrefixRunes = 4
+		if limit <= filePrefixRunes {
+			return string(label[:limit])
+		}
+		prefix := label[:filePrefixRunes]
+		suffix := label[len(label)-(limit-filePrefixRunes):]
+		return string(prefix) + string(suffix)
+	}
+	return string(label[:limit])
 }
 
 func (m *menuState) itemAt(x, y int) int {

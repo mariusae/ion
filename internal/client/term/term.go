@@ -1532,6 +1532,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		switch key {
+		case metaKey('!'):
+			overlay.open("!")
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case metaKey('\''):
 			overlay.open("\"")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)

@@ -301,12 +301,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 	defer exitBufferMode(stdout)
 
-	applyBufferView := func(view wire.BufferView) {
+	applyBufferViewWithReveal := func(view wire.BufferView, revealDestination bool) {
 		previous := buffer
 		buffer = bufferStateFromView(view, buffer, scrollOrigins)
 		refreshCurrentBufferDirty(svc, buffer)
-		buffer = revealOverlaySelection(previous, buffer, overlay)
+		if revealDestination {
+			buffer = revealBufferDestination(previous, buffer, overlay, true, true)
+		} else {
+			buffer = revealOverlaySelection(previous, buffer, overlay)
+		}
 		renderQueue.Request(classifyBufferRenderRequest(previous, buffer, overlay, menu, focused))
+	}
+	applyBufferView := func(view wire.BufferView) {
+		applyBufferViewWithReveal(view, false)
+	}
+	applyBufferViewReveal := func(view wire.BufferView) {
+		applyBufferViewWithReveal(view, true)
 	}
 
 	showOverlayDiagnostic := func(message string) {
@@ -482,7 +492,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return executePending(false, nil)
 	}
 
-	refreshBuffer = func() error {
+	refreshBufferWithReveal := func(revealDestination bool) error {
 		prevChanged := false
 		if buffer != nil {
 			prevChanged = buffer.diskChanged
@@ -495,11 +505,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return err
 		}
-		applyBufferView(view)
+		if revealDestination {
+			applyBufferViewReveal(view)
+		} else {
+			applyBufferView(view)
+		}
 		if buffer != nil && buffer.dirty && buffer.diskChanged && !prevChanged {
 			buffer.status = "?warning: file changed on disk"
 		}
 		return nil
+	}
+	refreshBuffer = func() error {
+		return refreshBufferWithReveal(false)
 	}
 
 	syncBufferDot := func() error {
@@ -769,7 +786,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if done {
 			return nil
 		}
-		if err := refreshBuffer(); err != nil {
+		if err := refreshBufferWithReveal(true); err != nil {
 			return err
 		}
 		if buffer != nil {
@@ -1000,6 +1017,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if recordHistory {
 			overlay.addCommand(historyLine)
 		}
+		revealDestination := commandRevealsDestination(historyLine)
 		pending = append(pending, []rune(line)...)
 		overlay.resetInput()
 		queue := newOverlayOutputQueue()
@@ -1084,7 +1102,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return false, result.err
 				}
 				if !result.done {
-					if err := refreshBuffer(); err != nil {
+					if err := refreshBufferWithReveal(revealDestination); err != nil {
 						return false, err
 					}
 				}
@@ -3680,19 +3698,28 @@ func bufferInactive(overlay *overlayState, menu *menuState, focused bool) bool {
 	return overlay != nil && overlay.visible
 }
 
-func revealOverlaySelection(previous, next *bufferState, overlay *overlayState) *bufferState {
-	if next == nil || overlay == nil || !overlay.visible {
+func revealBufferDestination(previous, next *bufferState, overlay *overlayState, allowFileSwitch, force bool) *bufferState {
+	if next == nil {
 		return next
 	}
-	if previous == nil || previous.fileID != next.fileID {
-		return next
-	}
-	if previous.dotStart == next.dotStart && previous.dotEnd == next.dotEnd {
-		return next
+	if previous != nil {
+		if previous.fileID != next.fileID && !allowFileSwitch {
+			return next
+		}
+		if !force && previous.fileID == next.fileID && previous.dotStart == next.dotStart && previous.dotEnd == next.dotEnd {
+			return next
+		}
 	}
 	rows := bufferViewRows(overlay)
 	next.origin = adjustOriginForCursor(next.text, next.origin, next.dotStart, rows)
 	return next
+}
+
+func revealOverlaySelection(previous, next *bufferState, overlay *overlayState) *bufferState {
+	if next == nil || overlay == nil || !overlay.visible {
+		return next
+	}
+	return revealBufferDestination(previous, next, overlay, false, false)
 }
 
 func handleBufferKey(state *bufferState, key int) {
@@ -3801,6 +3828,27 @@ func adjustOriginForCursor(text []rune, origin, cursor, rows int) int {
 		centered = prev
 	}
 	return centered
+}
+
+func commandRevealsDestination(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(trimmed, "::") {
+		prefixLen := len(line) - len(trimmed)
+		line = line[:prefixLen] + ":ion:" + trimmed[2:]
+	}
+	line = strings.TrimSpace(normalizeRawCommandScript(line))
+	switch {
+	case line == "P", line == "N":
+		return true
+	case line == ":ion:pop":
+		return true
+	case strings.HasPrefix(line, ":ion:push "):
+		return true
+	case line == ":lsp:goto", line == ":lsp:gototype":
+		return true
+	default:
+		return false
+	}
 }
 
 func moveLineUp(text []rune, pos int) int {

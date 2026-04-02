@@ -1640,6 +1640,85 @@ func TestRevealOverlaySelectionPreservesOriginAcrossFileSwitches(t *testing.T) {
 	}
 }
 
+func TestRevealBufferDestinationAcrossFileSwitchesMakesDotVisible(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows = prevRows
+		termCols = prevCols
+	})
+
+	previous := &bufferState{fileID: 7, origin: 0, dotStart: 0, dotEnd: 0}
+	next := newBufferState(wire.BufferView{
+		ID:       8,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 24,
+		DotEnd:   29,
+	})
+	next.origin = 0
+
+	revealed := revealBufferDestination(previous, next, nil, true, true)
+	if !bufferPosVisible(revealed, nil, revealed.dotStart) {
+		t.Fatalf("dotStart %d not visible after reveal across file switch; origin=%d", revealed.dotStart, revealed.origin)
+	}
+}
+
+func TestRevealBufferDestinationForceRecentersWhenDotAlreadyUpdated(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows = prevRows
+		termCols = prevCols
+	})
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 24,
+		DotEnd:   29,
+	})
+	previous.origin = 0
+	next := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 24,
+		DotEnd:   29,
+	})
+	next.origin = 0
+
+	revealed := revealBufferDestination(previous, next, nil, true, true)
+	if !bufferPosVisible(revealed, nil, revealed.dotStart) {
+		t.Fatalf("dotStart %d not visible after forced reveal; origin=%d", revealed.dotStart, revealed.origin)
+	}
+}
+
+func TestCommandRevealsDestination(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{line: "P", want: true},
+		{line: "N", want: true},
+		{line: ":ion:pop", want: true},
+		{line: ":ion:push foo.go:12", want: true},
+		{line: "::pop", want: true},
+		{line: ":lsp:goto", want: true},
+		{line: ":lsp:gototype", want: true},
+		{line: ":ion:write", want: false},
+		{line: "B foo.go", want: false},
+	} {
+		if got := commandRevealsDestination(tc.line); got != tc.want {
+			t.Fatalf("commandRevealsDestination(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
 func bufferPosVisible(state *bufferState, overlay *overlayState, pos int) bool {
 	if state == nil {
 		return false

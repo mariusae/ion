@@ -339,7 +339,7 @@ func (s *TermSession) OpenTarget(path, address string) (wire.BufferView, error) 
 	if curErr == nil && ((current.Path != "" && current.Path == path) || current.Name == path) {
 		view = current
 	} else {
-		if err := s.ws.OpenFilesPathsNoNameless(s.state, []string{path}, s.stdout, s.stderr); err != nil {
+		if err := s.ws.OpenFilesPathsNoNameless(s.state, []string{path}, io.Discard, io.Discard); err != nil {
 			return wire.BufferView{}, err
 		}
 		view, err = s.ws.CurrentView(s.state)

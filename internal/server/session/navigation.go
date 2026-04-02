@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"ion/internal/proto/wire"
@@ -113,18 +114,9 @@ func (s *DownloadSession) navigate(delta int) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	before, err := s.ws.CurrentView(s.state)
+	_, err := restoreNavigationPoint(s, target)
 	if err != nil {
 		return false, err
-	}
-	after, err := restoreNavigationPoint(s, target)
-	if err != nil {
-		return false, err
-	}
-	if before.ID != after.ID || before.Name != after.Name {
-		if err := s.ws.PrintCurrentStatus(s.state, s.stdout, s.stderr); err != nil {
-			return false, err
-		}
 	}
 	s.history.index = nextIndex
 	return true, nil
@@ -244,7 +236,7 @@ func restoreNavigationPoint(s *DownloadSession, point navigationPoint) (wire.Buf
 	if point.name == "" {
 		return wire.BufferView{}, err
 	}
-	view, err = s.ws.OpenFiles(s.state, []string{point.name}, s.stdout, s.stderr)
+	view, err = s.ws.OpenFiles(s.state, []string{point.name}, io.Discard, io.Discard)
 	if err != nil {
 		return wire.BufferView{}, err
 	}

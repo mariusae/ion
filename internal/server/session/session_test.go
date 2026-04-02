@@ -101,6 +101,9 @@ func TestTermSessionNavigationCommandsTrackFileHistory(t *testing.T) {
 	if _, err := sess.PushTarget([]string{goMod}); err != nil {
 		t.Fatalf("PushTarget(go.mod) error = %v", err)
 	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr after PushTarget = %q, want empty", got)
+	}
 	stderr.Reset()
 	view, err := sess.CurrentView()
 	if err != nil {
@@ -113,8 +116,8 @@ func TestTermSessionNavigationCommandsTrackFileHistory(t *testing.T) {
 	if _, err := sess.Execute("P\n"); err != nil {
 		t.Fatalf("Execute(P) error = %v", err)
 	}
-	if got, want := stderr.String(), " -. "+readme+"\n"; got != want {
-		t.Fatalf("stderr after P = %q, want %q", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr after P = %q, want empty", got)
 	}
 	stderr.Reset()
 	view, err = sess.CurrentView()
@@ -128,8 +131,8 @@ func TestTermSessionNavigationCommandsTrackFileHistory(t *testing.T) {
 	if _, err := sess.Execute("N\n"); err != nil {
 		t.Fatalf("Execute(N) error = %v", err)
 	}
-	if got, want := stderr.String(), " -. "+goMod+"\n"; got != want {
-		t.Fatalf("stderr after N = %q, want %q", got, want)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr after N = %q, want empty", got)
 	}
 	view, err = sess.CurrentView()
 	if err != nil {

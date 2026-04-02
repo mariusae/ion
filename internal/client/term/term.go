@@ -1492,6 +1492,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		switch key {
+		case metaKey('\''):
+			overlay.open("\"")
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case keyAltSnarf:
 			if err := copyBufferSelectionLocal(); err != nil {
 				return false, err
@@ -2628,15 +2631,12 @@ func extractRawCommand(pending []rune, final bool) (string, int, bool) {
 }
 
 func isRawCommandScript(script string) bool {
-	if strings.HasPrefix(script, ":") {
-		return true
-	}
 	trimmed := strings.TrimSpace(script)
-	return trimmed == "Q" || trimmed == ":ion:Q"
+	return trimmed == "Q" || trimmed == ":ion:Q" || trimmed == "::Q"
 }
 
 func normalizeRawCommandScript(script string) string {
-	if trimmed := strings.TrimSpace(script); trimmed == "Q" || trimmed == ":ion:Q" {
+	if trimmed := strings.TrimSpace(script); trimmed == "Q" || trimmed == ":ion:Q" || trimmed == "::Q" {
 		return ":ion:Q\n"
 	}
 	return script

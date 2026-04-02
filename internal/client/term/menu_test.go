@@ -259,7 +259,7 @@ func TestBuildContextMenuStickyFileHoverPrefersPreviousFile(t *testing.T) {
 	}
 }
 
-func TestBuildContextMenuAssignsMetaShortcuts(t *testing.T) {
+func TestBuildContextMenuAssignsMenuShortcuts(t *testing.T) {
 	t.Parallel()
 
 	state := newBufferState(wire.BufferView{
@@ -288,7 +288,7 @@ func TestBuildContextMenuAssignsMetaShortcuts(t *testing.T) {
 	if got, want := strings.Join(gotCommandShortcuts, ","), "(M-a),(M-b),(M-c)"; got != want {
 		t.Fatalf("command shortcuts = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(gotFileShortcuts, ","), "(M-1),(M-2)"; got != want {
+	if got, want := strings.Join(gotFileShortcuts, ","), "(1),(2)"; got != want {
 		t.Fatalf("file shortcuts = %q, want %q", got, want)
 	}
 }
@@ -302,8 +302,8 @@ func TestMenuShortcutLookup(t *testing.T) {
 			{label: " look", shortcut: "(l)", kind: menuLook},
 			{label: " symbol", shortcut: "(M-a)", kind: menuCommand, command: ":lsp:goto"},
 			{label: " hover", shortcut: "(M-b)", kind: menuCommand, command: ":lsp:show"},
-			{label: " '. main.go", shortcut: "(M-1)", kind: menuFile, fileID: 1, current: true},
-			{label: "    util.go", shortcut: "(M-2)", kind: menuFile, fileID: 2},
+			{label: " '. main.go", shortcut: "(1)", kind: menuFile, fileID: 1, current: true},
+			{label: "    util.go", shortcut: "(2)", kind: menuFile, fileID: 2},
 		},
 		hover: 0,
 	}
@@ -330,15 +330,15 @@ func TestMenuShortcutLookup(t *testing.T) {
 		t.Fatalf("meta command = %q, want %q", got, want)
 	}
 
-	item, idx, ok = menu.itemForMetaShortcut('2')
+	item, idx, ok = menu.itemForShortcut('2')
 	if !ok {
-		t.Fatal("itemForMetaShortcut('2') = false, want true")
+		t.Fatal("itemForShortcut('2') = false, want true")
 	}
 	if got, want := idx, 4; got != want {
-		t.Fatalf("meta file index = %d, want %d", got, want)
+		t.Fatalf("file shortcut index = %d, want %d", got, want)
 	}
 	if got, want := item.fileID, 2; got != want {
-		t.Fatalf("meta fileID = %d, want %d", got, want)
+		t.Fatalf("file shortcut fileID = %d, want %d", got, want)
 	}
 }
 

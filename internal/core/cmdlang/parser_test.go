@@ -128,6 +128,22 @@ func TestParsePreservesLastPatternAcrossReset(t *testing.T) {
 	}
 }
 
+func TestParseNamespacedCommand(t *testing.T) {
+	t.Parallel()
+
+	p := NewParser(":help :ns\n")
+	cmd, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cmd.Cmdc != ':' {
+		t.Fatalf("Cmdc = %q, want ':'", cmd.Cmdc)
+	}
+	if cmd.Text == nil || cmd.Text.UTF8() != "help :ns\x00" {
+		t.Fatalf("Text = %q, want %q", cmd.Text.UTF8(), "help :ns\x00")
+	}
+}
+
 func TestParseUnknownCommandErrorMatchesSam(t *testing.T) {
 	t.Parallel()
 

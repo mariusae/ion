@@ -87,9 +87,6 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		_ = view
 		return true, err
 	}
-	if trimmed := strings.TrimSpace(script); strings.HasPrefix(trimmed, ":") {
-		return false, fmt.Errorf("unknown command `%s'", trimmed)
-	}
 
 	runes := []rune(script)
 	s.parser.ResetRunes(runes)
@@ -104,6 +101,8 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 		return true, nil
 	}
 	switch cmd.Cmdc {
+	case ':':
+		return false, fmt.Errorf("unknown command `%s'", formatNamespacedCommand(cmd))
 	case 'N':
 		return s.navigate(1)
 	case 'P':
@@ -116,6 +115,16 @@ func (s *DownloadSession) Execute(script string) (bool, error) {
 	}
 	ok, err := s.ws.Execute(s.state, cmd, s.stdout, s.stderr)
 	return ok, err
+}
+
+func formatNamespacedCommand(cmd *cmdlang.Cmd) string {
+	if cmd == nil || cmd.Cmdc != ':' {
+		return ":"
+	}
+	if cmd.Text == nil {
+		return ":"
+	}
+	return ":" + strings.TrimSpace(strings.TrimRight(cmd.Text.UTF8(), "\x00"))
 }
 
 func isSessionQuitCommand(script string) bool {

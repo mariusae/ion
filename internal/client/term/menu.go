@@ -627,7 +627,7 @@ func menuCommandShortcutRune(index int) (rune, bool) {
 
 func menuFileShortcutLabel(index int) string {
 	if r, ok := menuFileShortcutRune(index); ok {
-		return fmt.Sprintf("(M-%c)", r)
+		return fmt.Sprintf("(%c)", r)
 	}
 	return ""
 }
@@ -672,6 +672,16 @@ func (m *menuState) itemForShortcut(r rune) (menuItem, int, bool) {
 			return item, i, true
 		}
 	}
+	fileIndex := 0
+	for i, item := range m.items {
+		if item.kind != menuFile {
+			continue
+		}
+		if shortcut, ok := menuFileShortcutRune(fileIndex); ok && shortcut == r {
+			return item, i, true
+		}
+		fileIndex++
+	}
 	return menuItem{}, -1, false
 }
 
@@ -688,16 +698,6 @@ func (m *menuState) itemForMetaShortcut(r rune) (menuItem, int, bool) {
 			return item, i, true
 		}
 		commandIndex++
-	}
-	fileIndex := 0
-	for i, item := range m.items {
-		if item.kind != menuFile {
-			continue
-		}
-		if shortcut, ok := menuFileShortcutRune(fileIndex); ok && shortcut == r {
-			return item, i, true
-		}
-		fileIndex++
 	}
 	return menuItem{}, -1, false
 }

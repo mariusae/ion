@@ -30,6 +30,7 @@ type cmdSpec struct {
 
 var cmdTable = []cmdSpec{
 	{'\n', false, false, false, 0, aDot, 0, ""},
+	{':', false, false, false, 0, aNo, 0, "\n"},
 	{'a', true, false, false, 0, aDot, 0, ""},
 	{'b', false, false, false, 0, aNo, 0, "\n"},
 	{'B', false, false, false, 0, aNo, 0, "\n"},

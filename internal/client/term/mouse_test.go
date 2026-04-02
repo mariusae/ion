@@ -126,7 +126,7 @@ func TestReadBufferEscapeCSIArrowWithModifier(t *testing.T) {
 func TestReadBufferEscapeMetaShortcuts(t *testing.T) {
 	t.Parallel()
 
-	reader := bufio.NewReader(strings.NewReader("\x1ba\x1b2"))
+	reader := bufio.NewReader(strings.NewReader("\x1ba\x1b2\x1b'"))
 
 	if _, _, err := reader.ReadRune(); err != nil {
 		t.Fatalf("prime reader with ESC for alt-a: %v", err)
@@ -154,6 +154,20 @@ func TestReadBufferEscapeMetaShortcuts(t *testing.T) {
 	}
 	if mouse != nil {
 		t.Fatalf("alt-2 mouse = %#v, want nil", mouse)
+	}
+
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC for alt-quote: %v", err)
+	}
+	key, mouse, err = readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape(alt-quote) error = %v", err)
+	}
+	if got, want := key, metaKey('\''); got != want {
+		t.Fatalf("alt-quote key = %d, want %d", got, want)
+	}
+	if mouse != nil {
+		t.Fatalf("alt-quote mouse = %#v, want nil", mouse)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ion/internal/core/cmdlang"
 	"ion/internal/proto/wire"
 	serversession "ion/internal/server/session"
 	"ion/internal/server/workspace"
@@ -93,6 +94,14 @@ type sessionCommand struct {
 	sessionID uint64
 	arg       string
 	arg2      string
+}
+
+type colonCommand struct {
+	raw     string
+	tail    string
+	token   string
+	rest    string
+	hasRest bool
 }
 
 type diagnosticReporter interface {
@@ -270,17 +279,30 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		state.clientID = 0
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.CommandRequest:
-		if cmd, ok, err := parseSessionCommand(msg.Script); ok {
+		colon, ok, err := parseColonCommand(msg.Script)
+		if ok {
 			if err != nil {
 				return writeError(conn, frame.RequestID, frame.SessionID, err)
 			}
-			return s.handleSessionCommand(conn, state.clientID, stdout, stderr, frame, cmd)
-		}
-		if inv, ok, err := s.beginInvocation(state.clientID, frame.SessionID, msg.Script); ok {
-			if err != nil {
-				return writeError(conn, frame.RequestID, frame.SessionID, err)
+			if isServerQuitCommand(colon.raw) {
+				if err := wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: false}); err != nil {
+					return err
+				}
+				return s.Shutdown()
 			}
-			return s.handleInvocation(conn, frame, inv, stdout, stderr)
+			if cmd, ok, err := parseSessionCommand(colon); ok {
+				if err != nil {
+					return writeError(conn, frame.RequestID, frame.SessionID, err)
+				}
+				return s.handleSessionCommand(conn, state.clientID, stdout, stderr, frame, cmd)
+			}
+			if inv, ok, err := s.beginInvocation(state.clientID, frame.SessionID, colon); ok {
+				if err != nil {
+					return writeError(conn, frame.RequestID, frame.SessionID, err)
+				}
+				return s.handleInvocation(conn, frame, inv, stdout, stderr)
+			}
+			return writeError(conn, frame.RequestID, frame.SessionID, fmt.Errorf("unknown command `%s'", colon.raw))
 		}
 	}
 
@@ -566,8 +588,8 @@ func (s *Server) waitInvocation(clientID uint64) (*invocationState, error) {
 	return inv, nil
 }
 
-func (s *Server) beginInvocation(clientID, sessionID uint64, script string) (*invocationState, bool, error) {
-	namespace := parseNamespace(script)
+func (s *Server) beginInvocation(clientID, sessionID uint64, cmd colonCommand) (*invocationState, bool, error) {
+	namespace := parseNamespaceToken(cmd.token)
 	if namespace == "" {
 		return nil, false, nil
 	}
@@ -590,7 +612,7 @@ func (s *Server) beginInvocation(clientID, sessionID uint64, script string) (*in
 		id:               s.nextInvocation,
 		providerClientID: provider.clientID,
 		sessionID:        sessionID,
-		script:           strings.TrimSpace(script),
+		script:           cmd.raw,
 	}
 	inv.cond = sync.NewCond(&inv.mu)
 	s.invocations[inv.id] = inv
@@ -952,69 +974,171 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 	}
 }
 
-func parseSessionCommand(script string) (sessionCommand, bool, error) {
-	trimmed := strings.TrimSpace(script)
-	switch {
-	case trimmed == ":help":
-		return sessionCommand{name: "help"}, true, nil
-	case strings.HasPrefix(trimmed, ":help "):
-		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":help "))
-		if target == "" {
+func parseSessionCommand(cmd colonCommand) (sessionCommand, bool, error) {
+	arg := strings.TrimSpace(cmd.rest)
+	switch cmd.token {
+	case "help":
+		if !cmd.hasRest {
+			return sessionCommand{name: "help"}, true, nil
+		}
+		if arg == "" {
 			return sessionCommand{}, true, fmt.Errorf("help topic expected")
 		}
-		return sessionCommand{name: "help", arg: target}, true, nil
-	case trimmed == ":ns:list":
+		return sessionCommand{name: "help", arg: arg}, true, nil
+	case "ns:list":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
 		return sessionCommand{name: "ns-list"}, true, nil
-	case strings.HasPrefix(trimmed, ":ns:show "):
-		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ns:show "))
-		if target == "" {
+	case "ns:show":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		if arg == "" {
 			return sessionCommand{}, true, fmt.Errorf("namespace expected")
 		}
-		return sessionCommand{name: "ns-show", arg: target}, true, nil
-	case trimmed == ":sess:list":
+		return sessionCommand{name: "ns-show", arg: arg}, true, nil
+	case "sess:list":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
 		return sessionCommand{name: "list"}, true, nil
-	case trimmed == ":sess:return":
+	case "sess:return":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
 		return sessionCommand{name: "return"}, true, nil
-	case strings.HasPrefix(trimmed, ":sess:take "):
-		text := strings.TrimSpace(strings.TrimPrefix(trimmed, ":sess:take "))
-		id, err := strconv.ParseUint(text, 10, 64)
+	case "sess:take":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		id, err := strconv.ParseUint(arg, 10, 64)
 		if err != nil || id == 0 {
-			return sessionCommand{}, true, fmt.Errorf("bad session id %q", text)
+			return sessionCommand{}, true, fmt.Errorf("bad session id %q", arg)
 		}
 		return sessionCommand{name: "take", sessionID: id}, true, nil
-	case strings.HasPrefix(trimmed, ":ion:menuadd "):
-		command, label, err := parseMenuAddArgs(strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menuadd ")))
+	case "ion:menuadd":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		command, label, err := parseMenuAddArgs(arg)
 		if err != nil {
 			return sessionCommand{}, true, err
 		}
 		return sessionCommand{name: "menuadd", arg: command, arg2: label}, true, nil
-	case strings.HasPrefix(trimmed, ":ion:push "):
-		target := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:push "))
-		if target == "" {
+	case "ion:push":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		if arg == "" {
 			return sessionCommand{}, true, fmt.Errorf("push target expected")
 		}
-		return sessionCommand{name: "push", arg: target}, true, nil
-	case trimmed == ":ion:pop":
-		return sessionCommand{name: "pop"}, true, nil
-	case trimmed == ":ion:write",
-		trimmed == ":ion:cut",
-		trimmed == ":ion:snarf",
-		trimmed == ":ion:paste",
-		trimmed == ":ion:look",
-		trimmed == ":ion:regexp",
-		trimmed == ":ion:plumb",
-		trimmed == ":ion:plumb2",
-		trimmed == ":ion:new":
-		return sessionCommand{name: "terminal-only", arg: trimmed}, true, nil
-	case strings.HasPrefix(trimmed, ":ion:menudel "):
-		command := strings.TrimSpace(strings.TrimPrefix(trimmed, ":ion:menudel "))
-		if !validMenuCommand(command) {
-			return sessionCommand{}, true, fmt.Errorf("bad menu command %q", command)
+		return sessionCommand{name: "push", arg: arg}, true, nil
+	case "ion:pop":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
 		}
-		return sessionCommand{name: "menudel", arg: command}, true, nil
+		return sessionCommand{name: "pop"}, true, nil
+	case "ion:write", "ion:cut", "ion:snarf", "ion:paste", "ion:look", "ion:regexp", "ion:plumb", "ion:plumb2", "ion:new":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		return sessionCommand{name: "terminal-only", arg: ":" + cmd.token}, true, nil
+	case "ion:menudel":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		if !validMenuCommand(arg) {
+			return sessionCommand{}, true, fmt.Errorf("bad menu command %q", arg)
+		}
+		return sessionCommand{name: "menudel", arg: arg}, true, nil
 	default:
 		return sessionCommand{}, false, nil
 	}
+}
+
+func parseColonCommand(script string) (colonCommand, bool, error) {
+	trimmed := strings.TrimLeft(script, " \t")
+	if !strings.HasPrefix(trimmed, ":") {
+		return colonCommand{}, false, nil
+	}
+	script = normalizeCommandAlias(script)
+	parseScript := script
+	if !strings.HasSuffix(parseScript, "\n") {
+		parseScript += "\n"
+	}
+	parser := cmdlang.NewParserRunes([]rune(parseScript))
+	cmd, err := parser.ParseWithFinal(true)
+	if err != nil {
+		return colonCommand{}, false, err
+	}
+	runes := []rune(parseScript)
+	if consumed := parser.Consumed(); consumed != len(runes) {
+		return colonCommand{}, false, cmdlang.ErrNeedMoreInput
+	}
+	if cmd == nil || cmd.Cmdc != ':' {
+		return colonCommand{}, false, nil
+	}
+	parsed := colonCommand{raw: strings.TrimSpace(script)}
+	if cmd.Text == nil {
+		return parsed, true, nil
+	}
+	parsed.tail = strings.TrimSpace(strings.TrimRight(cmd.Text.UTF8(), "\x00"))
+	parsed.raw = ":" + parsed.tail
+	parsed.token, parsed.rest, parsed.hasRest = splitColonTail(parsed.tail)
+	return parsed, true, nil
+}
+
+func splitColonTail(tail string) (token, rest string, hasRest bool) {
+	if tail == "" {
+		return "", "", false
+	}
+	for i, r := range tail {
+		if r != ' ' && r != '\t' {
+			continue
+		}
+		return tail[:i], tail[i+1:], true
+	}
+	return tail, "", false
+}
+
+func parseNamespaceToken(token string) string {
+	i := strings.IndexByte(token, ':')
+	if i <= 0 {
+		return ""
+	}
+	return normalizeNamespace(token[:i])
+}
+
+func parseNamespace(script string) string {
+	trimmed := strings.TrimSpace(script)
+	if len(trimmed) < 4 || trimmed[0] != ':' {
+		return ""
+	}
+	rest := trimmed[1:]
+	i := strings.IndexByte(rest, ':')
+	if i <= 0 {
+		return ""
+	}
+	return normalizeNamespace(rest[:i])
+}
+
+func parseCommandReference(text string) (string, string, bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, ":") {
+		return "", "", false
+	}
+	rest := text[1:]
+	i := strings.IndexByte(rest, ':')
+	if i <= 0 || i == len(rest)-1 {
+		return "", "", false
+	}
+	namespace := normalizeNamespace(rest[:i])
+	command := strings.TrimSpace(rest[i+1:])
+	if namespace == "" || !validCommandToken(command) {
+		return "", "", false
+	}
+	return namespace, command, true
 }
 
 func shouldMarkActive(msg any) bool {
@@ -1134,19 +1258,6 @@ func normalizeNamespace(namespace string) string {
 		return ""
 	}
 	return strings.ToLower(namespace)
-}
-
-func parseNamespace(script string) string {
-	trimmed := strings.TrimSpace(script)
-	if len(trimmed) < 4 || trimmed[0] != ':' {
-		return ""
-	}
-	rest := trimmed[1:]
-	i := strings.IndexByte(rest, ':')
-	if i <= 0 {
-		return ""
-	}
-	return normalizeNamespace(rest[:i])
 }
 
 type commandHelpDoc struct {
@@ -1612,24 +1723,6 @@ func normalizeCommandAlias(text string) string {
 		return text
 	}
 	return ":ion:" + text[2:]
-}
-
-func parseCommandReference(text string) (string, string, bool) {
-	text = strings.TrimSpace(text)
-	if !strings.HasPrefix(text, ":") {
-		return "", "", false
-	}
-	rest := text[1:]
-	i := strings.IndexByte(rest, ':')
-	if i <= 0 || i == len(rest)-1 {
-		return "", "", false
-	}
-	namespace := normalizeNamespace(rest[:i])
-	command := strings.TrimSpace(rest[i+1:])
-	if namespace == "" || !validCommandToken(command) {
-		return "", "", false
-	}
-	return namespace, command, true
 }
 
 func (m *managedSession) canCancel(clientID uint64) bool {

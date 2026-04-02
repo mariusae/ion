@@ -8,8 +8,8 @@ wire protocol.
 ## Overview
 
 ```
-┌──────────────────┐       Unix socket        ┌──────────────────────────────┐
-│  Client          │ ◄──── ION1 frames ─────► │  Server                      │
+┌──────────────────┐       Unix socket         ┌──────────────────────────────┐
+│  Client          │ ◄──── ION1 frames ─────►  │  Server                      │
 │  (term or        │                           │                              │
 │   download mode) │                           │  ┌────────────────────────┐  │
 │                  │                           │  │ transport.Server       │  │

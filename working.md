@@ -42,7 +42,7 @@
 ## Next debugging targets
 
 - Reproduce with `ION_TERM_TRACE=1` using the rebuilt binary.
-- Check whether detailed traces still show long runs of mouse motion events starving keyboard input.
+- Check whether detailed traces still show long runs of mouse motion events starving keyboard input
 - If freezes persist, separate:
   - input starvation/backlog
   - redraw scheduling bugs

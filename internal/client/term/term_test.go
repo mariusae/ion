@@ -2208,6 +2208,7 @@ func TestExtractRawCommandAcceptsServerQuitAliases(t *testing.T) {
 	}{
 		{name: "plain q alias", pending: "Q\n", want: ":ion:Q\n", ok: true},
 		{name: "namespaced q", pending: ":ion:Q\n", want: ":ion:Q\n", ok: true},
+		{name: "ion alias q", pending: "::Q\n", want: ":ion:Q\n", ok: true},
 		{name: "incomplete alias", pending: "Q", final: false, ok: false},
 		{name: "ordinary command", pending: "B README.md\n", want: "", ok: false},
 	} {
@@ -2238,6 +2239,19 @@ func TestPrepareDirectScriptAcceptsNamespacedRawCommand(t *testing.T) {
 		t.Fatalf("prepareDirectScript() error = %v", err)
 	}
 	if want := ":lsp:goto\n"; got != want {
+		t.Fatalf("prepareDirectScript() = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareDirectScriptAcceptsIonAliasNamespaceCommand(t *testing.T) {
+	t.Parallel()
+
+	parser := cmdlang.NewParserRunes(nil)
+	got, err := prepareDirectScript(parser, "::write\n")
+	if err != nil {
+		t.Fatalf("prepareDirectScript() error = %v", err)
+	}
+	if want := "::write\n"; got != want {
 		t.Fatalf("prepareDirectScript() = %q, want %q", got, want)
 	}
 }

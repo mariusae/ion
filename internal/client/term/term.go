@@ -852,7 +852,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			clearMenuLostRelease()
 			menuSawHover = false
 		}
-		done, err := runOverlayCommand(lastCommand, true, false)
+		done, err := runOverlayCommand(lastCommand, true, true)
 		if err != nil {
 			buffer.status = diagnosticText(err)
 			return false, bufferRedraw(redrawBufferStatus)
@@ -999,9 +999,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		historyLine := strings.TrimSuffix(line, "\n")
 		if !strings.HasSuffix(line, "\n") {
 			line += "\n"
-		}
-		if !revealOnOutput && !overlay.visible {
-			overlay.open("")
 		}
 		if recordHistory {
 			overlay.addCommand(historyLine)
@@ -1895,7 +1892,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								continue
 							}
 							overlay.close()
-							done, err := runOverlayCommand(item.value, true, false)
+							done, err := runOverlayCommand(item.value, true, true)
 							if err != nil {
 								return err
 							}

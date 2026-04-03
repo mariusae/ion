@@ -3,6 +3,7 @@ package term
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	clienttarget "ion/internal/client/target"
@@ -771,4 +772,35 @@ func plumbToken(state *bufferState) string {
 		right--
 	}
 	return clienttarget.TrimToken(strings.TrimSpace(string(state.text[left:right])))
+}
+
+func resolvePlumbTargetToken(state *bufferState, token string) string {
+	token = strings.TrimSpace(token)
+	if state == nil || token == "" {
+		return token
+	}
+	if _, ok := clienttarget.ParseAddressOnly(token); ok {
+		return token
+	}
+	target := clienttarget.Parse(token)
+	if target.Path == "" || filepath.IsAbs(target.Path) {
+		return token
+	}
+	base := strings.TrimSpace(state.path)
+	if base == "" {
+		base = strings.TrimSpace(state.name)
+	}
+	if base == "" {
+		return token
+	}
+	if !filepath.IsAbs(base) {
+		if abs, err := filepath.Abs(base); err == nil {
+			base = abs
+		}
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(base), target.Path))
+	if target.Address == "" {
+		return resolved
+	}
+	return resolved + ":" + target.Address
 }

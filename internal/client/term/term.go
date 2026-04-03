@@ -62,6 +62,7 @@ const (
 type bufferState struct {
 	fileID         int
 	name           string
+	path           string
 	dirty          bool
 	diskChanged    bool
 	statusSeq      uint64
@@ -967,7 +968,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			return true, false, nil
 		case ":term:plumb":
-			token := plumbToken(buffer)
+			token := resolvePlumbTargetToken(buffer, plumbToken(buffer))
 			if token == "" {
 				return true, false, nil
 			}
@@ -976,7 +977,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return true, false, nil
 		case ":term:plumb2":
-			token := plumbToken(buffer)
+			token := resolvePlumbTargetToken(buffer, plumbToken(buffer))
 			if token == "" {
 				return true, false, nil
 			}
@@ -2789,9 +2790,17 @@ func newBufferStateWithPrevious(view wire.BufferView, previous *bufferState) *bu
 	cursor := clampIndex(view.DotStart, len(text))
 	dotEnd := clampIndex(view.DotEnd, len(text))
 	origin := visualRowStartForPos(text, cursor)
+	path := strings.TrimSpace(view.Path)
+	if path == "" && reusePrevious != nil {
+		path = strings.TrimSpace(reusePrevious.path)
+	}
+	if path == "" {
+		path = strings.TrimSpace(view.Name)
+	}
 	state := &bufferState{
 		fileID:    view.ID,
 		name:      view.Name,
+		path:      path,
 		statusSeq: view.StatusSeq,
 		text:      text,
 		cursor:    cursor,

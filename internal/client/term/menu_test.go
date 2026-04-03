@@ -2,6 +2,7 @@ package term
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -566,5 +567,36 @@ func TestPlumbTokenKeepsGenericAddressSuffix(t *testing.T) {
 
 	if got, want := plumbToken(state), "foo.py:#56,#81"; got != want {
 		t.Fatalf("plumbToken() = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePlumbTargetTokenUsesCurrentFileDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := newBufferState(wire.BufferView{
+		Text:     "../other.go:29:21\n",
+		Path:     filepath.Join(root, "subdir", "current.go"),
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	if got, want := resolvePlumbTargetToken(state, "../other.go:29:21"), filepath.Join(root, "other.go")+":29+#20"; got != want {
+		t.Fatalf("resolvePlumbTargetToken() = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePlumbTargetTokenLeavesBareAddressUnchanged(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "#56,#81\n",
+		Path:     filepath.Join(t.TempDir(), "current.go"),
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	if got, want := resolvePlumbTargetToken(state, "#56,#81"), "#56,#81"; got != want {
+		t.Fatalf("resolvePlumbTargetToken() = %q, want %q", got, want)
 	}
 }

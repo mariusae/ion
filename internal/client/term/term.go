@@ -1798,6 +1798,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						case keyMouse:
 							if mouse != nil {
+								previousHeight := overlayHeight(overlay)
+								previousPromptRows := overlayPromptRows(overlay)
 								handled, err := handleOverlayMouse(*mouse)
 								if err != nil {
 									return err
@@ -1813,6 +1815,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								if handled {
 									req := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+									if overlayHeight(overlay) != previousHeight || overlayPromptRows(overlay) != previousPromptRows {
+										req = renderRequestForLayers(redrawOverlayHistory, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+									}
 									if previewChanged {
 										req.invalidation |= renderInvalidateBuffer
 									}
@@ -2020,12 +2025,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								return nil
 							}
+							previousHeight := overlayHeight(overlay)
+							previousPromptRows := overlayPromptRows(overlay)
 							handled, err := handleOverlayMouse(*mouse)
 							if err != nil {
 								return err
 							}
 							if handled {
 								req := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory)
+								if overlayHeight(overlay) != previousHeight || overlayPromptRows(overlay) != previousPromptRows {
+									req = renderRequestForLayers(redrawOverlayHistory, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+								}
 								if !overlay.visible {
 									req = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 								}
@@ -2995,6 +3005,29 @@ func drawBufferModeRequest(stdout io.Writer, renderer *gridRenderer, stats *fram
 func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error) (bool, error) {
 	if !overlay.visible {
 		return false, nil
+	}
+	if overlay.resizing {
+		if event.isMotion() {
+			if event.noButtonsDown() {
+				overlay.endResize()
+				return true, nil
+			}
+			if event.y != overlay.resizeStartY {
+				overlay.resizeMoved = true
+			}
+			if overlay.resizeMoved {
+				_ = overlay.resizeToTopRow(event.y)
+			}
+			return true, nil
+		}
+		if !event.pressed && event.baseButton() == 0 {
+			overlay.endResize()
+			return true, nil
+		}
+		return true, nil
+	}
+	if event.baseButton() == 0 && event.pressed && !event.isMotion() && event.y == overlayTopRow(overlay) {
+		return overlay.beginResize(), nil
 	}
 	if event.y < overlayTopRow(overlay) {
 		if event.dismissesOverlayOutside() {

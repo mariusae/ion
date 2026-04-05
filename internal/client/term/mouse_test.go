@@ -411,6 +411,117 @@ func TestHandleOverlayMouseEventCoalescedWheelScrollsMultipleSteps(t *testing.T)
 	}
 }
 
+func TestHandleOverlayMouseEventDragTopBorderExpandsMaxHeight(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 12
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 10; i++ {
+		overlay.addOutput("alpha")
+	}
+
+	if got, want := overlayHeight(overlay), 4; got != want {
+		t.Fatalf("overlayHeight(initial) = %d, want %d", got, want)
+	}
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  0,
+		y:       overlayTopRow(overlay),
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent(press) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent(press) handled = false, want true")
+	}
+
+	handled, err = handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  32,
+		y:       4,
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent(drag) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent(drag) handled = false, want true")
+	}
+	if got, want := overlay.maxHeightRows, 8; got != want {
+		t.Fatalf("overlay.maxHeightRows = %d, want %d", got, want)
+	}
+	if got, want := overlayHeight(overlay), 8; got != want {
+		t.Fatalf("overlayHeight(expanded) = %d, want %d", got, want)
+	}
+
+	handled, err = handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  0,
+		y:       4,
+		pressed: false,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent(release) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent(release) handled = false, want true")
+	}
+	if overlay.resizing {
+		t.Fatal("overlay.resizing = true, want false after release")
+	}
+}
+
+func TestHandleOverlayMouseEventDragTopBorderShrinksMaxHeight(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 18
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 20; i++ {
+		overlay.addOutput("alpha")
+	}
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  0,
+		y:       overlayTopRow(overlay),
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent(press) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent(press) handled = false, want true")
+	}
+
+	handled, err = handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  32,
+		y:       14,
+		pressed: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent(drag) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent(drag) handled = false, want true")
+	}
+	if got, want := overlay.maxHeightRows, 4; got != want {
+		t.Fatalf("overlay.maxHeightRows = %d, want %d", got, want)
+	}
+	if got, want := overlayHeight(overlay), 4; got != want {
+		t.Fatalf("overlayHeight(shrunk) = %d, want %d", got, want)
+	}
+}
+
 func TestReadBufferEscapeMouseWithFragmentedSequence(t *testing.T) {
 	t.Parallel()
 

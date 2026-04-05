@@ -282,6 +282,30 @@ func TestOverlayHeightTracksHistoryWithinBounds(t *testing.T) {
 	}
 }
 
+func TestOverlayHeightUsesDraggedMaxHeight(t *testing.T) {
+	prev := termRows
+	termRows = 20
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 20; i++ {
+		overlay.addOutput("line")
+	}
+
+	overlay.maxHeightRows = 9
+	if got, want := overlayHeight(overlay), 9; got != want {
+		t.Fatalf("overlayHeight(custom max) = %d, want %d", got, want)
+	}
+
+	overlay.maxHeightRows = 4
+	if got, want := overlayHeight(overlay), 4; got != want {
+		t.Fatalf("overlayHeight(reduced max) = %d, want %d", got, want)
+	}
+}
+
 func TestOverlayHeightHidesPromptRowWhileRunning(t *testing.T) {
 	prev := termRows
 	termRows = 10

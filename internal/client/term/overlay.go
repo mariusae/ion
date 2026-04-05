@@ -23,11 +23,15 @@ type overlayState struct {
 	mode           overlayMode
 	input          []rune
 	cursor         int
+	maxHeightRows  int
 	history        []overlayEntry
 	commandIdx     []int
 	commandIdxLen  int
 	scroll         int
 	running        bool
+	resizing       bool
+	resizeMoved    bool
+	resizeStartY   int
 	flashSelection bool
 	selecting      bool
 	selectBtn2     bool
@@ -58,9 +62,10 @@ type overlayRenderLine struct {
 
 func newOverlayState() *overlayState {
 	return &overlayState{
-		recallIdx:   -1,
-		selectStart: overlaySelectionPos{line: -1},
-		selectEnd:   overlaySelectionPos{line: -1},
+		recallIdx:    -1,
+		resizeStartY: -1,
+		selectStart:  overlaySelectionPos{line: -1},
+		selectEnd:    overlaySelectionPos{line: -1},
 	}
 }
 
@@ -72,6 +77,9 @@ func (o *overlayState) open(prefill string) {
 	o.scroll = 0
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
+	o.resizing = false
+	o.resizeMoved = false
+	o.resizeStartY = -1
 	o.picker = nil
 }
 
@@ -80,6 +88,9 @@ func (o *overlayState) reopen() {
 	o.mode = overlayModeCommand
 	o.scroll = 0
 	o.running = false
+	o.resizing = false
+	o.resizeMoved = false
+	o.resizeStartY = -1
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -100,6 +111,9 @@ func (o *overlayState) close() {
 	o.mode = overlayModeCommand
 	o.scroll = 0
 	o.running = false
+	o.resizing = false
+	o.resizeMoved = false
+	o.resizeStartY = -1
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -115,6 +129,9 @@ func (o *overlayState) clearHistory() {
 	o.commandIdxLen = 0
 	o.scroll = 0
 	o.running = false
+	o.resizing = false
+	o.resizeMoved = false
+	o.resizeStartY = -1
 	o.selecting = false
 	o.selectBtn2 = false
 	o.selectStart = overlaySelectionPos{line: -1}
@@ -619,7 +636,7 @@ func overlayHeight(o *overlayState) int {
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
-	maxHeight := termRows / 3
+	maxHeight := overlayMaxHeight(o)
 	minVisible := topPad + prompt + bottomPad
 	if historyLines > 0 {
 		minVisible++
@@ -637,6 +654,61 @@ func overlayHeight(o *overlayState) int {
 		height = termRows
 	}
 	return height
+}
+
+func overlayMaxHeight(o *overlayState) int {
+	if o != nil && o.maxHeightRows > 0 {
+		return o.maxHeightRows
+	}
+	return termRows / 3
+}
+
+func (o *overlayState) beginResize() bool {
+	if o == nil || !o.visible {
+		return false
+	}
+	o.resizing = true
+	o.resizeMoved = false
+	o.resizeStartY = overlayTopRow(o)
+	o.selecting = false
+	o.selectBtn2 = false
+	return true
+}
+
+func (o *overlayState) endResize() {
+	if o == nil {
+		return
+	}
+	o.resizing = false
+	o.resizeMoved = false
+	o.resizeStartY = -1
+}
+
+func (o *overlayState) resizeToTopRow(row int) bool {
+	if o == nil {
+		return false
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= termRows {
+		row = termRows - 1
+	}
+	next := termRows - row
+	if next < minOverlayRows {
+		next = minOverlayRows
+	}
+	if next > termRows {
+		next = termRows
+	}
+	if next == termRows/3 {
+		next = 0
+	}
+	if o.maxHeightRows == next {
+		return false
+	}
+	o.maxHeightRows = next
+	return true
 }
 
 func (o *overlayState) screenToPos(row, col int) overlaySelectionPos {

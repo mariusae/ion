@@ -266,10 +266,19 @@ func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsess
 		return nil, nil, nil, nil, err
 	}
 	interruptSession := interruptClient.Session(session.ID())
+	refresh, stopRefresh := startRefreshTicker(200 * time.Millisecond)
+	cleanup := func() {
+		stopRefresh()
+		_ = interruptClient.Close()
+	}
+	return client, interruptSession.Cancel, refresh, cleanup, nil
+}
+
+func startRefreshTicker(period time.Duration) (<-chan struct{}, func()) {
 	stop := make(chan struct{})
 	refresh := make(chan struct{}, 1)
 	go func() {
-		ticker := time.NewTicker(200 * time.Millisecond)
+		ticker := time.NewTicker(period)
 		defer ticker.Stop()
 		for {
 			select {
@@ -283,11 +292,9 @@ func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsess
 			}
 		}
 	}()
-	cleanup := func() {
+	return refresh, func() {
 		close(stop)
-		_ = interruptClient.Close()
 	}
-	return client, interruptSession.Cancel, refresh, cleanup, nil
 }
 
 func wrapInteractiveClient(cfg config, rt residentRuntime, paths residentPaths, client *clientsession.Client) wire.TermService {

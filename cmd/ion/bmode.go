@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	clientsession "ion/internal/client/session"
 	clienttarget "ion/internal/client/target"
@@ -470,6 +471,8 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 		}
 	}
 	return withLocalServerClients(ws, capture.Stdout(), capture.Stderr(), func(client *clientsession.Client, interruptSession *clientsession.Session) error {
+		refresh, stopRefresh := startRefreshTicker(200 * time.Millisecond)
+		defer stopRefresh()
 		if !shouldPreloadAddressedStartup(targets) {
 			if err := bootstrapTargetSession(&wireBModeClient{client: client}, targets); err != nil {
 				return err
@@ -480,6 +483,7 @@ func runTermWithTargets(cfg config, stdin io.Reader, stdout, stderr io.Writer) e
 		}
 		return term.RunBootstrapped(stdin, stdout, stderr, client, capture, term.Options{
 			AutoIndent: cfg.autoindent,
+			Refresh:    refresh,
 			Interrupt:  interruptSession.Cancel,
 		})
 	})

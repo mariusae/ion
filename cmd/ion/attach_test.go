@@ -292,3 +292,16 @@ func TestSelectAlternateResidentSessionSkipsCurrentAndTaken(t *testing.T) {
 		t.Fatalf("sessionID = %d, want %d", got, want)
 	}
 }
+
+func TestStartRefreshTickerEmitsWakeups(t *testing.T) {
+	t.Parallel()
+
+	refresh, stop := startRefreshTicker(5 * time.Millisecond)
+	defer stop()
+
+	select {
+	case <-refresh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("startRefreshTicker() did not emit a refresh wakeup")
+	}
+}

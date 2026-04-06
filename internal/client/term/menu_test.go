@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ion/internal/proto/wire"
 )
@@ -193,7 +194,7 @@ func TestWriteMenuItemBoldsCurrentFile(t *testing.T) {
 	item := menuItem{label: " '. in.txt", kind: menuFile, current: true}
 
 	var out bytes.Buffer
-	if err := writeMenuItem(&out, 0, 0, 16, item, false, theme); err != nil {
+	if err := writeMenuItem(&out, 0, 0, 16, item, false, false, theme); err != nil {
 		t.Fatalf("writeMenuItem() error = %v", err)
 	}
 	got := out.String()
@@ -209,7 +210,7 @@ func TestWriteMenuItemHoverDoesNotBoldNonCurrentRow(t *testing.T) {
 	item := menuItem{label: " cut", kind: menuCut}
 
 	var out bytes.Buffer
-	if err := writeMenuItem(&out, 0, 0, 16, item, true, theme); err != nil {
+	if err := writeMenuItem(&out, 0, 0, 16, item, true, false, theme); err != nil {
 		t.Fatalf("writeMenuItem() error = %v", err)
 	}
 	got := out.String()
@@ -218,6 +219,38 @@ func TestWriteMenuItemHoverDoesNotBoldNonCurrentRow(t *testing.T) {
 	}
 	if strings.Contains(got, sgr("1", theme.bgCode(theme.cursorBG))+"│ cut") {
 		t.Fatalf("writeMenuItem() = %q, want non-current hover row unbolded", got)
+	}
+}
+
+func TestWriteMenuItemRunningUsesShimmerPrefix(t *testing.T) {
+	t.Parallel()
+
+	prev := shimmerStart
+	shimmerStart = time.Unix(0, 0)
+	t.Cleanup(func() {
+		shimmerStart = prev
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	item := menuItem{label: " symbol", kind: menuCommand}
+	line := formatMenuItemLine(item, 16)
+
+	var out bytes.Buffer
+	if err := writeMenuItem(&out, 0, 0, 16, item, false, true, theme); err != nil {
+		t.Fatalf("writeMenuItem() error = %v", err)
+	}
+	got := out.String()
+	wantPrefix := menuShimmerPrefix(theme, false, false, 0, len([]rune(line)))
+	if !strings.Contains(got, wantPrefix+"│") {
+		t.Fatalf("writeMenuItem() = %q, want shimmer prefix %q", got, wantPrefix)
+	}
+	if gotStatic := menuItemPrefix(theme, false, false); wantPrefix == gotStatic {
+		t.Fatalf("menuShimmerPrefix() = %q, want different style from static prefix %q", wantPrefix, gotStatic)
+	}
+	for _, glyph := range []string{"s", "y", "m", "b", "o", "l"} {
+		if !strings.Contains(got, glyph) {
+			t.Fatalf("writeMenuItem() = %q, want glyph %q", got, glyph)
+		}
 	}
 }
 

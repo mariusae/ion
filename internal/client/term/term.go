@@ -613,6 +613,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	redrawRunningCommand := func() error {
+		if menu != nil && menu.visible && menu.running {
+			return menuRedraw(redrawMenuHover)
+		}
 		if overlay == nil || !overlay.visible || !overlay.running {
 			return nil
 		}
@@ -1079,6 +1082,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if added == 0 {
 					continue
 				}
+				if opened && menu.visible && menu.running {
+					menu.dismiss()
+					clearMenuLostRelease()
+					menuSawHover = false
+				}
 				if opened {
 					if err := overlaySurfaceRedraw(redrawOverlayOpen); err != nil {
 						overlay.setRunning(false)
@@ -1219,11 +1227,23 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	executeMenuItem := func(itemIndex int, item menuItem) (bool, error) {
 		menuSticky = nextMenuStickyState(menu, itemIndex, item)
-		menu.dismiss()
-		clearMenuLostRelease()
-		menuSawHover = false
 		if line := normalizeUICommand(uiCommandForMenuItem(item)); line != "" {
+			shimmerStart = time.Now()
+			menu.running = true
+			menu.runningIdx = itemIndex
+			if err := menuRedraw(redrawMenuHover); err != nil {
+				menu.running = false
+				menu.runningIdx = -1
+				return false, err
+			}
 			done, err := runOverlayCommand(line, true, true)
+			menu.running = false
+			menu.runningIdx = -1
+			if menu.visible {
+				menu.dismiss()
+			}
+			clearMenuLostRelease()
+			menuSawHover = false
 			if err != nil {
 				buffer.status = diagnosticText(err)
 				return false, nil
@@ -1232,6 +1252,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		switch item.kind {
 		case menuFile:
+			menu.dismiss()
+			clearMenuLostRelease()
+			menuSawHover = false
 			previousFileID := 0
 			if buffer != nil {
 				previousFileID = buffer.fileID
@@ -1246,6 +1269,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 			return false, nil
 		}
+		menu.dismiss()
+		clearMenuLostRelease()
+		menuSawHover = false
 		return false, nil
 	}
 
@@ -3562,12 +3588,10 @@ func runeDisplayAdvance(r rune, col, maxCols, tabWidth int) int {
 }
 
 func shimmerPrefix(theme *uiTheme, index, length int) string {
-	dimness := shimmerBandDimness(index, length, time.Since(shimmerStart))
-	if theme != nil && theme.mode == colorModeTrueColor {
-		bg := theme.hudBG
-		fg := blendColors(contrastColor(bg), bg, dimness*0.55)
-		return sgr("1", theme.bgCode(bg), theme.fgCode(fg))
+	if theme != nil {
+		return shimmerPrefixFor(theme, theme.hudBG, true, index, length)
 	}
+	dimness := shimmerBandDimness(index, length, time.Since(shimmerStart))
 	attr := ""
 	switch {
 	case dimness < 0.2:
@@ -3577,10 +3601,36 @@ func shimmerPrefix(theme *uiTheme, index, length int) string {
 	default:
 		attr = "2"
 	}
-	if theme != nil {
-		return sgr(attr, theme.bgCode(theme.hudBG))
-	}
 	return sgr(attr)
+}
+
+func shimmerPrefixFor(theme *uiTheme, bg rgbColor, bold bool, index, length int) string {
+	dimness := shimmerBandDimness(index, length, time.Since(shimmerStart))
+	if theme != nil && theme.mode == colorModeTrueColor {
+		attr := "22"
+		if bold {
+			attr = "1"
+		}
+		fg := blendColors(contrastColor(bg), bg, dimness*0.55)
+		return sgr(attr, theme.bgCode(bg), theme.fgCode(fg))
+	}
+	if theme != nil {
+		attr := ""
+		switch {
+		case dimness < 0.2:
+			attr = "1"
+		case dimness < 0.6:
+			if bold {
+				attr = "1"
+			} else {
+				attr = "22"
+			}
+		default:
+			attr = "2"
+		}
+		return sgr(attr, theme.bgCode(bg))
+	}
+	return shimmerPrefix(nil, index, length)
 }
 
 func shimmerIntensity(index, length int, elapsed time.Duration) float64 {

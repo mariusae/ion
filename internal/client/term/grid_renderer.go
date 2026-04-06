@@ -361,7 +361,7 @@ func (r *gridRenderer) renderMenuGrid(menu *menuState, theme *uiTheme) {
 			break
 		}
 		builder.Start(r.menu, row)
-		renderGridText(builder, 0, formatMenuItemLine(item, inner), menuItemStyle(theme, item.current, menu.hover == i), 0, r.palette)
+		renderMenuItemGridRow(builder, formatMenuItemLine(item, inner), item, menu.hover == i, menu.running && menu.runningIdx == i, theme, r.palette)
 		builder.Flush()
 		row++
 		if item.sepAfter && i < len(menu.items)-1 && row < r.menu.rows {
@@ -377,6 +377,25 @@ func (r *gridRenderer) renderMenuGrid(menu *menuState, theme *uiTheme) {
 		builder.Flush()
 	}
 	r.menu.valid = true
+}
+
+func renderMenuItemGridRow(builder *GridLineBuilder, text string, item menuItem, hover, running bool, theme *uiTheme, palette *gridStylePalette) {
+	if builder == nil {
+		return
+	}
+	runes := []rune(text)
+	col := 0
+	for i, glyph := range runes {
+		style := menuItemStyle(theme, item.current, hover)
+		if running {
+			style = menuShimmerPrefix(theme, item.current, hover, i, len(runes))
+		}
+		styleID := gridStyleID(0)
+		if palette != nil {
+			styleID = palette.ID(style)
+		}
+		col = builder.PutRune(col, glyph, styleID, 0)
+	}
 }
 
 func (r *gridRenderer) emitDirtyRows(backend renderBackend, grid *ScreenGrid) {

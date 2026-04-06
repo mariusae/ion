@@ -37,15 +37,17 @@ type menuItem struct {
 }
 
 type menuState struct {
-	visible   bool
-	x         int
-	y         int
-	width     int
-	height    int
-	hover     int
-	title     string
-	titleBase string
-	items     []menuItem
+	visible    bool
+	x          int
+	y          int
+	width      int
+	height     int
+	hover      int
+	running    bool
+	runningIdx int
+	title      string
+	titleBase  string
+	items      []menuItem
 }
 
 type menuStickyState struct {
@@ -58,13 +60,16 @@ type menuStickyState struct {
 
 func newMenuState() *menuState {
 	return &menuState{
-		hover: -1,
+		hover:      -1,
+		runningIdx: -1,
 	}
 }
 
 func (m *menuState) dismiss() {
 	m.visible = false
 	m.hover = -1
+	m.running = false
+	m.runningIdx = -1
 }
 
 func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wire.MenuCommand, latestCommand string, nav wire.NavigationStack, clickX, clickY int, sticky menuStickyState) *menuState {
@@ -257,7 +262,7 @@ func drawMenu(stdout io.Writer, menu *menuState, theme *uiTheme) error {
 	visible := menu.visibleItemIndices()
 	for i, idx := range visible {
 		item := menu.items[idx]
-		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == idx, theme); err != nil {
+		if err := writeMenuItem(stdout, row, menu.x, inner, item, menu.hover == idx, menu.running && menu.runningIdx == idx, theme); err != nil {
 			return err
 		}
 		row++
@@ -280,8 +285,11 @@ func writeMenuLine(stdout io.Writer, row, col int, line, prefix string, theme *u
 	return err
 }
 
-func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover bool, theme *uiTheme) error {
+func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover, running bool, theme *uiTheme) error {
 	line := formatMenuItemLine(item, inner)
+	if running {
+		return writeShimmerMenuLine(stdout, row, col, line, item, hover, theme)
+	}
 	if theme == nil {
 		if item.current && hover {
 			return writeMenuLine(stdout, row, col, "\x1b[1;7m"+line+"\x1b[27;22m", "", nil)
@@ -295,6 +303,34 @@ func writeMenuItem(stdout io.Writer, row, col, inner int, item menuItem, hover b
 	}
 	prefix := menuItemPrefix(theme, item.current, hover)
 	return writeMenuLine(stdout, row, col, line, prefix, theme)
+}
+
+func writeShimmerMenuLine(stdout io.Writer, row, col int, line string, item menuItem, hover bool, theme *uiTheme) error {
+	if _, err := fmt.Fprintf(stdout, "\x1b[%d;%dH", row+1, col+1); err != nil {
+		return err
+	}
+	runes := []rune(line)
+	currentPrefix := ""
+	for i, r := range runes {
+		if nextPrefix := menuShimmerPrefix(theme, item.current, hover, i, len(runes)); nextPrefix != currentPrefix {
+			transition := nextPrefix
+			if transition == "" {
+				transition = styleReset()
+			}
+			if _, err := io.WriteString(stdout, transition); err != nil {
+				return err
+			}
+			currentPrefix = nextPrefix
+		}
+		if _, err := io.WriteString(stdout, string(r)); err != nil {
+			return err
+		}
+	}
+	if currentPrefix != "" {
+		_, err := io.WriteString(stdout, styleReset())
+		return err
+	}
+	return nil
 }
 
 func menuDisplayFileName(name string) string {
@@ -348,6 +384,18 @@ func menuItemStyle(theme *uiTheme, current, hover bool) string {
 	default:
 		return ""
 	}
+}
+
+func menuShimmerPrefix(theme *uiTheme, current, hover bool, index, length int) string {
+	if theme == nil {
+		return shimmerPrefix(nil, index, length)
+	}
+	bg := theme.subtleBG
+	switch {
+	case hover:
+		bg = theme.cursorBG
+	}
+	return shimmerPrefixFor(theme, bg, true, index, length)
 }
 
 func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill rune) string {

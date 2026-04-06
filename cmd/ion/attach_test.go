@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -155,8 +156,114 @@ func TestResidentPathsUseSharedPrefix(t *testing.T) {
 	if got, want := paths.socketPath, "/tmp/ion/"+hashedPathBase(residentPathVersionPrefix, "tmux-window:@9")+".sock"; got != want {
 		t.Fatalf("socketPath = %q, want %q", got, want)
 	}
+	if got, want := paths.pidPath, "/tmp/ion/"+hashedPathBase(residentPathVersionPrefix, "tmux-window:@9")+".pid"; got != want {
+		t.Fatalf("pidPath = %q, want %q", got, want)
+	}
 	if got, want := paths.panePath, "/tmp/ion/"+hashedPathBase(residentPathVersionPrefix, "tmux-window:@9")+".pane"; got != want {
 		t.Fatalf("panePath = %q, want %q", got, want)
+	}
+}
+
+func TestRunKillModeWithSignalsActiveResidentServer(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	rt := residentRuntime{
+		getenv:  func(string) string { return "" },
+		getwd:   func() (string, error) { return "/tmp/work", nil },
+		tempDir: func() string { return tempDir },
+		tmux:    runTmuxCommand,
+		executable: func() (string, error) {
+			return "/tmp/bin/ion", nil
+		},
+	}
+	paths, err := residentPathsForRuntime(config{}, rt)
+	if err != nil {
+		t.Fatalf("residentPathsForRuntime() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.socketPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	listener, err := net.Listen("unix", paths.socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	if err := writeTextFile(paths.pidPath, "4321\n"); err != nil {
+		t.Fatalf("writeTextFile(pid) error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	signaled := make(chan struct{}, 1)
+	rt.signal = func(pid int, sig syscall.Signal) error {
+		if got, want := pid, 4321; got != want {
+			t.Fatalf("signal pid = %d, want %d", got, want)
+		}
+		if got, want := sig, syscall.Signal(9); got != want {
+			t.Fatalf("signal = %d, want %d", got, want)
+		}
+		_ = listener.Close()
+		signaled <- struct{}{}
+		return nil
+	}
+
+	if err := runKillModeWith(config{killSignal: 9}, rt); err != nil {
+		t.Fatalf("runKillModeWith() error = %v", err)
+	}
+	select {
+	case <-signaled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runKillModeWith() did not send a signal")
+	}
+	select {
+	case <-acceptDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener did not stop")
+	}
+	if _, err := os.Stat(paths.socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socketPath stat error = %v, want not exists", err)
+	}
+	if _, err := os.Stat(paths.pidPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pidPath stat error = %v, want not exists", err)
+	}
+	if _, err := os.Stat(paths.panePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("panePath stat error = %v, want not exists", err)
+	}
+}
+
+func TestRunKillModeWithNoActiveResidentServerIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	err := runKillModeWith(config{killSignal: 9}, residentRuntime{
+		getenv:     func(string) string { return "" },
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		tempDir:    t.TempDir,
+		tmux:       runTmuxCommand,
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		signal: func(int, syscall.Signal) error {
+			called = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runKillModeWith() error = %v", err)
+	}
+	if called {
+		t.Fatal("runKillModeWith() called signal handler without an active server")
 	}
 }
 

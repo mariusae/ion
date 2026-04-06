@@ -26,6 +26,7 @@ type config struct {
 	bserve     bool
 	serve      bool
 	rage       bool
+	killSignal int
 	autoindent bool
 	paneID     string
 	socketPath string
@@ -64,6 +65,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	if cfg.download {
 		if err := runDownload(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.killSignal != 0 {
+		if err := runKillMode(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
 			return 1
 		}
@@ -142,6 +151,7 @@ func parseArgs(args []string) (config, error) {
 	fs.BoolVar(&cfg.serve, "serve", false, "internal: serve one resident daemon")
 	fs.StringVar(&cfg.socketPath, "socket", "", "internal: socket path for resident daemon")
 	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
+	fs.IntVar(&cfg.killSignal, "kill", 0, "send one signal to the active resident daemon")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -168,8 +178,14 @@ func parseArgs(args []string) (config, error) {
 	if cfg.download && cfg.serve {
 		return config{}, fmt.Errorf("-serve and -d cannot be combined")
 	}
+	if cfg.download && cfg.killSignal != 0 {
+		return config{}, fmt.Errorf("-d and -kill cannot be combined")
+	}
 	if cfg.rage && cfg.download {
 		return config{}, fmt.Errorf("-d and -rage cannot be combined")
+	}
+	if cfg.rage && cfg.killSignal != 0 {
+		return config{}, fmt.Errorf("-kill and -rage cannot be combined")
 	}
 	if cfg.rage && cfg.attach {
 		return config{}, fmt.Errorf("-A and -rage cannot be combined")
@@ -201,6 +217,9 @@ func parseArgs(args []string) (config, error) {
 	if cfg.attach && cfg.serve {
 		return config{}, fmt.Errorf("-A and -serve cannot be combined")
 	}
+	if cfg.attach && cfg.killSignal != 0 {
+		return config{}, fmt.Errorf("-A and -kill cannot be combined")
+	}
 	if cfg.attach && cfg.paneID != "" {
 		return config{}, fmt.Errorf("-p requires -B or -N")
 	}
@@ -216,6 +235,9 @@ func parseArgs(args []string) (config, error) {
 	if cfg.nmode && cfg.serve {
 		return config{}, fmt.Errorf("-N and -serve cannot be combined")
 	}
+	if cfg.nmode && cfg.killSignal != 0 {
+		return config{}, fmt.Errorf("-N and -kill cannot be combined")
+	}
 	if cfg.cmode && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -C cannot be combined")
 	}
@@ -225,23 +247,44 @@ func parseArgs(args []string) (config, error) {
 	if cfg.cmode && cfg.serve {
 		return config{}, fmt.Errorf("-C and -serve cannot be combined")
 	}
+	if cfg.cmode && cfg.killSignal != 0 {
+		return config{}, fmt.Errorf("-C and -kill cannot be combined")
+	}
 	if cfg.cmode && cfg.paneID != "" {
 		return config{}, fmt.Errorf("-p requires -B or -N")
 	}
 	if cfg.serve && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -serve cannot be combined")
 	}
+	if cfg.killSignal != 0 && cfg.bmode {
+		return config{}, fmt.Errorf("-B and -kill cannot be combined")
+	}
 	if cfg.serve && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -serve cannot be combined")
 	}
+	if cfg.killSignal != 0 && cfg.bserve {
+		return config{}, fmt.Errorf("-b-serve and -kill cannot be combined")
+	}
+	if cfg.killSignal != 0 && cfg.serve {
+		return config{}, fmt.Errorf("-kill and -serve cannot be combined")
+	}
 	if cfg.serve && cfg.paneID != "" {
+		return config{}, fmt.Errorf("-p requires -B or -N")
+	}
+	if cfg.killSignal != 0 && cfg.paneID != "" {
 		return config{}, fmt.Errorf("-p requires -B or -N")
 	}
 	if cfg.serve && cfg.socketPath == "" {
 		return config{}, fmt.Errorf("-serve requires -socket")
 	}
+	if cfg.killSignal < 0 {
+		return config{}, fmt.Errorf("-kill requires a non-negative signal number")
+	}
 	if cfg.rage && len(cfg.files) > 0 {
 		return config{}, fmt.Errorf("-rage does not take file arguments")
+	}
+	if cfg.killSignal != 0 && len(cfg.files) > 0 {
+		return config{}, fmt.Errorf("-kill does not take file arguments")
 	}
 	if cfg.cmode && !cfg.download && len(cfg.files) == 0 {
 		return config{}, fmt.Errorf("-C requires a command")
@@ -279,6 +322,7 @@ func helpText() string {
 		"  -N        open a new tmux pane attached to resident server\n" +
 		"  -B        reuse the last active session in the resident server\n" +
 		"  -C        resident command mode; with -d, run resident download mode\n" +
+		"  -kill N   send signal N to active resident server; use 9 to force kill\n" +
 		"  -rage     print terminal theme diagnostics\n" +
 		"  -help     show this help\n" +
 		"\n" +

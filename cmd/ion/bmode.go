@@ -302,13 +302,13 @@ func tmuxWindowPaths(tempDir, key string) residentPaths {
 	dir := filepath.Join(tempDir, "ion")
 	return residentPaths{
 		socketPath: filepath.Join(dir, base+".sock"),
+		pidPath:    filepath.Join(dir, base+".pid"),
 		panePath:   filepath.Join(dir, base+".pane"),
 	}
 }
 
 func cleanupBModePaths(paths residentPaths) {
-	_ = os.Remove(paths.socketPath)
-	_ = os.Remove(paths.panePath)
+	cleanupResidentPaths(paths)
 }
 
 func writeResidentPaneID(path, paneID string) error {

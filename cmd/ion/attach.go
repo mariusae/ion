@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,10 +30,12 @@ type residentRuntime struct {
 	tmux       func(args ...string) (string, error)
 	executable func() (string, error)
 	spawn      func(config, string) error
+	signal     func(int, syscall.Signal) error
 }
 
 type residentPaths struct {
 	socketPath string
+	pidPath    string
 	panePath   string
 }
 
@@ -45,6 +48,13 @@ func defaultResidentRuntime() residentRuntime {
 		tempDir:    os.TempDir,
 		tmux:       runTmuxCommand,
 		executable: os.Executable,
+		signal: func(pid int, sig syscall.Signal) error {
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				return err
+			}
+			return proc.Signal(sig)
+		},
 	}
 }
 
@@ -100,6 +110,13 @@ func runResidentDownloadMode(cfg config, stdin io.Reader, stdout, stderr io.Writ
 	return runResidentDownloadModeWith(cfg, stdin, stdout, stderr, defaultResidentRuntime())
 }
 
+func runKillMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	_ = stdin
+	_ = stdout
+	_ = stderr
+	return runKillModeWith(cfg, defaultResidentRuntime())
+}
+
 func runCommandModeWith(cfg config, stdout, stderr io.Writer, rt residentRuntime) error {
 	paths, err := ensureResidentServer(cfg, rt)
 	if err != nil {
@@ -131,6 +148,46 @@ func runResidentDownloadModeWith(cfg config, stdin io.Reader, stdout, stderr io.
 	return download.Run(cfg.files, stdin, stderr, client)
 }
 
+func runKillModeWith(cfg config, rt residentRuntime) error {
+	paths, err := residentPathsForRuntime(cfg, rt)
+	if err != nil {
+		return err
+	}
+	if err := probeResidentServer(paths.socketPath); err != nil {
+		if isRetryableResidentDialError(err) {
+			cleanupResidentPaths(paths)
+			return nil
+		}
+		return err
+	}
+	pid, err := readResidentPID(paths.pidPath)
+	if err != nil {
+		return err
+	}
+	if rt.signal == nil {
+		return fmt.Errorf("missing signal handler")
+	}
+	if err := rt.signal(pid, syscall.Signal(cfg.killSignal)); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := probeResidentServer(paths.socketPath)
+		if err == nil {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("resident server did not stop after signal %d", cfg.killSignal)
+			}
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		if !isRetryableResidentDialError(err) {
+			return err
+		}
+		cleanupResidentPaths(paths)
+		return nil
+	}
+}
+
 func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	_ = stdin
 	_ = stdout
@@ -149,9 +206,16 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	pidPath := residentPIDPath(cfg.socketPath)
+	if err := writeTextFile(pidPath, fmt.Sprintf("%d\n", os.Getpid())); err != nil {
+		_ = listener.Close()
+		_ = os.Remove(cfg.socketPath)
+		return err
+	}
 	defer func() {
 		_ = listener.Close()
 		_ = os.Remove(cfg.socketPath)
+		_ = os.Remove(pidPath)
 	}()
 	return server.Serve(listener)
 }
@@ -183,6 +247,7 @@ func residentPathsForRuntime(cfg config, rt residentRuntime) (residentPaths, err
 	dir := filepath.Join(rt.tempDir(), "ion")
 	return residentPaths{
 		socketPath: filepath.Join(dir, base+".sock"),
+		pidPath:    filepath.Join(dir, base+".pid"),
 		panePath:   filepath.Join(dir, base+".pane"),
 	}, nil
 }
@@ -248,6 +313,12 @@ func spawnResidentServer(cfg config, rt residentRuntime, socketPath string) erro
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func cleanupResidentPaths(paths residentPaths) {
+	_ = os.Remove(paths.socketPath)
+	_ = os.Remove(paths.pidPath)
+	_ = os.Remove(paths.panePath)
 }
 
 func dialSocketClients(socketPath string, stdout, stderr io.Writer) (*clientsession.Client, func() error, <-chan struct{}, func(), error) {
@@ -493,4 +564,24 @@ func isRetryableResidentDialError(err error) bool {
 func hashedPathBase(prefix, key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%s-%x", prefix, sum[:8])
+}
+
+func residentPIDPath(socketPath string) string {
+	socketPath = filepath.Clean(socketPath)
+	if ext := filepath.Ext(socketPath); ext != "" {
+		return strings.TrimSuffix(socketPath, ext) + ".pid"
+	}
+	return socketPath + ".pid"
+}
+
+func readResidentPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("bad resident pid file %q", path)
+	}
+	return pid, nil
 }

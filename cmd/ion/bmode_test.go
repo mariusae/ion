@@ -676,6 +676,26 @@ func TestParseArgsAllowsResidentDownloadMode(t *testing.T) {
 	}
 }
 
+func TestParseArgsRecognizesKillMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-kill", "9"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if got, want := cfg.killSignal, 9; got != want {
+		t.Fatalf("config.killSignal = %d, want %d", got, want)
+	}
+}
+
+func TestParseArgsRejectsKillWithFiles(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseArgs([]string{"-kill", "9", "alpha"}); err == nil || !strings.Contains(err.Error(), "-kill does not take file arguments") {
+		t.Fatalf("parseArgs() error = %v, want kill file-argument rejection", err)
+	}
+}
+
 func TestParseArgsDisablesAutoIndentWithLongFlag(t *testing.T) {
 	t.Parallel()
 

@@ -4362,6 +4362,13 @@ func max(a, b int) int {
 	return b
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func snarfSelection(state *bufferState) []rune {
 	if state == nil || state.dotEnd <= state.dotStart {
 		return nil
@@ -4721,6 +4728,8 @@ func findSelection(text []rune, start, end int, target []rune, forward bool) (in
 	if len(target) == 0 || len(text) < len(target) {
 		return 0, false
 	}
+	start = clampIndex(start, len(text))
+	end = clampIndex(end, len(text))
 	if forward {
 		for pos := end; pos <= len(text)-len(target); pos++ {
 			if hasRunesAt(text, pos, target) {
@@ -4734,12 +4743,12 @@ func findSelection(text []rune, start, end int, target []rune, forward bool) (in
 		}
 		return 0, false
 	}
-	for pos := len(text) - len(target); pos > start; pos-- {
+	for pos := min(start-1, len(text)-len(target)); pos >= 0; pos-- {
 		if hasRunesAt(text, pos, target) {
 			return pos, true
 		}
 	}
-	for pos := start - 1; pos >= 0; pos-- {
+	for pos := len(text) - len(target); pos >= end; pos-- {
 		if hasRunesAt(text, pos, target) {
 			return pos, true
 		}

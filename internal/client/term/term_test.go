@@ -2300,6 +2300,15 @@ func TestFindSelectionBackwardFindsPrevious(t *testing.T) {
 	}
 }
 
+func TestFindSelectionBackwardPrefersPreviousBeforeWrapping(t *testing.T) {
+	t.Parallel()
+
+	text := []rune("alpha beta alpha beta alpha")
+	if got, ok := findSelection(text, 11, 16, []rune("alpha"), false); !ok || got != 0 {
+		t.Fatalf("findSelection(backward previous-first) = (%d,%v), want (0,true)", got, ok)
+	}
+}
+
 func TestPrevAndNextWordStart(t *testing.T) {
 	t.Parallel()
 

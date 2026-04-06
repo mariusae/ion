@@ -63,7 +63,7 @@ func TestParseArgsIncludesDefaultServersAndMatches(t *testing.T) {
 	for name, want := range map[string]string{
 		"go":     "gopls serve",
 		"rust":   "rust-analyzer",
-		"python": "pylsp",
+		"python": "uvx --from python-lsp-server pylsp",
 		"clang":  "clangd",
 	} {
 		if got := cfg.servers[name]; got != want {

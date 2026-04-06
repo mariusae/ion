@@ -102,7 +102,7 @@ type matchRule struct {
 var defaultLSPServers = map[string]string{
 	"go":     "gopls serve",
 	"rust":   "rust-analyzer",
-	"python": "pylsp",
+	"python": "uvx --from python-lsp-server pylsp",
 	"clang":  "clangd",
 }
 

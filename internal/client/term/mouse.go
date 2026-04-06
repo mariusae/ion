@@ -162,6 +162,10 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 		}
 	case 'b', 'f', 'v', 'w', 0x08, 0x7f:
 		return metaKey(rune(b)), nil, nil
+	case 0x04:
+		return keyCtrlMetaD, nil, nil
+	case 0x0c:
+		return keyCtrlMetaL, nil, nil
 	}
 	if b >= 0x20 && b <= 0x7e {
 		return metaKey(rune(b)), nil, nil
@@ -188,6 +192,9 @@ func decodeCSIKey(seq []byte) int {
 	case 'F':
 		return keyEnd
 	case '~':
+		if key, ok := decodeModifiedOtherKey(seq[:len(seq)-1]); ok {
+			return key
+		}
 		num := 0
 		for _, b := range seq[:len(seq)-1] {
 			if b < '0' || b > '9' {
@@ -209,8 +216,94 @@ func decodeCSIKey(seq []byte) int {
 		case 200:
 			return keyPaste
 		}
+	case 'u':
+		if key, ok := decodeCSIUKey(seq[:len(seq)-1]); ok {
+			return key
+		}
 	}
 	return keyEsc
+}
+
+func decodeCSIUKey(body []byte) (int, bool) {
+	params := splitCSIParams(body)
+	if len(params) != 2 {
+		return 0, false
+	}
+	codepoint, ok := parseCSIParamInt(params[0])
+	if !ok {
+		return 0, false
+	}
+	modifier, ok := parseCSIParamInt(params[1])
+	if !ok {
+		return 0, false
+	}
+	if modifier == 7 {
+		switch codepoint {
+		case int('d'):
+			return keyCtrlMetaD, true
+		case int('l'):
+			return keyCtrlMetaL, true
+		}
+	}
+	return 0, false
+}
+
+func decodeModifiedOtherKey(body []byte) (int, bool) {
+	params := splitCSIParams(body)
+	if len(params) != 3 {
+		return 0, false
+	}
+	if num, ok := parseCSIParamInt(params[0]); !ok || num != 27 {
+		return 0, false
+	}
+	modifier, ok := parseCSIParamInt(params[1])
+	if !ok {
+		return 0, false
+	}
+	codepoint, ok := parseCSIParamInt(params[2])
+	if !ok {
+		return 0, false
+	}
+	if modifier == 7 {
+		switch codepoint {
+		case int('d'):
+			return keyCtrlMetaD, true
+		case int('l'):
+			return keyCtrlMetaL, true
+		}
+	}
+	return 0, false
+}
+
+func splitCSIParams(body []byte) [][]byte {
+	if len(body) == 0 {
+		return nil
+	}
+	var params [][]byte
+	start := 0
+	for i, b := range body {
+		if b != ';' {
+			continue
+		}
+		params = append(params, body[start:i])
+		start = i + 1
+	}
+	params = append(params, body[start:])
+	return params
+}
+
+func parseCSIParamInt(param []byte) (int, bool) {
+	if len(param) == 0 {
+		return 0, false
+	}
+	n := 0
+	for _, b := range param {
+		if b < '0' || b > '9' {
+			return 0, false
+		}
+		n = n*10 + int(b-'0')
+	}
+	return n, true
 }
 
 func readBufferKey(reader *bufio.Reader) (int, error) {

@@ -43,6 +43,8 @@ const (
 	keyAltBackspace
 	keyFocusIn
 	keyFocusOut
+	keyCtrlMetaD
+	keyCtrlMetaL
 )
 
 var (
@@ -864,6 +866,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return changed, nil
 	}
 
+	deleteCurrentFile := func(exitAfter bool) (bool, error) {
+		currentFileID := 0
+		if buffer != nil {
+			currentFileID = buffer.fileID
+		}
+		view, done, err := deleteCurrentMenuFile(svc, currentFileID, exitAfter)
+		if err != nil {
+			buffer.status = diagnosticText(err)
+			return false, bufferRedraw(redrawBufferStatus)
+		}
+		if done {
+			return true, nil
+		}
+		applyBufferView(view)
+		if buffer != nil {
+			buffer.status = ""
+		}
+		return false, allLayersRedraw(redrawRefresh)
+	}
+
 	rerunLastUICommand := func() (bool, error) {
 		lastCommand, ok := overlay.lastCommand()
 		if !ok || strings.TrimSpace(lastCommand) == "" {
@@ -1559,6 +1581,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		switch key {
+		case keyCtrlMetaD:
+			return deleteCurrentFile(true)
+		case keyCtrlMetaL:
+			previous := snapshotBufferState(buffer)
+			next, ok, err := lookInBuffer(svc, buffer, false)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, classifiedBufferRedraw(previous)
 		case metaKey('!'):
 			overlay.open("!")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
@@ -1606,7 +1643,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		case 0x10:
 			return false, openFilePicker()
 		case 0x04:
-			return rerunLastUICommand()
+			return deleteCurrentFile(false)
 		case 0x03:
 			if err := copyBufferSelectionLocal(); err != nil {
 				return false, err
@@ -1688,18 +1725,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, classifiedBufferRedraw(previous)
 		case 0x12:
-			previous := snapshotBufferState(buffer)
-			next, ok, err := lookInBuffer(svc, buffer, false)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				buffer = next
-				buffer.status = ""
-			} else {
-				buffer.status = "?no match"
-			}
-			return false, classifiedBufferRedraw(previous)
+			return rerunLastUICommand()
 		}
 		if r == '\r' {
 			r = '\n'
@@ -4195,6 +4221,42 @@ func loadMenuSnapshot(svc wire.TermService) (wire.MenuSnapshot, error) {
 		return wire.MenuSnapshot{}, err
 	}
 	return wire.MenuSnapshot{Files: files}, nil
+}
+
+func deleteCurrentMenuFile(svc wire.TermService, currentFileID int, exitAfter bool) (wire.BufferView, bool, error) {
+	if svc == nil {
+		return wire.BufferView{}, false, fmt.Errorf("missing terminal service")
+	}
+	ok, err := svc.Execute("D\n")
+	if err != nil {
+		return wire.BufferView{}, false, err
+	}
+	if !ok || exitAfter {
+		return wire.BufferView{}, true, nil
+	}
+	snapshot, err := loadMenuSnapshot(svc)
+	if err != nil {
+		return wire.BufferView{}, false, err
+	}
+	nextFileID, found := nextMenuFileAfterDelete(snapshot.Files, currentFileID)
+	if !found {
+		return wire.BufferView{}, true, nil
+	}
+	view, err := svc.FocusFile(nextFileID)
+	if err != nil {
+		return wire.BufferView{}, false, err
+	}
+	return view, false, nil
+}
+
+func nextMenuFileAfterDelete(files []wire.MenuFile, deletedFileID int) (int, bool) {
+	for _, file := range files {
+		if file.ID == 0 || file.ID == deletedFileID {
+			continue
+		}
+		return file.ID, true
+	}
+	return 0, false
 }
 
 func bufferWindowTitleSequence(name string, dirty, changed bool) string {

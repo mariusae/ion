@@ -21,6 +21,8 @@ type fakeTermService struct {
 	namespaceDocs []wire.NamespaceProviderDoc
 	navStack      wire.NavigationStack
 	focusID       int
+	executeCalls  []string
+	executeFunc   func(string) (bool, error)
 	setDotCalls   int
 	lastDotStart  int
 	lastDotEnd    int
@@ -32,7 +34,10 @@ func (f *fakeTermService) Bootstrap(files []string) error {
 }
 
 func (f *fakeTermService) Execute(script string) (bool, error) {
-	_ = script
+	f.executeCalls = append(f.executeCalls, script)
+	if f.executeFunc != nil {
+		return f.executeFunc(script)
+	}
 	return true, nil
 }
 
@@ -116,6 +121,78 @@ func (f *fakeTermService) Undo() (wire.BufferView, error) {
 
 func (f *fakeTermService) Save() (string, error) {
 	return "saved", nil
+}
+
+func TestDeleteCurrentMenuFileFocusesFallbackFile(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{ID: 2, Name: "b.txt"},
+		menuFiles: []wire.MenuFile{
+			{ID: 2, Name: "b.txt"},
+			{ID: 7, Name: "c.txt"},
+		},
+		executeFunc: func(script string) (bool, error) {
+			return true, nil
+		},
+	}
+
+	view, done, err := deleteCurrentMenuFile(svc, 2, false)
+	if err != nil {
+		t.Fatalf("deleteCurrentMenuFile() error = %v", err)
+	}
+	if done {
+		t.Fatal("deleteCurrentMenuFile() done = true, want false")
+	}
+	if got, want := fmt.Sprint(svc.executeCalls), fmt.Sprint([]string{"D\n"}); got != want {
+		t.Fatalf("executeCalls = %s, want %s", got, want)
+	}
+	if got, want := svc.focusID, 7; got != want {
+		t.Fatalf("focusID = %d, want %d", got, want)
+	}
+	if got, want := view.ID, 7; got != want {
+		t.Fatalf("view.ID = %d, want %d", got, want)
+	}
+}
+
+func TestDeleteCurrentMenuFileReturnsDoneForExitAfter(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		executeFunc: func(script string) (bool, error) {
+			return true, nil
+		},
+	}
+
+	_, done, err := deleteCurrentMenuFile(svc, 2, true)
+	if err != nil {
+		t.Fatalf("deleteCurrentMenuFile() error = %v", err)
+	}
+	if !done {
+		t.Fatal("deleteCurrentMenuFile() done = false, want true")
+	}
+	if got, want := svc.focusID, 0; got != want {
+		t.Fatalf("focusID = %d, want %d", got, want)
+	}
+}
+
+func TestDeleteCurrentMenuFileReturnsDoneWhenNoFilesRemain(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		menuFiles: []wire.MenuFile{},
+		executeFunc: func(script string) (bool, error) {
+			return true, nil
+		},
+	}
+
+	_, done, err := deleteCurrentMenuFile(svc, 2, false)
+	if err != nil {
+		t.Fatalf("deleteCurrentMenuFile() error = %v", err)
+	}
+	if !done {
+		t.Fatal("deleteCurrentMenuFile() done = false, want true when no files remain")
+	}
 }
 
 func TestFilePickerPreviewStateSyncAndCancelRestoresStartFile(t *testing.T) {

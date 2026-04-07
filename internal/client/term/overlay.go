@@ -86,7 +86,6 @@ func (o *overlayState) open(prefill string) {
 func (o *overlayState) reopen() {
 	o.visible = true
 	o.mode = overlayModeCommand
-	o.scroll = 0
 	o.running = false
 	o.resizing = false
 	o.resizeMoved = false
@@ -109,7 +108,6 @@ func (o *overlayState) reopen() {
 func (o *overlayState) close() {
 	o.visible = false
 	o.mode = overlayModeCommand
-	o.scroll = 0
 	o.running = false
 	o.resizing = false
 	o.resizeMoved = false

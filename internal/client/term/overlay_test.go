@@ -92,6 +92,33 @@ func TestOverlayReopenPreservesDraftAndCursor(t *testing.T) {
 	}
 }
 
+func TestOverlayReopenPreservesScrollPosition(t *testing.T) {
+	t.Parallel()
+
+	prev := termRows
+	termRows = 6
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.open("")
+	for i := 0; i < 6; i++ {
+		overlay.addOutput(string(rune('a' + i)))
+	}
+	overlay.scrollOlder(2)
+	overlay.close()
+
+	overlay.reopen()
+
+	if got, want := overlay.scroll, 2; got != want {
+		t.Fatalf("scroll after reopen = %d, want %d", got, want)
+	}
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ b", "█ c", "█ d"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(reopened) = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayOpenPrefillReplacesDraft(t *testing.T) {
 	t.Parallel()
 
@@ -354,6 +381,30 @@ func TestOverlayRenderLinesRespectsScrollback(t *testing.T) {
 	overlay.scrollNewer(1)
 	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ c", "█ d", "█ e"}; !equalStrings(got, want) {
 		t.Fatalf("renderLines(partial return) = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayNewOutputResetsScrollToTail(t *testing.T) {
+	prev := termRows
+	termRows = 6
+	t.Cleanup(func() {
+		termRows = prev
+	})
+
+	overlay := newOverlayState()
+	overlay.visible = true
+	for i := 0; i < 6; i++ {
+		overlay.addOutput(string(rune('a' + i)))
+	}
+	overlay.scrollOlder(2)
+
+	overlay.addOutput("g")
+
+	if got, want := overlay.scroll, 0; got != want {
+		t.Fatalf("scroll after new output = %d, want %d", got, want)
+	}
+	if got, want := overlayTexts(overlay.renderLines(3)), []string{"█ e", "█ f", "█ g"}; !equalStrings(got, want) {
+		t.Fatalf("renderLines(after new output) = %q, want %q", got, want)
 	}
 }
 

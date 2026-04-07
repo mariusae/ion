@@ -614,7 +614,7 @@ func TestResolvePlumbTargetTokenUsesCurrentFileDirectory(t *testing.T) {
 		DotEnd:   0,
 	})
 
-	if got, want := resolvePlumbTargetToken(state, "../other.go:29:21"), filepath.Join(root, "other.go")+":29+#20"; got != want {
+	if got, want := resolvePlumbTargetToken(state, "../other.go:29:21"), filepath.Join(root, "other.go")+":29-0+#20"; got != want {
 		t.Fatalf("resolvePlumbTargetToken() = %q, want %q", got, want)
 	}
 }

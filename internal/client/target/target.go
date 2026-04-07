@@ -224,7 +224,7 @@ func normalizeLegacyLineColumn(suffix string) (string, bool) {
 	}
 	addr := strconv.Itoa(line)
 	if col > 1 {
-		addr += "+#" + strconv.Itoa(col-1)
+		addr += "-0+#" + strconv.Itoa(col-1)
 	}
 	return addr, true
 }

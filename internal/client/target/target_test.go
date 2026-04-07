@@ -71,7 +71,7 @@ func TestParseNumericSuffix(t *testing.T) {
 	t.Parallel()
 
 	got := Parse("README.md:12:4")
-	want := Target{Path: "README.md", Address: "12+#3"}
+	want := Target{Path: "README.md", Address: "12-0+#3"}
 	if got != want {
 		t.Fatalf("Parse() = %#v, want %#v", got, want)
 	}
@@ -244,8 +244,8 @@ func TestParseAddressOnly(t *testing.T) {
 	if got, ok := ParseAddressOnly("#56,#81"); !ok || got != "#56,#81" {
 		t.Fatalf("ParseAddressOnly(#56,#81) = (%q, %v), want (#56,#81, true)", got, ok)
 	}
-	if got, ok := ParseAddressOnly("5:2"); !ok || got != "5+#1" {
-		t.Fatalf("ParseAddressOnly(5:2) = (%q, %v), want (5+#1, true)", got, ok)
+	if got, ok := ParseAddressOnly("5:2"); !ok || got != "5-0+#1" {
+		t.Fatalf("ParseAddressOnly(5:2) = (%q, %v), want (5-0+#1, true)", got, ok)
 	}
 	if got, ok := ParseAddressOnly("README.md:/one"); ok || got != "" {
 		t.Fatalf("ParseAddressOnly(file target) = (%q, %v), want (\"\", false)", got, ok)

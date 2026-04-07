@@ -588,6 +588,36 @@ func TestOpenTargetWithCharacterAddressUsesExactPoint(t *testing.T) {
 	}
 }
 
+func TestOpenTargetWithLegacyLineColumnUsesLineStartOffset(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	sess := NewTerm(ws, nil, io.Discard)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := sess.OpenTarget(file, "2-0+#2")
+	if err != nil {
+		t.Fatalf("OpenTarget(current-file, 2-0+#2) error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file after OpenTarget = %q, want %q", view.Name, file)
+	}
+	if got, want := view.DotStart, 6; got != want {
+		t.Fatalf("DotStart = %d, want %d", got, want)
+	}
+	if got, want := view.DotEnd, 6; got != want {
+		t.Fatalf("DotEnd = %d, want %d", got, want)
+	}
+}
+
 func TestPushTargetClearsForwardHistoryFromCurrentPoint(t *testing.T) {
 	t.Parallel()
 

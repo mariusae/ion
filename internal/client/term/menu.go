@@ -88,13 +88,13 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		})
 	}
 	menu.items = append(menu.items,
-		menuItem{label: " split", shortcut: "(n)", kind: menuSplit},
 		menuItem{label: " cut", shortcut: "(x)", kind: menuCut},
 		menuItem{label: " snarf", shortcut: "(c)", kind: menuSnarf},
 		menuItem{label: " paste", shortcut: "(v)", kind: menuPaste},
 		menuItem{label: " look", shortcut: "(l)", kind: menuLook},
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
-		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp, sepAfter: true},
+		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp},
+		menuItem{label: " split", shortcut: "(n)", kind: menuSplit, sepAfter: true},
 	)
 	for i, cmd := range commands {
 		label := strings.TrimSpace(cmd.Label)

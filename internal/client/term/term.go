@@ -1498,6 +1498,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if menu.visible {
 				return false, nil
 			}
+			if mouse.button == 1 && mouse.pressed {
+				previous := snapshotBufferState(buffer)
+				next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, buffer, snarf, mouse.y, mouse.x)
+				if err != nil {
+					return false, err
+				}
+				if !ok {
+					return false, nil
+				}
+				buffer = next
+				buffer.status = status
+				return false, classifiedBufferRedraw(previous)
+			}
 			if mouse.button == 2 && mouse.pressed {
 				return false, showMenu(mouse.x, mouse.y)
 			}
@@ -4413,6 +4426,26 @@ func pasteBufferSnarf(svc wire.TermService, state *bufferState, snarf []rune) (*
 		return state, "", err
 	}
 	return next, "", nil
+}
+
+func pasteBufferSnarfAtScreenPos(svc wire.TermService, state *bufferState, snarf []rune, row, col int) (*bufferState, string, bool, error) {
+	if state == nil {
+		return nil, "", false, nil
+	}
+	pos, ok := screenToPos(state, nil, row, col)
+	if !ok {
+		return state, "", false, nil
+	}
+	next := snapshotBufferState(state)
+	next.cursor = pos
+	next.markMode = false
+	next.dotStart = pos
+	next.dotEnd = pos
+	pasted, status, err := pasteBufferSnarf(svc, next, snarf)
+	if err != nil {
+		return state, "", true, err
+	}
+	return pasted, status, true, nil
 }
 
 func copyToClipboard(stdout io.Writer, text []rune) error {

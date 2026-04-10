@@ -2157,6 +2157,81 @@ func TestPasteBufferSnarfReplacesSelection(t *testing.T) {
 	}
 }
 
+func TestPasteBufferSnarfAtScreenPosPastesAtClickedPoint(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 80
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\nbeta\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, state, []rune("XYZ"), 1, 2)
+	if err != nil {
+		t.Fatalf("pasteBufferSnarfAtScreenPos() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("pasteBufferSnarfAtScreenPos() ok = false, want true")
+	}
+	if got, want := status, ""; got != want {
+		t.Fatalf("status = %q, want empty", got)
+	}
+	if got, want := string(next.text), "alpha\nbeXYZta\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 11; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 11; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 11; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestPasteBufferSnarfAtScreenPosIgnoresClicksOutsideBuffer(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 80
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 1,
+			DotEnd:   1,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, state, []rune("XYZ"), -1, 0)
+	if err != nil {
+		t.Fatalf("pasteBufferSnarfAtScreenPos(outside) error = %v", err)
+	}
+	if ok {
+		t.Fatal("pasteBufferSnarfAtScreenPos(outside) ok = true, want false")
+	}
+	if got, want := status, ""; got != want {
+		t.Fatalf("status = %q, want empty", got)
+	}
+	if next != state {
+		t.Fatal("pasteBufferSnarfAtScreenPos(outside) returned different state, want original")
+	}
+}
+
 func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
 	t.Parallel()
 

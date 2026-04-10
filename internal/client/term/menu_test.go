@@ -30,11 +30,15 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	if got, want := menu.items[0].kind, menuWrite; got != want {
 		t.Fatalf("first item kind = %v, want %v", got, want)
 	}
-	if got, want := menu.items[1].kind, menuSplit; got != want {
-		t.Fatalf("second item kind = %v, want %v", got, want)
+	splitIdx := menuItemIndexByKind(menu.items, menuSplit)
+	if got, want := splitIdx, 7; got != want {
+		t.Fatalf("split item index = %d, want %d", got, want)
 	}
-	if got, want := menu.items[1].label, " split"; got != want {
-		t.Fatalf("second item label = %q, want %q", got, want)
+	if got, want := menu.items[splitIdx].label, " split"; got != want {
+		t.Fatalf("split item label = %q, want %q", got, want)
+	}
+	if got, want := menu.items[splitIdx-1].kind, menuRegexp; got != want {
+		t.Fatalf("item before split kind = %v, want %v", got, want)
 	}
 	if !strings.Contains(menu.title, "in.txt") {
 		t.Fatalf("menu.title = %q, want file name", menu.title)

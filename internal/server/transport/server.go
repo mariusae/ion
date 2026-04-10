@@ -1041,7 +1041,7 @@ func parseSessionCommand(cmd colonCommand) (sessionCommand, bool, error) {
 			return sessionCommand{}, false, nil
 		}
 		return sessionCommand{name: "pop"}, true, nil
-	case "term:write", "term:cut", "term:snarf", "term:paste", "term:look", "term:regexp", "term:plumb", "term:plumb2", "term:new":
+	case "term:write", "term:split", "term:cut", "term:snarf", "term:paste", "term:look", "term:regexp", "term:plumb", "term:plumb2":
 		if cmd.hasRest {
 			return sessionCommand{}, false, nil
 		}
@@ -1603,9 +1603,9 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "open the current token in another session",
 			help:    "Terminal HUD command that opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, it opens a new attached pane as in ion -N.",
 		}, true
-	case ":term:new":
+	case ":term:split":
 		return commandHelpDoc{
-			usage:   ":term:new",
+			usage:   ":term:split",
 			summary: "open a new attached pane for the current file",
 			help:    "Terminal HUD command that opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 		}, true
@@ -1697,7 +1697,7 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Help:    "Terminal HUD command that opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, it opens a new attached pane as in ion -N.",
 				},
 				{
-					Name:    "new",
+					Name:    "split",
 					Summary: "open a new attached pane for the current file",
 					Help:    "Terminal HUD command that opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 				},

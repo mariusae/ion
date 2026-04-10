@@ -14,6 +14,7 @@ type menuItemKind int
 
 const (
 	menuWrite menuItemKind = iota
+	menuSplit
 	menuFile
 	menuCommand
 	menuCut
@@ -87,6 +88,7 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		})
 	}
 	menu.items = append(menu.items,
+		menuItem{label: " split", shortcut: "(n)", kind: menuSplit},
 		menuItem{label: " cut", shortcut: "(x)", kind: menuCut},
 		menuItem{label: " snarf", shortcut: "(c)", kind: menuSnarf},
 		menuItem{label: " paste", shortcut: "(v)", kind: menuPaste},
@@ -238,7 +240,7 @@ func latestMenuCommandItem(commands []wire.MenuCommand, latestCommand string, ha
 
 func builtInMenuCommandPresent(command string, hasWrite bool, hasPop bool) bool {
 	switch command {
-	case ":term:cut", ":term:snarf", ":term:paste", ":term:look", ":term:regexp", ":term:plumb":
+	case ":term:split", ":term:cut", ":term:snarf", ":term:paste", ":term:look", ":term:regexp", ":term:plumb":
 		return true
 	case ":term:write":
 		return hasWrite
@@ -729,6 +731,8 @@ func menuBuiltinShortcutRune(item menuItem) (rune, bool) {
 	switch item.kind {
 	case menuWrite:
 		return 'w', true
+	case menuSplit:
+		return 'n', true
 	case menuCut:
 		return 'x', true
 	case menuSnarf:

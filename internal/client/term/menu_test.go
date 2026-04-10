@@ -30,6 +30,12 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	if got, want := menu.items[0].kind, menuWrite; got != want {
 		t.Fatalf("first item kind = %v, want %v", got, want)
 	}
+	if got, want := menu.items[1].kind, menuSplit; got != want {
+		t.Fatalf("second item kind = %v, want %v", got, want)
+	}
+	if got, want := menu.items[1].label, " split"; got != want {
+		t.Fatalf("second item label = %q, want %q", got, want)
+	}
 	if !strings.Contains(menu.title, "in.txt") {
 		t.Fatalf("menu.title = %q, want file name", menu.title)
 	}
@@ -145,6 +151,23 @@ func TestBuildContextMenuDoesNotDuplicateLatestBuiltInCommand(t *testing.T) {
 	for _, item := range menu.items {
 		if item.kind == menuCommand && item.command == ":term:write" {
 			t.Fatal("unexpected transient latest-command entry for built-in write command")
+		}
+	}
+}
+
+func TestBuildContextMenuDoesNotDuplicateLatestBuiltInSplitCommand(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "in.txt",
+	})
+
+	menu := buildContextMenu(state, nil, nil, ":term:split", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	for _, item := range menu.items {
+		if item.kind == menuCommand && item.command == ":term:split" {
+			t.Fatal("unexpected transient latest-command entry for built-in split command")
 		}
 	}
 }
@@ -355,20 +378,32 @@ func TestMenuShortcutLookup(t *testing.T) {
 	menu := &menuState{
 		visible: true,
 		items: []menuItem{
+			{label: " split", shortcut: "(n)", kind: menuSplit},
 			{label: " look", shortcut: "(l)", kind: menuLook},
 			{label: " symbol", shortcut: "(M-g)", keyRune: 'g', kind: menuCommand, command: ":lsp:goto"},
 			{label: " hover", shortcut: "(M-h)", keyRune: 'h', kind: menuCommand, command: ":lsp:show"},
 			{label: " '. main.go", shortcut: "(1)", kind: menuFile, fileID: 1, current: true},
 			{label: "    util.go", shortcut: "(2)", kind: menuFile, fileID: 2},
 		},
-		hover: 0,
+		hover: 1,
 	}
 
-	item, idx, ok := menu.itemForShortcut('l')
+	item, idx, ok := menu.itemForShortcut('n')
+	if !ok {
+		t.Fatal("itemForShortcut('n') = false, want true")
+	}
+	if got, want := idx, 0; got != want {
+		t.Fatalf("builtin split shortcut index = %d, want %d", got, want)
+	}
+	if got, want := item.kind, menuSplit; got != want {
+		t.Fatalf("builtin split shortcut kind = %v, want %v", got, want)
+	}
+
+	item, idx, ok = menu.itemForShortcut('l')
 	if !ok {
 		t.Fatal("itemForShortcut('l') = false, want true")
 	}
-	if got, want := idx, 0; got != want {
+	if got, want := idx, 1; got != want {
 		t.Fatalf("builtin shortcut index = %d, want %d", got, want)
 	}
 	if got, want := item.kind, menuLook; got != want {
@@ -379,7 +414,7 @@ func TestMenuShortcutLookup(t *testing.T) {
 	if !ok {
 		t.Fatal("itemForMetaShortcut('h') = false, want true")
 	}
-	if got, want := idx, 2; got != want {
+	if got, want := idx, 3; got != want {
 		t.Fatalf("meta command index = %d, want %d", got, want)
 	}
 	if got, want := item.command, ":lsp:show"; got != want {
@@ -390,7 +425,7 @@ func TestMenuShortcutLookup(t *testing.T) {
 	if !ok {
 		t.Fatal("itemForShortcut('2') = false, want true")
 	}
-	if got, want := idx, 4; got != want {
+	if got, want := idx, 5; got != want {
 		t.Fatalf("file shortcut index = %d, want %d", got, want)
 	}
 	if got, want := item.fileID, 2; got != want {

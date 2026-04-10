@@ -80,7 +80,7 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 				Help:    "Opens the current selection or token under the cursor in the next-most-recent resident session. If no other session is available, opens a new attached pane as in ion -N.",
 			},
 			{
-				Name:    "new",
+				Name:    "split",
 				Summary: "open a new attached pane for the current file",
 				Help:    "Opens a new attached pane as in ion -N. If the current buffer names a file, the new pane opens that file.",
 			},

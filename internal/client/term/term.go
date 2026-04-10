@@ -911,6 +911,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		switch item.kind {
 		case menuWrite:
 			return ":term:write"
+		case menuSplit:
+			return ":term:split"
 		case menuCut:
 			return ":term:cut"
 		case menuSnarf:
@@ -1014,7 +1016,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = diagnosticText(err)
 			}
 			return true, false, nil
-		case ":term:new":
+		case ":term:split":
 			opener, ok := svc.(newPaneOpener)
 			if !ok {
 				return false, false, nil
@@ -2627,7 +2629,7 @@ func normalizeTerminalPseudoAlias(line string) string {
 	case ":ion:plumb2":
 		return ":term:plumb2" + newline
 	case ":ion:new":
-		return ":term:new" + newline
+		return ":term:split" + newline
 	default:
 		return line
 	}

@@ -22,6 +22,16 @@ func TestClassifyBufferRedrawSelectionChange(t *testing.T) {
 	}
 }
 
+func TestClassifyBufferRedrawNavigationHintChange(t *testing.T) {
+	t.Parallel()
+
+	prev := &bufferState{text: []rune("alpha"), cursor: 1, dotStart: 1, dotEnd: 1}
+	next := &bufferState{text: prev.text, cursor: 1, dotStart: 1, dotEnd: 1, navCursor: true}
+	if got, want := classifyBufferRedraw(prev, next), redrawBufferSelection; got != want {
+		t.Fatalf("classifyBufferRedraw() = %q, want %q", got, want)
+	}
+}
+
 func TestClassifyBufferRedrawViewportAndContent(t *testing.T) {
 	t.Parallel()
 

@@ -337,6 +337,31 @@ func TestBufferStateFromViewPreservesTransientStatus(t *testing.T) {
 	}
 }
 
+func TestBufferStateFromViewPreservesNavigationCursorHint(t *testing.T) {
+	t.Parallel()
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	previous.navCursor = true
+
+	next := bufferStateFromView(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	}, previous, map[int]int{})
+
+	if !next.navCursor {
+		t.Fatal("navCursor = false, want navigation cursor hint preserved across refresh")
+	}
+}
+
 func TestBufferStateFromViewAppliesNewRemoteStatusOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1484,6 +1509,97 @@ func TestDrawBufferLineUsesCollapsedCursorTintWhenPulsing(t *testing.T) {
 	}
 	if strings.Contains(got, theme.selectionPrefix()+"l") {
 		t.Fatalf("drawBufferLine() = %q, want pulsing cursor to avoid normal selection tint", got)
+	}
+}
+
+func TestDrawBufferLineUsesCollapsedCursorTintWhenNavigationHintActive(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	state.navCursor = true
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 5, false, theme); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want navigation cursor hint to use collapsed-selection tint", got)
+	}
+	if strings.Contains(got, theme.selectionPrefix()+"l") {
+		t.Fatalf("drawBufferLine() = %q, want navigation cursor hint to avoid normal selection tint", got)
+	}
+}
+
+func TestDrawBufferModeHidesTerminalCursorWhenNavigationHintActive(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	state.navCursor = true
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[?25l") {
+		t.Fatalf("drawBufferMode() = %q, want hidden terminal cursor for navigation hint", got)
+	}
+	if strings.Contains(got, "\x1b[?25h") {
+		t.Fatalf("drawBufferMode() = %q, want no visible terminal cursor for navigation hint", got)
+	}
+}
+
+func TestDrawBufferModeKeepsVisibleHUDCursorWhenNavigationHintActiveInOverlay(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+	state.navCursor = true
+	overlay := newOverlayState()
+	overlay.open("")
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, overlay, newMenuState(), theme, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[?25h") {
+		t.Fatalf("drawBufferMode() = %q, want visible HUD cursor while overlay is visible", got)
+	}
+	if !strings.Contains(got, theme.cursorPrefix()+"l") {
+		t.Fatalf("drawBufferMode() = %q, want painted buffer cursor while overlay is visible", got)
 	}
 }
 

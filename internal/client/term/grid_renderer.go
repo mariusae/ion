@@ -454,7 +454,7 @@ func renderBufferGridRow(builder *GridLineBuilder, state *bufferState, start, en
 		return
 	}
 	col := 0
-	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive || bufferCursorPulseActive(state), start)
+	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive || bufferCursorHintActive(state), start)
 	collapsedPainted := false
 	for pos := start; pos < end && col < len(builder.cells); pos++ {
 		style := gridStyleID(0)

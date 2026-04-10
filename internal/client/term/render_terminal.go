@@ -12,6 +12,9 @@ func buildFrameCursor(state *bufferState, overlay *overlayState, menu *menuState
 	if !focused || (menu != nil && menu.visible) {
 		return frameCursor{}
 	}
+	if state != nil && state.navCursor && (overlay == nil || !overlay.visible) {
+		return frameCursor{}
+	}
 	row, col := terminalCursorPosition(state, overlay)
 	if row < 0 {
 		row = 0

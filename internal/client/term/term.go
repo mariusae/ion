@@ -76,6 +76,7 @@ type bufferState struct {
 	dotEnd         int
 	flashSelection bool
 	pulseCursor    bool
+	navCursor      bool
 	markMode       bool
 	markPos        int
 	status         string
@@ -803,6 +804,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		if buffer != nil {
+			buffer.navCursor = true
 			buffer.status = ""
 		}
 		return nil
@@ -822,6 +824,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	var runOverlayCommand func(line string, recordHistory bool, revealOnOutput bool) (bool, error)
+	var navigationCommandHint func(string) bool
 
 	setPreviousUIFile := func(fileID int) {
 		menuSticky = menuStickyState{itemIndex: -1}
@@ -1049,6 +1052,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if recordHistory {
 			overlay.addCommand(historyLine)
 		}
+		navigationHint := navigationCommandHint(line)
 		pending = append(pending, []rune(line)...)
 		overlay.resetInput()
 		queue := newOverlayOutputQueue()
@@ -1141,6 +1145,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					if err := refreshBuffer(); err != nil {
 						return false, err
 					}
+					if navigationHint && buffer != nil {
+						buffer.navCursor = true
+						return result.done, allLayersRedraw(redrawRefresh)
+					}
 				}
 				if !overlay.visible {
 					return result.done, nil
@@ -1164,14 +1172,37 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		line = normalizeTerminalPseudoAlias(normalizeIonAlias(line))
+		navigationHint := navigationCommandHint(line)
 		if handled, done, err := executeLocalIonCommand(line); handled {
 			if recordHistory {
 				overlay.addCommand(strings.TrimSuffix(line, "\n"))
 			}
 			overlay.resetInput()
+			if !done && navigationHint && buffer != nil && buffer.navCursor {
+				if err := allLayersRedraw(redrawRefresh); err != nil {
+					return false, err
+				}
+			}
 			return done, err
 		}
 		return runRemoteOverlayCommand(line, recordHistory, revealOnOutput)
+	}
+
+	navigationCommandHint = func(line string) bool {
+		line = strings.TrimSpace(normalizeTerminalPseudoAlias(normalizeIonAlias(line)))
+		if line == ":ion:pop" {
+			return true
+		}
+		return strings.HasPrefix(line, ":ion:push ")
+	}
+
+	clearNavigationCursorHint := func() error {
+		if buffer == nil || !buffer.navCursor {
+			return nil
+		}
+		previous := snapshotBufferState(buffer)
+		buffer.navCursor = false
+		return classifiedBufferRedraw(previous)
 	}
 
 	openCommandPicker := func() error {
@@ -1444,6 +1475,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				renderer.trace.Printf("buffer-special key=%d overlay=%t menu=%t", key, overlay.visible, menu.visible)
 			}
 		}
+		if key != keyFocusIn && key != keyFocusOut {
+			if err := clearNavigationCursorHint(); err != nil {
+				return false, err
+			}
+		}
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
@@ -1647,6 +1683,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleBufferRune := func(r rune) (bool, error) {
+		if err := clearNavigationCursorHint(); err != nil {
+			return false, err
+		}
 		if menu.visible {
 			menu.dismiss()
 		}
@@ -1846,6 +1885,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 						key = legacyAltKey(key)
 						if key != keyFocusIn && key != keyFocusOut {
+							if err := clearNavigationCursorHint(); err != nil {
+								return err
+							}
 							clearTransientStatus()
 						}
 						switch key {
@@ -1966,6 +2008,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					if menu.visible {
 						menu.dismiss()
 					}
+					if err := clearNavigationCursorHint(); err != nil {
+						return err
+					}
 					clearTransientStatus()
 					overlayReq := renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
 					switch r {
@@ -2068,6 +2113,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					key = legacyAltKey(key)
 					if key != keyFocusIn && key != keyFocusOut {
+						if err := clearNavigationCursorHint(); err != nil {
+							return err
+						}
 						clearTransientStatus()
 					}
 					switch key {
@@ -2223,6 +2271,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if menu.visible {
 					menu.dismiss()
 				}
+				if err := clearNavigationCursorHint(); err != nil {
+					return err
+				}
 				clearTransientStatus()
 				overlayReq := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
 				switch r {
@@ -2323,6 +2374,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return err
 					}
 					if key != keyFocusIn && key != keyFocusOut {
+						if err := clearNavigationCursorHint(); err != nil {
+							return err
+						}
 						clearTransientStatus()
 					}
 					switch key {
@@ -2402,6 +2456,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					continue
 				}
+				if err := clearNavigationCursorHint(); err != nil {
+					return err
+				}
 				clearTransientStatus()
 				switch r {
 				case '\r', '\n':
@@ -2463,6 +2520,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				key = legacyAltKey(key)
 				if key != keyFocusIn && key != keyFocusOut {
+					if err := clearNavigationCursorHint(); err != nil {
+						return err
+					}
 					clearTransientStatus()
 				}
 				done, err := handleBufferSpecial(key, mouse)
@@ -2473,6 +2533,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					return nil
 				}
 				continue
+			}
+			if err := clearNavigationCursorHint(); err != nil {
+				return err
 			}
 			clearTransientStatus()
 			done, err := handleBufferRune(r)
@@ -2903,6 +2966,7 @@ func bufferStateFromView(view wire.BufferView, previous *bufferState, origins ma
 	next := newBufferStateWithPrevious(view, previous)
 	if previous != nil {
 		next.status = previous.status
+		next.navCursor = previous.navCursor
 	}
 	if strings.TrimSpace(view.Status) != "" && (previous == nil || view.StatusSeq != previous.statusSeq) {
 		next.status = strings.TrimSpace(view.Status)
@@ -3030,6 +3094,7 @@ func syncBufferState(svc wire.TermService, state *bufferState) (*bufferState, er
 	next.markPos = clampIndex(state.markPos, len(next.text))
 	next.flashSelection = state.flashSelection
 	next.pulseCursor = state.pulseCursor
+	next.navCursor = state.navCursor
 	next.status = state.status
 	refreshCurrentBufferDirty(svc, next)
 	return next, nil
@@ -3355,7 +3420,7 @@ const (
 func drawBufferLine(stdout io.Writer, state *bufferState, start, end int, inactive bool, theme *uiTheme) error {
 	current := bufferHighlightNone
 	col := 0
-	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive || bufferCursorPulseActive(state), start)
+	collapsedPos, collapsedCol, collapsedVisible := collapsedInactiveSelection(state, inactive || bufferCursorHintActive(state), start)
 	collapsedPainted := false
 	switchHighlight := func(next bufferHighlightKind) error {
 		if next == current {
@@ -3744,6 +3809,10 @@ func positionTerminalCursor(stdout io.Writer, state *bufferState, overlay *overl
 		_, err := io.WriteString(stdout, "\x1b[?25l")
 		return err
 	}
+	if state != nil && state.navCursor && (overlay == nil || !overlay.visible) {
+		_, err := io.WriteString(stdout, "\x1b[?25l")
+		return err
+	}
 	if !terminalCursorVisible(state, overlay) {
 		_, err := io.WriteString(stdout, "\x1b[?25l")
 		return err
@@ -3895,8 +3964,8 @@ func collapsedInactiveSelection(state *bufferState, inactive bool, rowStart int)
 	return pos, visualColumnForPos(state.text, cursorRow, pos), true
 }
 
-func bufferCursorPulseActive(state *bufferState) bool {
-	return state != nil && state.pulseCursor
+func bufferCursorHintActive(state *bufferState) bool {
+	return state != nil && (state.pulseCursor || state.navCursor)
 }
 
 func bufferInactive(overlay *overlayState, menu *menuState, focused bool) bool {

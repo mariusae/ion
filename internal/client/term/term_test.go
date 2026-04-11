@@ -1361,6 +1361,36 @@ func TestDrawBufferModeAddsTintedOverlayPaddingRows(t *testing.T) {
 	}
 }
 
+func TestDrawBufferModeKeepsBottomHUDTintWhileOverlayRuns(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 255, g: 255, b: 255}, colorModeTrueColor)
+	overlay := newOverlayState()
+	overlay.visible = true
+	overlay.addCommand("!sleep 5")
+	overlay.setRunning(true)
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, overlay, newMenuState(), theme, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[6;1H") || !strings.Contains(got, theme.hudPrefix()) {
+		t.Fatalf("drawBufferMode() = %q, want tinted bottom HUD row while overlay is running", got)
+	}
+}
+
 func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 	t.Parallel()
 

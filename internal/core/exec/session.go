@@ -2377,10 +2377,12 @@ func (s *Session) loadFileList(token *text.String) (fileListSpec, error) {
 }
 
 type shellResult struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-	Signaled bool
+	Stdout         []byte
+	Stderr         []byte
+	ExitCode       int
+	Signaled       bool
+	streamedStdout bool
+	streamedStderr bool
 }
 
 func (s *Session) resolveShellCommand(token *text.String) (string, error) {
@@ -2414,17 +2416,29 @@ func (s *Session) runShellCommand(f *text.File, cmd string, stdin []byte, captur
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	c.Stdout = &stdout
-	c.Stderr = &stderr
+	stdoutDst := io.Writer(&stdout)
+	streamStdout := !captureStdout && s.Out != nil
+	if streamStdout {
+		stdoutDst = io.MultiWriter(&stdout, s.Out)
+	}
+	stderrDst := io.Writer(&stderr)
+	streamStderr := s.Diag != nil
+	if streamStderr {
+		stderrDst = io.MultiWriter(&stderr, s.Diag)
+	}
+	c.Stdout = stdoutDst
+	c.Stderr = stderrDst
 	if err := c.Start(); err != nil {
 		return shellResult{}, err
 	}
 	s.setRunningShell(c)
 	err = c.Wait()
 	res := shellResult{
-		Stdout:   stdout.Bytes(),
-		Stderr:   stderr.Bytes(),
-		Signaled: s.clearRunningShell(c),
+		Stdout:         stdout.Bytes(),
+		Stderr:         stderr.Bytes(),
+		Signaled:       s.clearRunningShell(c),
+		streamedStdout: streamStdout,
+		streamedStderr: streamStderr,
 	}
 	if err == nil {
 		return res, nil
@@ -2513,12 +2527,12 @@ func (s *Session) writeShellWarnings(res shellResult, warnOnExit bool) error {
 }
 
 func (s *Session) writeShellStreams(res shellResult, writeStdout bool) error {
-	if writeStdout && len(res.Stdout) > 0 {
+	if writeStdout && len(res.Stdout) > 0 && !res.streamedStdout {
 		if _, err := s.Out.Write(res.Stdout); err != nil {
 			return err
 		}
 	}
-	if len(res.Stderr) > 0 {
+	if len(res.Stderr) > 0 && !res.streamedStderr {
 		if _, err := s.Diag.Write(res.Stderr); err != nil {
 			return err
 		}

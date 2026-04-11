@@ -333,7 +333,7 @@ func TestOverlayHeightUsesDraggedMaxHeight(t *testing.T) {
 	}
 }
 
-func TestOverlayHeightHidesPromptRowWhileRunning(t *testing.T) {
+func TestOverlayHeightKeepsBlankPromptRowWhileRunning(t *testing.T) {
 	prev := termRows
 	termRows = 10
 	t.Cleanup(func() {
@@ -348,11 +348,14 @@ func TestOverlayHeightHidesPromptRowWhileRunning(t *testing.T) {
 	}
 
 	overlay.setRunning(true)
-	if got, want := overlayHeight(overlay), 3; got != want {
+	if got, want := overlayHeight(overlay), 4; got != want {
 		t.Fatalf("overlayHeight(running) = %d, want %d", got, want)
 	}
 	if got, want := overlayHistoryRows(overlay), 1; got != want {
 		t.Fatalf("overlayHistoryRows(running) = %d, want %d", got, want)
+	}
+	if got, want := overlayPromptRows(overlay), 1; got != want {
+		t.Fatalf("overlayPromptRows(running) = %d, want %d", got, want)
 	}
 }
 

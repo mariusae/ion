@@ -6,12 +6,39 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"ion/internal/core/cmdlang"
 	"ion/internal/core/text"
 )
+
+type notificationWriter struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	notify chan struct{}
+	match  string
+}
+
+func (w *notificationWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	if w.match != "" && strings.Contains(w.buf.String(), w.match) {
+		select {
+		case w.notify <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func (w *notificationWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
 
 func TestExecuteChangeDirectoryCommand(t *testing.T) {
 	root := t.TempDir()
@@ -458,6 +485,62 @@ func TestOpenFilesPathsAtomicRestoresPreviousCurrentOnFailure(t *testing.T) {
 	}
 	if got, err := sess.CurrentText(); err != nil || got != "alpha\nbeta\n" {
 		t.Fatalf("CurrentText() = (%q, %v), want original text and no error", got, err)
+	}
+}
+
+func TestRunShellCommandStreamsStdoutBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	out := &notificationWriter{
+		notify: make(chan struct{}, 1),
+		match:  "hello\n",
+	}
+	sess := NewSession(out)
+	sess.Diag = io.Discard
+
+	type result struct {
+		res shellResult
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		res, err := sess.runShellCommand(nil, "printf 'hello\\n'; sleep 0.3; printf 'done\\n'", nil, false)
+		done <- result{res: res, err: err}
+	}()
+
+	select {
+	case <-out.notify:
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("runShellCommand() error = %v", got.err)
+		}
+		t.Fatal("runShellCommand() completed before streaming initial stdout")
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for streamed stdout")
+	}
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("runShellCommand() error = %v", got.err)
+		}
+		t.Fatal("runShellCommand() completed immediately after first streamed chunk")
+	default:
+	}
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("runShellCommand() error = %v", got.err)
+		}
+		if gotOut, want := out.String(), "hello\ndone\n"; gotOut != want {
+			t.Fatalf("streamed stdout = %q, want %q", gotOut, want)
+		}
+		if gotStdout, want := string(got.res.Stdout), "hello\ndone\n"; gotStdout != want {
+			t.Fatalf("captured stdout = %q, want %q", gotStdout, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for shell completion")
 	}
 }
 

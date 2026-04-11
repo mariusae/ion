@@ -1060,7 +1060,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		overlay.setRunning(true)
 		if overlay.visible {
-			if err := overlayHistoryRedraw(redrawOverlayHistory); err != nil {
+			if err := redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)); err != nil {
 				return false, err
 			}
 		}

@@ -607,8 +607,11 @@ func overlayBottomPadRows(o *overlayState) int {
 }
 
 func overlayPromptRows(o *overlayState) int {
-	if o == nil || !o.visible || o.running {
+	if o == nil || !o.visible {
 		return 0
+	}
+	if o.running {
+		return 1
 	}
 	return len(o.renderPromptLines())
 }

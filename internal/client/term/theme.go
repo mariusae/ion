@@ -1,6 +1,8 @@
 package term
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -54,6 +56,20 @@ type terminalThemeReport struct {
 func detectTerminalTheme(stdin *os.File, stdout io.Writer) (*uiTheme, []byte) {
 	report, prefix := collectTerminalThemeReport(stdin, stdout)
 	return report.theme, prefix
+}
+
+type terminalThemeDetector func(stdin *os.File, stdout io.Writer) (*uiTheme, []byte)
+
+func refreshTerminalThemeWithDetector(stdin *os.File, stdout io.Writer, reader *bufio.Reader, detect terminalThemeDetector) (*uiTheme, *bufio.Reader) {
+	nextTheme, prefetched := detect(stdin, stdout)
+	if len(prefetched) > 0 {
+		reader = bufio.NewReader(io.MultiReader(bytes.NewReader(prefetched), reader))
+	}
+	return nextTheme, reader
+}
+
+func refreshTerminalTheme(stdin *os.File, stdout io.Writer, reader *bufio.Reader) (*uiTheme, *bufio.Reader) {
+	return refreshTerminalThemeWithDetector(stdin, stdout, reader, detectTerminalTheme)
 }
 
 func detectColorMode() colorMode {

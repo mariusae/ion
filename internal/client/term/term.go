@@ -722,12 +722,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
-	refreshThemeOnFocus := func() error {
-		nextTheme, prefetched := detectTerminalTheme(stdin, stdout)
-		if len(prefetched) > 0 {
-			reader = bufio.NewReader(io.MultiReader(bytes.NewReader(prefetched), reader))
-		}
-		theme = nextTheme
+	refreshTheme := func() error {
+		theme, reader = refreshTerminalTheme(stdin, stdout, reader)
 		return nil
 	}
 
@@ -1498,13 +1494,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		if key == keyFocusIn {
 			focused = true
-			if err := refreshThemeOnFocus(); err != nil {
+			if err := refreshTheme(); err != nil {
 				return false, err
 			}
 			return false, allLayersRedraw(redrawTheme)
 		}
 		if key == keyFocusOut {
 			focused = false
+			if err := refreshTheme(); err != nil {
+				return false, err
+			}
 			if menu.visible {
 				menu.dismiss()
 				clearMenuLostRelease()
@@ -1965,7 +1964,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							overlay.killWord()
 						case keyFocusIn:
 							focused = true
-							if err := refreshThemeOnFocus(); err != nil {
+							if err := refreshTheme(); err != nil {
 								return err
 							}
 							if err := allLayersRedraw(redrawTheme); err != nil {
@@ -1974,6 +1973,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						case keyFocusOut:
 							focused = false
+							if err := refreshTheme(); err != nil {
+								return err
+							}
 							if err := allLayersRedraw(redrawTheme); err != nil {
 								return err
 							}
@@ -2222,7 +2224,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						overlay.killWord()
 					case keyFocusIn:
 						focused = true
-						if err := refreshThemeOnFocus(); err != nil {
+						if err := refreshTheme(); err != nil {
 							return err
 						}
 						if err := allLayersRedraw(redrawTheme); err != nil {
@@ -2231,6 +2233,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						continue
 					case keyFocusOut:
 						focused = false
+						if err := refreshTheme(); err != nil {
+							return err
+						}
 						if menu.visible {
 							menu.dismiss()
 							clearMenuLostRelease()
@@ -2420,7 +2425,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 					case keyFocusIn:
 						focused = true
-						if err := refreshThemeOnFocus(); err != nil {
+						if err := refreshTheme(); err != nil {
 							return err
 						}
 						if err := allLayersRedraw(redrawTheme); err != nil {
@@ -2429,6 +2434,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						continue
 					case keyFocusOut:
 						focused = false
+						if err := refreshTheme(); err != nil {
+							return err
+						}
 						if err := allLayersRedraw(redrawTheme); err != nil {
 							return err
 						}

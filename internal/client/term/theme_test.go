@@ -1,6 +1,9 @@
 package term
 
 import (
+	"bufio"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +89,28 @@ func TestFormatThemeDiagnosticsReportsSkippedQuery(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatThemeDiagnostics() missing %q in %q", want, got)
 		}
+	}
+}
+
+func TestRefreshTerminalThemePrependsPrefetchedBytes(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("tail"))
+	wantTheme := buildTheme(rgbColor{r: 1, g: 2, b: 3}, colorModeTrueColor)
+	detect := func(stdin *os.File, stdout io.Writer) (*uiTheme, []byte) {
+		return wantTheme, []byte("head")
+	}
+
+	gotTheme, gotReader := refreshTerminalThemeWithDetector(nil, io.Discard, reader, detect)
+	if !sameTheme(gotTheme, wantTheme) {
+		t.Fatalf("theme = %#v, want %#v", gotTheme, wantTheme)
+	}
+	got, err := io.ReadAll(gotReader)
+	if err != nil {
+		t.Fatalf("ReadAll(reader) error = %v", err)
+	}
+	if got, want := string(got), "headtail"; got != want {
+		t.Fatalf("reader contents = %q, want %q", got, want)
 	}
 }
 

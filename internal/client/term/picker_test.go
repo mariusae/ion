@@ -26,7 +26,7 @@ func TestCommandCompletionsFromDocsIncludesLocalTermAndMenuCommands(t *testing.T
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":term:snarf", ":term:regexp", ":term:split", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:regexp", ":term:split", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -174,7 +174,7 @@ func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 	for _, command := range docs[termIdx].Commands {
 		names = append(names, command.Name)
 	}
-	for _, want := range []string{"write", "cut", "snarf", "paste", "look", "regexp", "plumb", "plumb2", "split"} {
+	for _, want := range []string{"write", "cut", "snarf", "paste", "tmux", "send", "look", "regexp", "plumb", "plumb2", "split"} {
 		found := false
 		for _, got := range names {
 			if got == want {

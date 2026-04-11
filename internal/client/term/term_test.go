@@ -1395,7 +1395,7 @@ func TestDrawBufferModeShowsPaintedCursorWhenMenuVisible(t *testing.T) {
 	t.Parallel()
 
 	prevRows, prevCols := termRows, termCols
-	termRows, termCols = 12, 20
+	termRows, termCols = 16, 20
 	t.Cleanup(func() {
 		termRows, termCols = prevRows, prevCols
 	})
@@ -2375,6 +2375,69 @@ func TestPasteBufferSnarfAtScreenPosIgnoresClicksOutsideBuffer(t *testing.T) {
 	}
 	if next != state {
 		t.Fatal("pasteBufferSnarfAtScreenPos(outside) returned different state, want original")
+	}
+}
+
+func TestTextForCommandWindowSendUsesDotBeforeSnarf(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\n",
+		DotStart: 1,
+		DotEnd:   4,
+	})
+
+	if got, want := string(textForCommandWindowSend(state, []rune("fallback"))), "lph"; got != want {
+		t.Fatalf("textForCommandWindowSend(selection) = %q, want %q", got, want)
+	}
+
+	state.dotEnd = state.dotStart
+	if got, want := string(textForCommandWindowSend(state, []rune("fallback"))), "fallback"; got != want {
+		t.Fatalf("textForCommandWindowSend(snarf) = %q, want %q", got, want)
+	}
+}
+
+func TestSendToCommandWindowOpensOverlayAndInsertsText(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	sendToCommandWindow(overlay, []rune("hello"))
+	if !overlay.visible {
+		t.Fatal("overlay.visible = false, want command window opened")
+	}
+	if got, want := string(overlay.input), "hello"; got != want {
+		t.Fatalf("overlay input = %q, want %q", got, want)
+	}
+
+	overlay.open("prefix ")
+	overlay.cursor = len(overlay.input)
+	sendToCommandWindow(overlay, []rune("world"))
+	if got, want := string(overlay.input), "prefix world"; got != want {
+		t.Fatalf("overlay appended input = %q, want %q", got, want)
+	}
+}
+
+func TestExchangeSnarfWithTmuxSwapsBuffers(t *testing.T) {
+	t.Parallel()
+
+	var loaded []byte
+	next, status, err := exchangeSnarfWithTmux([]rune("local"), func() ([]byte, error) {
+		return []byte("remote"), nil
+	}, func(data []byte) error {
+		loaded = append([]byte(nil), data...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("exchangeSnarfWithTmux() error = %v", err)
+	}
+	if got, want := string(next), "remote"; got != want {
+		t.Fatalf("snarf after exchange = %q, want %q", got, want)
+	}
+	if got, want := string(loaded), "local"; got != want {
+		t.Fatalf("tmux loaded buffer = %q, want %q", got, want)
+	}
+	if got, want := status, "tmux exchanged"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
 	}
 }
 

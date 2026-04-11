@@ -20,6 +20,8 @@ const (
 	menuCut
 	menuSnarf
 	menuPaste
+	menuTmux
+	menuSend
 	menuLook
 	menuRegexp
 	menuPlumb
@@ -93,8 +95,10 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		menuItem{label: " paste", shortcut: "(v)", kind: menuPaste},
 		menuItem{label: " look", shortcut: "(l)", kind: menuLook},
 		menuItem{label: " plumb", shortcut: "(b)", kind: menuPlumb},
+		menuItem{label: " send", shortcut: "(s)", kind: menuSend},
 		menuItem{label: " /regexp", shortcut: "(/)", kind: menuRegexp},
-		menuItem{label: " split", shortcut: "(n)", kind: menuSplit, sepAfter: true},
+		menuItem{label: " split", shortcut: "(n)", kind: menuSplit},
+		menuItem{label: " <tmux>", shortcut: "(t)", kind: menuTmux, sepAfter: true},
 	)
 	for i, cmd := range commands {
 		label := strings.TrimSpace(cmd.Label)
@@ -240,7 +244,7 @@ func latestMenuCommandItem(commands []wire.MenuCommand, latestCommand string, ha
 
 func builtInMenuCommandPresent(command string, hasWrite bool, hasPop bool) bool {
 	switch command {
-	case ":term:split", ":term:cut", ":term:snarf", ":term:paste", ":term:look", ":term:regexp", ":term:plumb":
+	case ":term:split", ":term:cut", ":term:snarf", ":term:paste", ":term:tmux", ":term:send", ":term:look", ":term:regexp", ":term:plumb":
 		return true
 	case ":term:write":
 		return hasWrite
@@ -739,6 +743,10 @@ func menuBuiltinShortcutRune(item menuItem) (rune, bool) {
 		return 'c', true
 	case menuPaste:
 		return 'v', true
+	case menuTmux:
+		return 't', true
+	case menuSend:
+		return 's', true
 	case menuLook:
 		return 'l', true
 	case menuPlumb:

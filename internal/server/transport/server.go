@@ -1579,6 +1579,18 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "paste the current snarf buffer",
 			help:    "Terminal HUD command that pastes the current snarf buffer at the current selection or cursor.",
 		}, true
+	case ":term:tmux":
+		return commandHelpDoc{
+			usage:   ":term:tmux",
+			summary: "exchange the snarf buffer with tmux",
+			help:    "Terminal HUD command that exchanges the terminal snarf buffer with the current tmux paste buffer. If tmux has no paste buffer yet, it is treated as empty.",
+		}, true
+	case ":term:send":
+		return commandHelpDoc{
+			usage:   ":term:send",
+			summary: "send dot or snarf to the command window",
+			help:    "Terminal HUD command that sends the current selection to the command window as if typed there, or uses the snarf buffer if the selection is empty. The sent text becomes the new snarf buffer.",
+		}, true
 	case ":term:look":
 		return commandHelpDoc{
 			usage:   ":term:look",
@@ -1675,6 +1687,16 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Name:    "paste",
 					Summary: "paste the current snarf buffer",
 					Help:    "Terminal HUD command that pastes the current snarf buffer at the current selection or cursor.",
+				},
+				{
+					Name:    "tmux",
+					Summary: "exchange the snarf buffer with tmux",
+					Help:    "Terminal HUD command that exchanges the terminal snarf buffer with the current tmux paste buffer. If tmux has no paste buffer yet, it is treated as empty.",
+				},
+				{
+					Name:    "send",
+					Summary: "send dot or snarf to the command window",
+					Help:    "Terminal HUD command that sends the current selection to the command window as if typed there, or uses the snarf buffer if the selection is empty. The sent text becomes the new snarf buffer.",
 				},
 				{
 					Name:    "look",

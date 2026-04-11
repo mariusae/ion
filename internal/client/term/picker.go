@@ -60,6 +60,16 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 				Help:    "Pastes the terminal snarf buffer at the current selection or cursor position.",
 			},
 			{
+				Name:    "tmux",
+				Summary: "exchange the snarf buffer with tmux",
+				Help:    "Exchanges the terminal snarf buffer with the current tmux paste buffer. If tmux has no paste buffer yet, treats it as empty.",
+			},
+			{
+				Name:    "send",
+				Summary: "send dot or snarf to the command window",
+				Help:    "Sends the current selection to the command window as if typed there, or uses the snarf buffer if the selection is empty. The sent text becomes the new snarf buffer.",
+			},
+			{
 				Name:    "look",
 				Summary: "find the current selection or token",
 				Help:    "Searches forward for the current selection, or the token under the cursor if there is no selection.",

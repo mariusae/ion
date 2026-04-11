@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -347,6 +348,35 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 		}
 		return nil
+	}
+
+	type overlayInputState struct {
+		visible bool
+		mode    overlayMode
+		input   string
+		cursor  int
+	}
+
+	snapshotOverlayInputState := func() overlayInputState {
+		if overlay == nil {
+			return overlayInputState{}
+		}
+		return overlayInputState{
+			visible: overlay.visible,
+			mode:    overlay.mode,
+			input:   string(overlay.input),
+			cursor:  overlay.cursor,
+		}
+	}
+
+	overlayInputChanged := func(before overlayInputState) bool {
+		if overlay == nil {
+			return before != (overlayInputState{})
+		}
+		return before.visible != overlay.visible ||
+			before.mode != overlay.mode ||
+			before.input != string(overlay.input) ||
+			before.cursor != overlay.cursor
 	}
 
 	var plumbTargetToken func(string) error
@@ -918,6 +948,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return ":term:snarf"
 		case menuPaste:
 			return ":term:paste"
+		case menuTmux:
+			return ":term:tmux"
+		case menuSend:
+			return ":term:send"
 		case menuLook:
 			return ":term:look"
 		case menuRegexp:
@@ -961,6 +995,24 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return true, false, err
 			}
+			return true, false, nil
+		case ":term:tmux":
+			nextSnarf, status, err := exchangeSnarfWithTmux(snarf, readTmuxPasteBuffer, writeTmuxPasteBuffer)
+			if err != nil {
+				return true, false, err
+			}
+			snarf = nextSnarf
+			buffer.status = status
+			return true, false, nil
+		case ":term:send":
+			sent := textForCommandWindowSend(buffer, snarf)
+			if len(sent) == 0 {
+				buffer.status = ""
+				return true, false, nil
+			}
+			snarf = append([]rune(nil), sent...)
+			sendToCommandWindow(overlay, sent)
+			buffer.status = "sent"
 			return true, false, nil
 		case ":term:look":
 			next, ok, err := lookInBuffer(svc, buffer, true)
@@ -1169,11 +1221,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		line = normalizeTerminalPseudoAlias(normalizeIonAlias(line))
 		navigationHint := navigationCommandHint(line)
+		overlayBefore := snapshotOverlayInputState()
 		if handled, done, err := executeLocalIonCommand(line); handled {
 			if recordHistory {
 				overlay.addCommand(strings.TrimSuffix(line, "\n"))
 			}
-			overlay.resetInput()
+			if !overlayInputChanged(overlayBefore) {
+				overlay.resetInput()
+			}
 			if !done && navigationHint && buffer != nil && buffer.navCursor {
 				if err := allLayersRedraw(redrawRefresh); err != nil {
 					return false, err
@@ -2704,6 +2759,10 @@ func normalizeTerminalPseudoAlias(line string) string {
 		return ":term:snarf" + newline
 	case ":ion:paste":
 		return ":term:paste" + newline
+	case ":ion:tmux":
+		return ":term:tmux" + newline
+	case ":ion:send":
+		return ":term:send" + newline
 	case ":ion:look":
 		return ":term:look" + newline
 	case ":ion:regexp":
@@ -4532,6 +4591,71 @@ func copyToClipboard(stdout io.Writer, text []rune) error {
 	encoded := base64.StdEncoding.EncodeToString([]byte(string(text)))
 	_, err := fmt.Fprintf(stdout, "\x1b]52;c;%s\x07", encoded)
 	return err
+}
+
+func textForCommandWindowSend(state *bufferState, snarf []rune) []rune {
+	sent := snarfSelection(state)
+	if len(sent) > 0 {
+		return sent
+	}
+	return append([]rune(nil), snarf...)
+}
+
+func sendToCommandWindow(overlay *overlayState, text []rune) {
+	if overlay == nil || len(text) == 0 {
+		return
+	}
+	if !overlay.visible || overlay.mode != overlayModeCommand || overlay.picker != nil {
+		overlay.open("")
+	}
+	overlay.insert(append([]rune(nil), text...))
+}
+
+func exchangeSnarfWithTmux(snarf []rune, read func() ([]byte, error), write func([]byte) error) ([]rune, string, error) {
+	current, err := read()
+	if err != nil {
+		return append([]rune(nil), snarf...), "", err
+	}
+	if err := write([]byte(string(snarf))); err != nil {
+		return append([]rune(nil), snarf...), "", err
+	}
+	return []rune(string(current)), "tmux exchanged", nil
+}
+
+func readTmuxPasteBuffer() ([]byte, error) {
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return nil, fmt.Errorf("tmux not available")
+	}
+	cmd := osexec.Command("tmux", "save-buffer", "-")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return out, nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if strings.Contains(msg, "no buffers") || strings.Contains(msg, "no buffer") {
+		return nil, nil
+	}
+	if msg != "" {
+		return nil, fmt.Errorf("tmux save-buffer: %s", msg)
+	}
+	return nil, fmt.Errorf("tmux save-buffer: %w", err)
+}
+
+func writeTmuxPasteBuffer(data []byte) error {
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return fmt.Errorf("tmux not available")
+	}
+	cmd := osexec.Command("tmux", "load-buffer", "-")
+	cmd.Stdin = bytes.NewReader(data)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if msg != "" {
+		return fmt.Errorf("tmux load-buffer: %s", msg)
+	}
+	return fmt.Errorf("tmux load-buffer: %w", err)
 }
 
 func readBracketedPaste(reader *bufio.Reader) ([]rune, error) {

@@ -31,7 +31,7 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 		t.Fatalf("first item kind = %v, want %v", got, want)
 	}
 	splitIdx := menuItemIndexByKind(menu.items, menuSplit)
-	if got, want := splitIdx, 7; got != want {
+	if got, want := splitIdx, 8; got != want {
 		t.Fatalf("split item index = %d, want %d", got, want)
 	}
 	if got, want := menu.items[splitIdx].label, " split"; got != want {
@@ -172,6 +172,23 @@ func TestBuildContextMenuDoesNotDuplicateLatestBuiltInSplitCommand(t *testing.T)
 	for _, item := range menu.items {
 		if item.kind == menuCommand && item.command == ":term:split" {
 			t.Fatal("unexpected transient latest-command entry for built-in split command")
+		}
+	}
+}
+
+func TestBuildContextMenuDoesNotDuplicateLatestBuiltInSendCommand(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text: "alpha\nbeta\n",
+		Name: "in.txt",
+	})
+
+	menu := buildContextMenu(state, nil, nil, ":term:send", wire.NavigationStack{}, 10, 10, menuStickyState{itemIndex: -1})
+
+	for _, item := range menu.items {
+		if item.kind == menuCommand && item.command == ":term:send" {
+			t.Fatal("unexpected transient latest-command entry for built-in send command")
 		}
 	}
 }

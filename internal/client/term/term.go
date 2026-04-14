@@ -1342,7 +1342,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				menu.runningIdx = -1
 				return false, err
 			}
-			done, err := runOverlayCommand(line, true, true)
+			done, err := runOverlayCommand(line, shouldRecordMenuCommandInHUD(line), true)
 			menu.running = false
 			menu.runningIdx = -1
 			if menu.visible {
@@ -2776,6 +2776,11 @@ func normalizeTerminalPseudoAlias(line string) string {
 	default:
 		return line
 	}
+}
+
+func shouldRecordMenuCommandInHUD(line string) bool {
+	line = strings.TrimSpace(normalizeTerminalPseudoAlias(line))
+	return !strings.HasPrefix(line, ":term:")
 }
 
 func appendOverlayOutputLines(overlay *overlayState, lines []string, revealOnOutput bool) bool {

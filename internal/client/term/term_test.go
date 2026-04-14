@@ -2441,6 +2441,20 @@ func TestExchangeSnarfWithTmuxSwapsBuffers(t *testing.T) {
 	}
 }
 
+func TestShouldRecordMenuCommandInHUD(t *testing.T) {
+	t.Parallel()
+
+	if shouldRecordMenuCommandInHUD(":term:send") {
+		t.Fatal("shouldRecordMenuCommandInHUD(:term:send) = true, want false")
+	}
+	if shouldRecordMenuCommandInHUD(":ion:snarf") {
+		t.Fatal("shouldRecordMenuCommandInHUD(:ion:snarf) = true, want false after alias normalization")
+	}
+	if !shouldRecordMenuCommandInHUD(":lsp:goto") {
+		t.Fatal("shouldRecordMenuCommandInHUD(:lsp:goto) = false, want true")
+	}
+}
+
 func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
 	t.Parallel()
 

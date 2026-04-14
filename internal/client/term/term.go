@@ -4063,6 +4063,10 @@ func revealBufferDestination(previous, next *bufferState, overlay *overlayState,
 		}
 	}
 	rows := bufferViewRows(overlay)
+	if previous != nil {
+		next.origin = originForCursorViewRow(next.text, next.cursor, bufferCursorViewRow(previous, rows))
+		return next
+	}
 	next.origin = adjustOriginForCursor(next.text, next.origin, next.dotStart, rows)
 	return next
 }
@@ -4962,7 +4966,42 @@ func lookInBuffer(svc wire.TermService, state *bufferState, forward bool) (*buff
 	}
 	next := newBufferState(view)
 	next.status = state.status
+	next = revealBufferDestination(state, next, nil, false, true)
 	return next, true, nil
+}
+
+func bufferCursorViewRow(state *bufferState, rows int) int {
+	if state == nil || rows <= 0 {
+		return 0
+	}
+	row := 0
+	for p := visualRowStartForPos(state.text, state.origin); p < visualCursorRowStartForPos(state.text, state.cursor); {
+		next := nextVisualRowStart(state.text, p)
+		if next == p {
+			break
+		}
+		row++
+		p = next
+	}
+	if row < 0 {
+		return 0
+	}
+	if row >= rows {
+		return rows - 1
+	}
+	return row
+}
+
+func originForCursorViewRow(text []rune, cursor, row int) int {
+	origin := visualCursorRowStartForPos(text, cursor)
+	for i := 0; i < row && origin > 0; i++ {
+		prev := prevVisualRowStart(text, origin)
+		if prev == origin {
+			break
+		}
+		origin = prev
+	}
+	return origin
 }
 
 func findSelection(text []rune, start, end int, target []rune, forward bool) (int, bool) {

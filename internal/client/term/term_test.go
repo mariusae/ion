@@ -1918,6 +1918,70 @@ func TestRevealBufferDestinationAcrossFileSwitchesMakesDotVisible(t *testing.T) 
 	}
 }
 
+func TestRevealBufferDestinationPreservesCursorViewportRow(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows = prevRows
+		termCols = prevCols
+	})
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 12,
+		DotEnd:   17,
+	})
+	previous.origin = 6
+	beforeRow := bufferCursorViewRow(previous, bufferViewRows(nil))
+
+	next := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "line1\nline2\nline3\nline4\nline5\nline6\n",
+		DotStart: 24,
+		DotEnd:   29,
+	})
+
+	revealed := revealBufferDestination(previous, next, nil, true, true)
+	if got, want := bufferCursorViewRow(revealed, bufferViewRows(nil)), beforeRow; got != want {
+		t.Fatalf("cursor viewport row = %d, want preserved row %d", got, want)
+	}
+}
+
+func TestRevealBufferDestinationPreservesCursorViewportRowAcrossFileSwitch(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows = prevRows
+		termCols = prevCols
+	})
+
+	previous := newBufferState(wire.BufferView{
+		ID:       7,
+		Text:     "a1\na2\na3\na4\na5\na6\n",
+		DotStart: 9,
+		DotEnd:   11,
+	})
+	previous.origin = 3
+	beforeRow := bufferCursorViewRow(previous, bufferViewRows(nil))
+
+	next := newBufferState(wire.BufferView{
+		ID:       8,
+		Text:     "b1\nb2\nb3\nb4\nb5\nb6\n",
+		DotStart: 12,
+		DotEnd:   14,
+	})
+
+	revealed := revealBufferDestination(previous, next, nil, true, true)
+	if got, want := bufferCursorViewRow(revealed, bufferViewRows(nil)), beforeRow; got != want {
+		t.Fatalf("cursor viewport row across file switch = %d, want preserved row %d", got, want)
+	}
+}
+
 func TestRevealBufferDestinationForceRecentersWhenDotAlreadyUpdated(t *testing.T) {
 	t.Parallel()
 
@@ -2375,6 +2439,83 @@ func TestPasteBufferSnarfAtScreenPosIgnoresClicksOutsideBuffer(t *testing.T) {
 	}
 	if next != state {
 		t.Fatal("pasteBufferSnarfAtScreenPos(outside) returned different state, want original")
+	}
+}
+
+func TestLookInBufferPreservesCursorViewportRowForward(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	text := "one\ntwo\nmatch\nfour\nfive\nsix\nmatch\neight\n"
+	first := strings.Index(text, "match")
+	second := strings.LastIndex(text, "match")
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     text,
+			DotStart: first,
+			DotEnd:   first + len("match"),
+		},
+	}
+	state := newBufferState(svc.view)
+	state.origin = 0
+	beforeRow := bufferCursorViewRow(state, bufferViewRows(nil))
+
+	next, ok, err := lookInBuffer(svc, state, true)
+	if err != nil {
+		t.Fatalf("lookInBuffer(forward) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("lookInBuffer(forward) ok = false, want true")
+	}
+	if got, want := next.cursor, second; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := bufferCursorViewRow(next, bufferViewRows(nil)), beforeRow; got != want {
+		t.Fatalf("cursor viewport row = %d, want preserved row %d", got, want)
+	}
+}
+
+func TestLookInBufferPreservesCursorViewportRowBackward(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	text := "one\nmatch\nthree\nfour\nmatch\nsix\nseven\nmatch\n"
+	first := strings.Index(text, "match")
+	second := strings.Index(text[first+1:], "match") + first + 1
+	third := strings.LastIndex(text, "match")
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     text,
+			DotStart: third,
+			DotEnd:   third + len("match"),
+		},
+	}
+	state := newBufferState(svc.view)
+	state.origin = visualRowStartForPos(state.text, second-len("four\n"))
+	beforeRow := bufferCursorViewRow(state, bufferViewRows(nil))
+
+	next, ok, err := lookInBuffer(svc, state, false)
+	if err != nil {
+		t.Fatalf("lookInBuffer(backward) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("lookInBuffer(backward) ok = false, want true")
+	}
+	if got, want := next.cursor, second; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := bufferCursorViewRow(next, bufferViewRows(nil)), beforeRow; got != want {
+		t.Fatalf("cursor viewport row = %d, want preserved row %d", got, want)
 	}
 }
 

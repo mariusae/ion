@@ -149,7 +149,10 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	items, preferred, err := buildDirectoryPickerItems(newBufferState(wire.BufferView{
 		Name: "current.go",
 		Path: currentPath,
-	}))
+	}), []wire.MenuFile{
+		{ID: 1, Name: "current.go", Path: currentPath, Dirty: true, Current: true},
+		{ID: 2, Name: "other.go", Path: filepath.Join(root, "other.go"), Dirty: true, Changed: true},
+	})
 	if err != nil {
 		t.Fatalf("buildDirectoryPickerItems() error = %v", err)
 	}
@@ -159,6 +162,12 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	if got, want := len(items), 2; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
+	if got, want := items[0].label, "'-. current.go"; got != want {
+		t.Fatalf("first label = %q, want %q", got, want)
+	}
+	if got, want := items[1].label, "\"-  other.go"; got != want {
+		t.Fatalf("second label = %q, want %q", got, want)
+	}
 	if got, want := items[0].path, currentPath; got != want {
 		t.Fatalf("first path = %q, want %q", got, want)
 	}
@@ -167,6 +176,66 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	}
 	if got, want := items[1].path, filepath.Join(root, "other.go"); got != want {
 		t.Fatalf("second path = %q, want %q", got, want)
+	}
+	if got, want := items[1].fileID, 2; got != want {
+		t.Fatalf("second fileID = %d, want %d", got, want)
+	}
+}
+
+func TestBuildDirectoryPickerItemsLeavesUnloadedFilesAligned(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	currentPath := filepath.Join(root, "current.go")
+	unloadedPath := filepath.Join(root, "plain.txt")
+	if err := os.WriteFile(currentPath, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current) error = %v", err)
+	}
+	if err := os.WriteFile(unloadedPath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plain) error = %v", err)
+	}
+
+	items, _, err := buildDirectoryPickerItems(newBufferState(wire.BufferView{
+		Name: "current.go",
+		Path: currentPath,
+	}), []wire.MenuFile{
+		{ID: 1, Name: "current.go", Path: currentPath, Current: true},
+	})
+	if err != nil {
+		t.Fatalf("buildDirectoryPickerItems() error = %v", err)
+	}
+	if got, want := items[1].label, "    plain.txt"; got != want {
+		t.Fatalf("unloaded label = %q, want %q", got, want)
+	}
+}
+
+func TestShouldPreviewDirectoryFileRejectsBinary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	textPath := filepath.Join(root, "text.txt")
+	binPath := filepath.Join(root, "bin.dat")
+	if err := os.WriteFile(textPath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(text) error = %v", err)
+	}
+	if err := os.WriteFile(binPath, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("WriteFile(bin) error = %v", err)
+	}
+
+	ok, err := shouldPreviewDirectoryFile(textPath)
+	if err != nil {
+		t.Fatalf("shouldPreviewDirectoryFile(text) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("shouldPreviewDirectoryFile(text) = false, want true")
+	}
+
+	ok, err = shouldPreviewDirectoryFile(binPath)
+	if err != nil {
+		t.Fatalf("shouldPreviewDirectoryFile(binary) error = %v", err)
+	}
+	if ok {
+		t.Fatal("shouldPreviewDirectoryFile(binary) = true, want false")
 	}
 }
 

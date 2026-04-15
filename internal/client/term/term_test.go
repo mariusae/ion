@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,33 @@ func (f *fakeTermService) Execute(script string) (bool, error) {
 	if f.executeFunc != nil {
 		return f.executeFunc(script)
 	}
+	if script == "D\n" {
+		currentID := 0
+		for _, file := range f.menuFiles {
+			if file.Current {
+				currentID = file.ID
+				break
+			}
+		}
+		if currentID != 0 {
+			next := make([]wire.MenuFile, 0, len(f.menuFiles)-1)
+			for _, file := range f.menuFiles {
+				if file.ID == currentID {
+					continue
+				}
+				next = append(next, file)
+			}
+			f.menuFiles = next
+			for i := range f.menuFiles {
+				f.menuFiles[i].Current = i == 0
+				if f.menuFiles[i].Current {
+					f.view.ID = f.menuFiles[i].ID
+					f.view.Name = f.menuFiles[i].Name
+					f.view.Path = f.menuFiles[i].Path
+				}
+			}
+		}
+	}
 	return true, nil
 }
 
@@ -55,7 +83,27 @@ func (f *fakeTermService) OpenFiles(files []string) (wire.BufferView, error) {
 
 func (f *fakeTermService) OpenTarget(path, address string) (wire.BufferView, error) {
 	f.openTargets = append(f.openTargets, path)
+	for i := range f.menuFiles {
+		f.menuFiles[i].Current = false
+		if sameMenuPath(f.menuFiles[i].Path, path) {
+			f.menuFiles[i].Current = true
+			f.view.ID = f.menuFiles[i].ID
+			f.view.Name = path
+			f.view.Path = path
+			_ = address
+			return f.view, nil
+		}
+	}
+	nextID := 1
+	for _, file := range f.menuFiles {
+		if file.ID >= nextID {
+			nextID = file.ID + 1
+		}
+	}
+	f.menuFiles = append(f.menuFiles, wire.MenuFile{ID: nextID, Name: path, Path: path, Current: true})
+	f.view.ID = nextID
 	f.view.Name = path
+	f.view.Path = path
 	_ = address
 	return f.view, nil
 }
@@ -81,12 +129,15 @@ func (f *fakeTermService) NavigationStack() (wire.NavigationStack, error) {
 
 func (f *fakeTermService) FocusFile(id int) (wire.BufferView, error) {
 	f.focusID = id
-	for _, file := range f.menuFiles {
+	for i := range f.menuFiles {
+		f.menuFiles[i].Current = f.menuFiles[i].ID == id
+		file := f.menuFiles[i]
 		if file.ID != id {
 			continue
 		}
 		f.view.ID = file.ID
 		f.view.Name = file.Name
+		f.view.Path = file.Path
 		break
 	}
 	return f.view, nil
@@ -278,6 +329,54 @@ func TestFilePickerPreviewStateCommitKeepsPreviewAndRecordsPreviousFile(t *testi
 	}
 	if got, want := applied, []int{2}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("applied focus sequence = %v, want %v", got, want)
+	}
+}
+
+func TestFilePickerPreviewStateCancelClosesTransientPreviewFile(t *testing.T) {
+	t.Parallel()
+
+	startPath := filepath.Join(t.TempDir(), "start.txt")
+	previewPath := filepath.Join(t.TempDir(), "preview.txt")
+	svc := &fakeTermService{
+		view: wire.BufferView{ID: 1, Name: startPath, Path: startPath},
+		menuFiles: []wire.MenuFile{
+			{ID: 1, Name: startPath, Path: startPath, Current: true},
+		},
+	}
+	var applied []int
+	apply := func(view wire.BufferView) {
+		applied = append(applied, view.ID)
+	}
+
+	var preview filePickerPreviewState
+	preview.begin(1)
+
+	changed, err := preview.syncSelection(svc, overlayPickerItem{key: "path:" + previewPath, path: previewPath}, apply)
+	if err != nil {
+		t.Fatalf("syncSelection() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("syncSelection() changed = false, want true")
+	}
+	if got, want := len(svc.menuFiles), 2; got != want {
+		t.Fatalf("menu file count after preview = %d, want %d", got, want)
+	}
+
+	changed, err = preview.finish(svc, false, overlayPickerItem{}, apply, func(int) {})
+	if err != nil {
+		t.Fatalf("finish(cancel) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("finish(cancel) changed = false, want true")
+	}
+	if got, want := len(svc.menuFiles), 1; got != want {
+		t.Fatalf("menu file count after cancel = %d, want %d", got, want)
+	}
+	if got, want := svc.menuFiles[0].ID, 1; got != want {
+		t.Fatalf("remaining file id = %d, want %d", got, want)
+	}
+	if got, want := applied, []int{2, 1}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("applied views = %v, want %v", got, want)
 	}
 }
 

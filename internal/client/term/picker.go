@@ -1,11 +1,14 @@
 package term
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"ion/internal/proto/wire"
 )
@@ -285,7 +288,7 @@ func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlay
 	return items, preferred
 }
 
-func buildDirectoryPickerItems(buffer *bufferState) ([]overlayPickerItem, string, error) {
+func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]overlayPickerItem, string, error) {
 	dir, ok := currentBufferDirectory(buffer)
 	if !ok {
 		return nil, "", nil
@@ -297,6 +300,14 @@ func buildDirectoryPickerItems(buffer *bufferState) ([]overlayPickerItem, string
 	items := make([]overlayPickerItem, 0, len(entries))
 	preferred := ""
 	currentPath := strings.TrimSpace(buffer.path)
+	loadedByPath := make(map[string]wire.MenuFile, len(files))
+	for _, file := range files {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		loadedByPath[filepath.Clean(path)] = file
+	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -304,14 +315,21 @@ func buildDirectoryPickerItems(buffer *bufferState) ([]overlayPickerItem, string
 		name := entry.Name()
 		path := filepath.Join(dir, name)
 		current := sameMenuPath(path, currentPath)
-		items = append(items, overlayPickerItem{
+		item := overlayPickerItem{
 			key:     "path:" + path,
-			label:   fmt.Sprintf("%c %s", currentMark(current), name),
 			value:   name,
 			search:  strings.ToLower(name + " " + path),
 			path:    path,
 			current: current,
-		})
+		}
+		if loaded, ok := loadedByPath[filepath.Clean(path)]; ok {
+			item.fileID = loaded.ID
+			item.current = loaded.Current
+			item.label = fmt.Sprintf("%c-%c %s", dirtyMark(loaded.Dirty, loaded.Changed), currentMark(loaded.Current), name)
+		} else {
+			item.label = "    " + name
+		}
+		items = append(items, item)
 		if current {
 			preferred = "path:" + path
 		}
@@ -320,6 +338,28 @@ func buildDirectoryPickerItems(buffer *bufferState) ([]overlayPickerItem, string
 		return items[i].value < items[j].value
 	})
 	return items, preferred, nil
+}
+
+func shouldPreviewDirectoryFile(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 8192)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	buf = buf[:n]
+	if len(buf) == 0 {
+		return true, nil
+	}
+	if bytes.IndexByte(buf, 0) >= 0 {
+		return false, nil
+	}
+	return utf8.Valid(buf), nil
 }
 
 func commandSummaryIndex(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand) map[string]string {

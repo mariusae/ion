@@ -116,9 +116,12 @@ type fileFocusService interface {
 }
 
 type filePickerPreviewState struct {
-	active        bool
-	startFileID   int
-	previewFileID int
+	active           bool
+	startFileID      int
+	previewFileID    int
+	previewPath      string
+	previewTransient bool
+	messageActive    bool
 }
 
 func newOverlayOutputQueue() *overlayOutputQueue {
@@ -160,51 +163,99 @@ func (s *filePickerPreviewState) clear() {
 	*s = filePickerPreviewState{}
 }
 
-func (s *filePickerPreviewState) syncSelection(svc fileFocusService, item overlayPickerItem, apply func(wire.BufferView)) (bool, error) {
-	if !s.active || item.fileID == 0 || item.fileID == s.previewFileID {
+func (s *filePickerPreviewState) selectionMatchesPreview(item overlayPickerItem) bool {
+	if !s.active {
+		return false
+	}
+	if s.messageActive {
+		return false
+	}
+	if item.fileID != 0 && item.fileID == s.previewFileID {
+		return true
+	}
+	return strings.TrimSpace(item.path) != "" && sameMenuPath(item.path, s.previewPath)
+}
+
+func (s *filePickerPreviewState) syncSelection(svc wire.TermService, item overlayPickerItem, apply func(wire.BufferView)) (bool, error) {
+	if !s.active || s.selectionMatchesPreview(item) {
 		return false, nil
 	}
-	view, err := svc.FocusFile(item.fileID)
+	if s.previewTransient {
+		if _, _, err := deleteCurrentMenuFile(svc, s.previewFileID, false); err != nil {
+			return false, err
+		}
+		s.previewTransient = false
+		s.previewFileID = 0
+		s.previewPath = ""
+	}
+	var (
+		view      wire.BufferView
+		err       error
+		transient bool
+	)
+	switch {
+	case item.fileID != 0:
+		view, err = svc.FocusFile(item.fileID)
+	case strings.TrimSpace(item.path) != "":
+		view, err = svc.OpenTarget(item.path, "")
+		transient = true
+	default:
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
 	apply(view)
-	s.previewFileID = item.fileID
+	s.messageActive = false
+	s.previewFileID = view.ID
+	s.previewPath = strings.TrimSpace(item.path)
+	s.previewTransient = transient
 	return true, nil
 }
 
-func (s *filePickerPreviewState) finish(svc fileFocusService, commit bool, item overlayPickerItem, apply func(wire.BufferView), setPrevious func(int)) (bool, error) {
+func (s *filePickerPreviewState) finish(svc wire.TermService, commit bool, item overlayPickerItem, apply func(wire.BufferView), setPrevious func(int)) (bool, error) {
 	if !s.active {
 		return false, nil
 	}
 	startFileID := s.startFileID
-	previewFileID := s.previewFileID
-	s.clear()
 	if commit {
-		selectedFileID := item.fileID
-		changed := false
-		if selectedFileID != 0 && selectedFileID != previewFileID {
-			view, err := svc.FocusFile(selectedFileID)
-			if err != nil {
-				return false, err
-			}
-			apply(view)
-			changed = true
+		changed, err := s.syncSelection(svc, item, apply)
+		if err != nil {
+			return false, err
 		}
+		selectedFileID := s.previewFileID
+		s.previewTransient = false
+		s.clear()
 		if startFileID != 0 && selectedFileID != 0 && selectedFileID != startFileID {
 			setPrevious(startFileID)
 		}
 		return changed, nil
 	}
-	if startFileID == 0 || previewFileID == startFileID {
-		return false, nil
+	changed := false
+	if s.previewTransient {
+		if _, _, err := deleteCurrentMenuFile(svc, s.previewFileID, false); err != nil {
+			return false, err
+		}
+		s.previewTransient = false
+		changed = true
 	}
-	view, err := svc.FocusFile(startFileID)
-	if err != nil {
-		return false, err
+	if startFileID != 0 && s.previewFileID != startFileID {
+		view, err := svc.FocusFile(startFileID)
+		if err != nil {
+			return false, err
+		}
+		apply(view)
+		changed = true
+	} else if s.messageActive {
+		view, err := svc.CurrentView()
+		if err != nil {
+			return false, err
+		}
+		apply(view)
+		changed = true
 	}
-	apply(view)
-	return true, nil
+	s.clear()
+	return changed, nil
 }
 
 // Run executes the initial terminal-client slice.
@@ -316,6 +367,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 	applyBufferView := func(view wire.BufferView) {
 		applyBufferViewWithReveal(view, false)
+	}
+	applyPreviewMessage := func(item overlayPickerItem, message string) {
+		view := wire.BufferView{
+			Name: item.value,
+			Path: item.path,
+			Text: message + "\n",
+		}
+		buffer = newBufferStateWithPrevious(view, nil)
+		buffer.status = ""
 	}
 
 	showOverlayDiagnostic := func(message string) {
@@ -429,6 +489,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return werr
 	}
 
+	var syncFilePickerPreview func() (bool, error)
+
 	executePending := func(final bool, report func(string) error) (bool, error) {
 		for {
 			if script, consumed, ok := extractRawCommand(pending, final); ok {
@@ -534,6 +596,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		applyBufferViewWithReveal(view, forceReveal)
+		if overlay.visible && overlay.pickerActive() && syncFilePickerPreview != nil {
+			if _, err := syncFilePickerPreview(); err != nil {
+				return err
+			}
+		}
 		if buffer != nil && buffer.dirty && buffer.diskChanged && !prevChanged {
 			buffer.status = "?warning: file changed on disk"
 		}
@@ -866,13 +933,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 	}
 
-	syncFilePickerPreview := func() (bool, error) {
-		if !filePickerPreview.active || overlay.pickerMode() != overlayModeFilePicker {
+	syncFilePickerPreview = func() (bool, error) {
+		if !filePickerPreview.active {
+			return false, nil
+		}
+		switch overlay.pickerMode() {
+		case overlayModeFilePicker, overlayModeDirectoryPicker:
+		default:
 			return false, nil
 		}
 		item, ok := overlay.pickerSelected()
 		if !ok {
 			return false, nil
+		}
+		if overlay.pickerMode() == overlayModeDirectoryPicker && item.fileID == 0 && strings.TrimSpace(item.path) != "" {
+			ok, err := shouldPreviewDirectoryFile(item.path)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				applyPreviewMessage(item, "[binary file not previewed]")
+				filePickerPreview.messageActive = true
+				filePickerPreview.previewPath = strings.TrimSpace(item.path)
+				if buffer != nil {
+					buffer.status = "?binary file"
+				}
+				return true, nil
+			}
 		}
 		changed, err := filePickerPreview.syncSelection(svc, item, applyBufferView)
 		if err != nil {
@@ -1298,7 +1385,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	openDirectoryPicker := func() error {
-		items, preferred, err := buildDirectoryPickerItems(buffer)
+		snapshot, err := loadMenuSnapshot(svc)
+		if err != nil {
+			return err
+		}
+		items, preferred, err := buildDirectoryPickerItems(buffer, snapshot.Files)
 		if err != nil {
 			return err
 		}
@@ -1306,8 +1397,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = "?no files"
 			return bufferRedraw(redrawBufferStatus)
 		}
+		startFileID := 0
+		if buffer != nil {
+			startFileID = buffer.fileID
+		}
 		overlay.openPicker(overlayModeDirectoryPicker, items, preferred)
-		return overlaySurfaceRedraw(redrawOverlayOpen)
+		filePickerPreview.begin(startFileID)
+		previewChanged, err := syncFilePickerPreview()
+		if err != nil {
+			return err
+		}
+		flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+		if previewChanged {
+			flags |= renderInvalidateBuffer
+		}
+		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
 	}
 
 	submitOverlay := func() (bool, error) {
@@ -1985,7 +2089,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								previewChanged := false
 								if !overlay.visible || !overlay.pickerActive() {
 									previewChanged, err = finishFilePickerPreview(false, overlayPickerItem{})
-								} else if overlay.pickerMode() == overlayModeFilePicker {
+								} else if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker {
 									previewChanged, err = syncFilePickerPreview()
 								}
 								if err != nil {
@@ -2114,34 +2218,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						case overlayModeDirectoryPicker:
 							item, ok := overlay.pickerSelected()
 							overlay.close()
-							overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+							previewChanged := false
+							if ok {
+								previewChanged, err = finishFilePickerPreview(true, item)
+							} else {
+								previewChanged, err = finishFilePickerPreview(false, overlayPickerItem{})
+							}
+							if err != nil {
+								return err
+							}
+							flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+							if previewChanged {
+								flags |= renderInvalidateBuffer
+							}
+							overlayReq = renderRequestForLayers(redrawOverlayClose, flags)
 							if !ok {
 								if err := redraw(overlayReq); err != nil {
 									return err
 								}
 								continue
 							}
-							previousFileID := 0
-							if buffer != nil {
-								previousFileID = buffer.fileID
-							}
-							view, err := svc.OpenTarget(item.path, "")
-							if err != nil {
-								buffer.status = diagnosticText(err)
-								overlayReq.invalidation |= renderInvalidateBuffer
-								if err := redraw(overlayReq); err != nil {
-									return err
-								}
-								continue
-							}
-							applyBufferView(view)
-							setPreviousUIFile(previousFileID)
-							buffer.status = ""
-							overlayReq.invalidation |= renderInvalidateBuffer
-							if err := redraw(overlayReq); err != nil {
-								return err
-							}
-							continue
 						default:
 							item, ok := overlay.pickerSelected()
 							if !ok {
@@ -2195,7 +2291,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 					}
 					previewChanged := false
-					if overlay.pickerMode() == overlayModeFilePicker {
+					if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker {
 						previewChanged, err = syncFilePickerPreview()
 						if err != nil {
 							return err

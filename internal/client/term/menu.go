@@ -150,15 +150,14 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 		return menu
 	}
 
-	pct := 0
-	if len(buffer.text) > 0 {
-		pct = buffer.origin * 100 / len(buffer.text)
+	return finalizeMenuLayout(menu, menuTitleForBuffer(buffer), clickX, clickY, sticky)
+}
+
+func finalizeMenuLayout(menu *menuState, title string, clickX, clickY int, sticky menuStickyState) *menuState {
+	if menu == nil || len(menu.items) == 0 {
+		return menu
 	}
-	titleName := buffer.name
-	if titleName == "" {
-		titleName = "(unnamed)"
-	}
-	menu.titleBase = fmt.Sprintf(" %s (%d%%) ", titleName, pct)
+	menu.titleBase = title
 	menu.title = menu.titleBase
 
 	menu.width = len([]rune(menu.title)) + 2
@@ -220,6 +219,48 @@ func buildContextMenu(buffer *bufferState, files []wire.MenuFile, commands []wir
 	}
 	menu.visible = true
 	return menu
+}
+
+func menuTitleForBuffer(buffer *bufferState) string {
+	if buffer == nil {
+		return " (unnamed) "
+	}
+	pct := 0
+	if len(buffer.text) > 0 {
+		pct = buffer.origin * 100 / len(buffer.text)
+	}
+	titleName := buffer.name
+	if titleName == "" {
+		titleName = "(unnamed)"
+	}
+	return fmt.Sprintf(" %s (%d%%) ", titleName, pct)
+}
+
+func currentBufferDirectory(buffer *bufferState) (string, bool) {
+	if buffer == nil {
+		return "", false
+	}
+	path := strings.TrimSpace(buffer.path)
+	if path == "" {
+		path = strings.TrimSpace(buffer.name)
+	}
+	if path == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", false
+		}
+		path = abs
+	}
+	return filepath.Dir(path), true
+}
+
+func sameMenuPath(left, right string) bool {
+	left = filepath.Clean(strings.TrimSpace(left))
+	right = filepath.Clean(strings.TrimSpace(right))
+	return left != "" && right != "" && left == right
 }
 
 func latestMenuCommandItem(commands []wire.MenuCommand, latestCommand string, hasWrite bool, hasPop bool) (menuItem, bool) {

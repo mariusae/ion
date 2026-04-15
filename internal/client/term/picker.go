@@ -2,6 +2,8 @@ package term
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,6 +16,7 @@ const (
 	overlayModeCommand overlayMode = iota
 	overlayModeCommandPicker
 	overlayModeFilePicker
+	overlayModeDirectoryPicker
 )
 
 type overlayPickerItem struct {
@@ -22,6 +25,7 @@ type overlayPickerItem struct {
 	value   string
 	search  string
 	fileID  int
+	path    string
 	current bool
 }
 
@@ -279,6 +283,43 @@ func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlay
 		}
 	}
 	return items, preferred
+}
+
+func buildDirectoryPickerItems(buffer *bufferState) ([]overlayPickerItem, string, error) {
+	dir, ok := currentBufferDirectory(buffer)
+	if !ok {
+		return nil, "", nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	items := make([]overlayPickerItem, 0, len(entries))
+	preferred := ""
+	currentPath := strings.TrimSpace(buffer.path)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		path := filepath.Join(dir, name)
+		current := sameMenuPath(path, currentPath)
+		items = append(items, overlayPickerItem{
+			key:     "path:" + path,
+			label:   fmt.Sprintf("%c %s", currentMark(current), name),
+			value:   name,
+			search:  strings.ToLower(name + " " + path),
+			path:    path,
+			current: current,
+		})
+		if current {
+			preferred = "path:" + path
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].value < items[j].value
+	})
+	return items, preferred, nil
 }
 
 func commandSummaryIndex(docs []wire.NamespaceProviderDoc, menu []wire.MenuCommand) map[string]string {

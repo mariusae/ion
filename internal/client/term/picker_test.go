@@ -1,6 +1,8 @@
 package term
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -126,6 +128,45 @@ func TestBuildFilePickerItemsPrefersPreviousUIFile(t *testing.T) {
 
 	if got, want := preferred, "file:1"; got != want {
 		t.Fatalf("preferred = %q, want %q", got, want)
+	}
+}
+
+func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	currentPath := filepath.Join(root, "current.go")
+	if err := os.WriteFile(currentPath, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "other.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(other) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatalf("Mkdir(subdir) error = %v", err)
+	}
+
+	items, preferred, err := buildDirectoryPickerItems(newBufferState(wire.BufferView{
+		Name: "current.go",
+		Path: currentPath,
+	}))
+	if err != nil {
+		t.Fatalf("buildDirectoryPickerItems() error = %v", err)
+	}
+	if got, want := preferred, "path:"+currentPath; got != want {
+		t.Fatalf("preferred = %q, want %q", got, want)
+	}
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].path, currentPath; got != want {
+		t.Fatalf("first path = %q, want %q", got, want)
+	}
+	if !items[0].current {
+		t.Fatal("first item current = false, want true")
+	}
+	if got, want := items[1].path, filepath.Join(root, "other.go"); got != want {
+		t.Fatalf("second path = %q, want %q", got, want)
 	}
 }
 

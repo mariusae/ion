@@ -21,6 +21,7 @@ type fakeTermService struct {
 	namespaceDocs []wire.NamespaceProviderDoc
 	navStack      wire.NavigationStack
 	focusID       int
+	openTargets   []string
 	executeCalls  []string
 	executeFunc   func(string) (bool, error)
 	setDotCalls   int
@@ -53,6 +54,7 @@ func (f *fakeTermService) OpenFiles(files []string) (wire.BufferView, error) {
 }
 
 func (f *fakeTermService) OpenTarget(path, address string) (wire.BufferView, error) {
+	f.openTargets = append(f.openTargets, path)
 	f.view.Name = path
 	_ = address
 	return f.view, nil

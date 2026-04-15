@@ -1297,6 +1297,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
 	}
 
+	openDirectoryPicker := func() error {
+		items, preferred, err := buildDirectoryPickerItems(buffer)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			buffer.status = "?no files"
+			return bufferRedraw(redrawBufferStatus)
+		}
+		overlay.openPicker(overlayModeDirectoryPicker, items, preferred)
+		return overlaySurfaceRedraw(redrawOverlayOpen)
+	}
+
 	submitOverlay := func() (bool, error) {
 		line := string(overlay.input)
 		if len(overlay.input) == 0 {
@@ -1746,6 +1759,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		switch r {
 		case 0x0b:
 			return false, openCommandPicker()
+		case 0x06:
+			return false, openDirectoryPicker()
 		case 0x07:
 			return false, showKeyboardMenu()
 		case 0x10:
@@ -2096,6 +2111,37 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								continue
 							}
+						case overlayModeDirectoryPicker:
+							item, ok := overlay.pickerSelected()
+							overlay.close()
+							overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+							if !ok {
+								if err := redraw(overlayReq); err != nil {
+									return err
+								}
+								continue
+							}
+							previousFileID := 0
+							if buffer != nil {
+								previousFileID = buffer.fileID
+							}
+							view, err := svc.OpenTarget(item.path, "")
+							if err != nil {
+								buffer.status = diagnosticText(err)
+								overlayReq.invalidation |= renderInvalidateBuffer
+								if err := redraw(overlayReq); err != nil {
+									return err
+								}
+								continue
+							}
+							applyBufferView(view)
+							setPreviousUIFile(previousFileID)
+							buffer.status = ""
+							overlayReq.invalidation |= renderInvalidateBuffer
+							if err := redraw(overlayReq); err != nil {
+								return err
+							}
+							continue
 						default:
 							item, ok := overlay.pickerSelected()
 							if !ok {

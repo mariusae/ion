@@ -97,10 +97,11 @@ func TestOverlayCommandPickerDefaultsToPreferredAndFilters(t *testing.T) {
 func TestBuildFilePickerItemsPrefersCurrentFile(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
 	items, preferred := buildFilePickerItems([]wire.MenuFile{
-		{ID: 1, Name: "a.txt"},
-		{ID: 2, Name: "b.txt", Dirty: true, Current: true},
-		{ID: 3, Name: "c.txt", Changed: true},
+		{ID: 1, Name: "a.txt", Path: filepath.Join(root, "a.txt")},
+		{ID: 2, Name: "b.txt", Path: filepath.Join(root, "hidden", "b.txt"), Dirty: true, Current: true},
+		{ID: 3, Name: "c.txt", Path: filepath.Join(root, "c.txt"), Changed: true},
 	}, 0)
 
 	if got, want := preferred, "file:2"; got != want {
@@ -114,6 +115,9 @@ func TestBuildFilePickerItemsPrefersCurrentFile(t *testing.T) {
 	}
 	if got, want := items[1].label, "'. b.txt"; got != want {
 		t.Fatalf("current item label = %q, want %q", got, want)
+	}
+	if strings.Contains(items[1].search, "hidden") {
+		t.Fatalf("current item search = %q, want rendered text only", items[1].search)
 	}
 }
 
@@ -179,6 +183,9 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	}
 	if got, want := items[1].fileID, 2; got != want {
 		t.Fatalf("second fileID = %d, want %d", got, want)
+	}
+	if strings.Contains(items[1].search, root) {
+		t.Fatalf("second item search = %q, want rendered text only", items[1].search)
 	}
 }
 

@@ -275,7 +275,7 @@ func buildFilePickerItems(files []wire.MenuFile, preferredFileID int) ([]overlay
 			key:     fmt.Sprintf("file:%d", file.ID),
 			label:   fmt.Sprintf("%c%c %s", dirtyMark(file.Dirty, file.Changed), currentMark(file.Current), name),
 			value:   name,
-			search:  strings.ToLower(name + " " + strings.TrimSpace(file.Path)),
+			search:  strings.ToLower(fmt.Sprintf("%c%c %s", dirtyMark(file.Dirty, file.Changed), currentMark(file.Current), name)),
 			fileID:  file.ID,
 			current: file.Current,
 		})
@@ -318,7 +318,6 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 		item := overlayPickerItem{
 			key:     "path:" + path,
 			value:   name,
-			search:  strings.ToLower(name + " " + path),
 			path:    path,
 			current: current,
 		}
@@ -329,6 +328,7 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 		} else {
 			item.label = "    " + name
 		}
+		item.search = strings.ToLower(item.label)
 		items = append(items, item)
 		if current {
 			preferred = "path:" + path

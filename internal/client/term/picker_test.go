@@ -327,6 +327,33 @@ func TestOverlayRecallLastPickerRestoresQueryAndSelection(t *testing.T) {
 	}
 }
 
+func TestOverlayRecallLastPickerIgnoresOtherPickerKinds(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModePickPicker, []overlayPickerItem{
+		{key: "pick:1", label: "alpha.go:10", value: "alpha.go:10", search: "alpha.go:10"},
+		{key: "pick:2", label: "beta.go:20", value: "beta.go:20", search: "beta.go:20"},
+	}, "pick:1")
+	overlay.insert([]rune("beta"))
+	overlay.close()
+
+	overlay.openPicker(overlayModeFilePicker, []overlayPickerItem{
+		{key: "file:1", label: "a.txt", value: "a.txt", search: "a.txt"},
+	}, "file:1")
+	overlay.close()
+
+	if !overlay.recallLastPicker() {
+		t.Fatal("recallLastPicker() = false, want stored pick picker")
+	}
+	if got, want := overlay.pickerMode(), overlayModePickPicker; got != want {
+		t.Fatalf("pickerMode() = %v, want %v", got, want)
+	}
+	if got, want := string(overlay.input), "beta"; got != want {
+		t.Fatalf("restored input = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayRecallLastPickerWithoutSnapshotReturnsFalse(t *testing.T) {
 	t.Parallel()
 

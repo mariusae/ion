@@ -905,3 +905,27 @@ func resolvePlumbTargetToken(state *bufferState, token string) string {
 	}
 	return resolved + ":" + target.Address
 }
+
+func plumbTargetLineToken(line string) string {
+	line = strings.TrimRight(line, "\r\n")
+	if strings.TrimSpace(line) == "" {
+		return ""
+	}
+	text := []rune(line)
+	cursor := 0
+	for cursor < len(text) && text[cursor] <= 0x20 {
+		cursor++
+	}
+	if cursor >= len(text) {
+		return ""
+	}
+	token := plumbToken(&bufferState{
+		text:   text,
+		cursor: cursor,
+	})
+	trimmed := strings.TrimRight(token, ":;,.)]!?>-")
+	if trimmed != "" {
+		token = clienttarget.TrimToken(trimmed)
+	}
+	return token
+}

@@ -475,7 +475,7 @@ func (o *overlayState) closePicker() {
 }
 
 func (o *overlayState) rememberActivePicker() {
-	if o == nil || o.picker == nil {
+	if o == nil || o.picker == nil || o.picker.mode != overlayModePickPicker {
 		return
 	}
 	snapshot := &overlayPickerSnapshot{

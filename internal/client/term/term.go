@@ -1329,12 +1329,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if strings.TrimSpace(line) == "" {
 			return false, nil
 		}
+		historyLine := strings.TrimSuffix(line, "\n")
 		line = normalizeTerminalPseudoAlias(normalizeIonAlias(line))
 		navigationHint := navigationCommandHint(line)
 		overlayBefore := snapshotOverlayInputState()
 		if handled, done, err := executeLocalIonCommand(line); handled {
 			if recordHistory {
-				overlay.addCommand(strings.TrimSuffix(line, "\n"))
+				overlay.addCommand(historyLine)
 			}
 			if !overlayInputChanged(overlayBefore) {
 				overlay.resetInput()
@@ -2302,7 +2303,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								continue
 							}
-							if err := plumbTargetToken(item.value); err != nil {
+							if err := plumbTargetToken(plumbTargetLineToken(item.value)); err != nil {
 								buffer.status = diagnosticText(err)
 							}
 						default:
@@ -2994,11 +2995,22 @@ func normalizeTerminalPseudoAlias(line string) string {
 	case ":ion:new":
 		return ":term:split" + newline
 	default:
-		if arg, ok := splitTerminalPseudoCommandArg(trimmed, "~"); ok {
+		if arg, ok := splitTerminalPickAlias(trimmed); ok {
 			return ":term:pick" + formatTerminalPseudoCommandArg(arg) + newline
 		}
 		return line
 	}
+}
+
+func splitTerminalPickAlias(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || line[0] != '~' {
+		return "", false
+	}
+	if len(line) == 1 {
+		return "", true
+	}
+	return strings.TrimSpace(line[1:]), true
 }
 
 func splitTerminalPseudoCommandArg(line, prefix string) (string, bool) {

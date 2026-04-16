@@ -2692,6 +2692,9 @@ func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 	if shouldRecordMenuCommandInHUD("~ rg foo") {
 		t.Fatal("shouldRecordMenuCommandInHUD(~ rg foo) = true, want false after alias normalization")
 	}
+	if shouldRecordMenuCommandInHUD("~ls") {
+		t.Fatal("shouldRecordMenuCommandInHUD(~ls) = true, want false after attached alias normalization")
+	}
 	if shouldRecordMenuCommandInHUD(":ion:snarf") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:ion:snarf) = true, want false after alias normalization")
 	}
@@ -3027,10 +3030,13 @@ func TestNormalizeTerminalPseudoAliasMapsPickAlias(t *testing.T) {
 	if got, want := normalizeTerminalPseudoAlias("~ rg foo\n"), ":term:pick rg foo\n"; got != want {
 		t.Fatalf("normalizeTerminalPseudoAlias(~ with arg) = %q, want %q", got, want)
 	}
+	if got, want := normalizeTerminalPseudoAlias("~ls\n"), ":term:pick ls\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(~ attached arg) = %q, want %q", got, want)
+	}
 	if got, want := normalizeTerminalPseudoAlias("~\n"), ":term:pick\n"; got != want {
 		t.Fatalf("normalizeTerminalPseudoAlias(~ empty) = %q, want %q", got, want)
 	}
-	if got := normalizeTerminalPseudoAlias("~rg foo\n"); got != "~rg foo\n" {
-		t.Fatalf("normalizeTerminalPseudoAlias(~ without separator) = %q, want unchanged", got)
+	if got, want := normalizeTerminalPseudoAlias("~rg foo\n"), ":term:pick rg foo\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(~ without separator) = %q, want %q", got, want)
 	}
 }

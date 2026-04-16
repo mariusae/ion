@@ -689,3 +689,21 @@ func TestResolvePlumbTargetTokenLeavesBareAddressUnchanged(t *testing.T) {
 		t.Fatalf("resolvePlumbTargetToken() = %q, want %q", got, want)
 	}
 }
+
+func TestPlumbTargetLineTokenUsesFirstSpanFromIndent(t *testing.T) {
+	t.Parallel()
+
+	line := ` internal/client/term/completion_test.go:48:16:                        Namespace: "foo",`
+	if got, want := plumbTargetLineToken(line), "internal/client/term/completion_test.go:48:16"; got != want {
+		t.Fatalf("plumbTargetLineToken() = %q, want %q", got, want)
+	}
+}
+
+func TestPlumbTargetLineTokenPrefersFirstSpanOverEmbeddedCommand(t *testing.T) {
+	t.Parallel()
+
+	line := " multi.md:172:6:- `B foo.go:123` == `:ion:B foo.go:123`"
+	if got, want := plumbTargetLineToken(line), "multi.md:172:6"; got != want {
+		t.Fatalf("plumbTargetLineToken() = %q, want %q", got, want)
+	}
+}

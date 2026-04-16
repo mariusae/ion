@@ -28,7 +28,7 @@ func TestCommandCompletionsFromDocsIncludesLocalTermAndMenuCommands(t *testing.T
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:regexp", ":term:split", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:pick", ":term:regexp", ":term:split", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -216,6 +216,33 @@ func TestBuildDirectoryPickerItemsLeavesUnloadedFilesAligned(t *testing.T) {
 	}
 }
 
+func TestBuildPickPickerItemsSkipsBlankLinesAndPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	items, preferred := buildPickPickerItems([]string{
+		"",
+		"alpha.go:12",
+		"   ",
+		"beta.go:#34",
+	})
+
+	if got, want := preferred, "pick:000001"; got != want {
+		t.Fatalf("preferred = %q, want %q", got, want)
+	}
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].label, "alpha.go:12"; got != want {
+		t.Fatalf("items[0].label = %q, want %q", got, want)
+	}
+	if got, want := items[0].value, "alpha.go:12"; got != want {
+		t.Fatalf("items[0].value = %q, want %q", got, want)
+	}
+	if got, want := items[1].label, "beta.go:#34"; got != want {
+		t.Fatalf("items[1].label = %q, want %q", got, want)
+	}
+}
+
 func TestShouldPreviewDirectoryFileRejectsBinary(t *testing.T) {
 	t.Parallel()
 
@@ -264,6 +291,51 @@ func TestOverlayPickerPromptHasNoPrefix(t *testing.T) {
 	}
 }
 
+func TestOverlayRecallLastPickerRestoresQueryAndSelection(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModePickPicker, []overlayPickerItem{
+		{key: "pick:1", label: "alpha.go:10", value: "alpha.go:10", search: "alpha.go:10"},
+		{key: "pick:2", label: "beta.go:20", value: "beta.go:20", search: "beta.go:20"},
+		{key: "pick:3", label: "betamax.go:30", value: "betamax.go:30", search: "betamax.go:30"},
+	}, "pick:1")
+	overlay.insert([]rune("beta"))
+	if !overlay.pickerMove(1) {
+		t.Fatal("pickerMove(1) = false, want second filtered entry selected")
+	}
+
+	overlay.close()
+	if overlay.pickerActive() {
+		t.Fatal("pickerActive() after close = true, want false")
+	}
+	if !overlay.recallLastPicker() {
+		t.Fatal("recallLastPicker() = false, want true")
+	}
+	if got, want := overlay.pickerMode(), overlayModePickPicker; got != want {
+		t.Fatalf("pickerMode() = %v, want %v", got, want)
+	}
+	if got, want := string(overlay.input), "beta"; got != want {
+		t.Fatalf("restored input = %q, want %q", got, want)
+	}
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() after recall = false, want selected item")
+	}
+	if got, want := selected.key, "pick:3"; got != want {
+		t.Fatalf("selected key after recall = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayRecallLastPickerWithoutSnapshotReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	if overlay.recallLastPicker() {
+		t.Fatal("recallLastPicker() = true, want false without previous picker")
+	}
+}
+
 func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 	t.Parallel()
 
@@ -291,7 +363,7 @@ func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 	for _, command := range docs[termIdx].Commands {
 		names = append(names, command.Name)
 	}
-	for _, want := range []string{"write", "cut", "snarf", "paste", "tmux", "send", "look", "regexp", "plumb", "plumb2", "split"} {
+	for _, want := range []string{"write", "cut", "snarf", "paste", "tmux", "send", "pick", "look", "regexp", "plumb", "plumb2", "split"} {
 		found := false
 		for _, got := range names {
 			if got == want {

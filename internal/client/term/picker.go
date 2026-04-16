@@ -20,6 +20,7 @@ const (
 	overlayModeCommandPicker
 	overlayModeFilePicker
 	overlayModeDirectoryPicker
+	overlayModePickPicker
 )
 
 type overlayPickerItem struct {
@@ -38,6 +39,15 @@ type overlayPicker struct {
 	filtered  []int
 	selected  int
 	preferred string
+}
+
+type overlayPickerSnapshot struct {
+	mode        overlayMode
+	items       []overlayPickerItem
+	preferred   string
+	input       []rune
+	cursor      int
+	selectedKey string
 }
 
 func localTermNamespaceDoc() wire.NamespaceProviderDoc {
@@ -75,6 +85,12 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 				Name:    "send",
 				Summary: "send dot or snarf to the command window",
 				Help:    "Sends the current selection to the command window as if typed there, or uses the snarf buffer if the selection is empty. The sent text becomes the new snarf buffer.",
+			},
+			{
+				Name:    "pick",
+				Args:    "<unix command>",
+				Summary: "run a shell command and pick one plumb target per line",
+				Help:    "Runs one shell command as with !, then treats each stdout or stderr line as one B-style plumb target and opens a picker over the results.",
 			},
 			{
 				Name:    "look",
@@ -340,6 +356,27 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 	return items, preferred, nil
 }
 
+func buildPickPickerItems(lines []string) ([]overlayPickerItem, string) {
+	items := make([]overlayPickerItem, 0, len(lines))
+	preferred := ""
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		key := fmt.Sprintf("pick:%06d", i)
+		items = append(items, overlayPickerItem{
+			key:    key,
+			label:  line,
+			value:  line,
+			search: strings.ToLower(line),
+		})
+		if preferred == "" {
+			preferred = key
+		}
+	}
+	return items, preferred
+}
+
 func shouldPreviewDirectoryFile(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -405,6 +442,7 @@ func (o *overlayState) pickerMode() overlayMode {
 }
 
 func (o *overlayState) openPicker(mode overlayMode, items []overlayPickerItem, preferred string) {
+	o.rememberActivePicker()
 	o.visible = true
 	o.mode = mode
 	o.running = false
@@ -430,9 +468,68 @@ func (o *overlayState) closePicker() {
 	if o == nil {
 		return
 	}
+	o.rememberActivePicker()
 	o.mode = overlayModeCommand
 	o.picker = nil
 	o.resetInput()
+}
+
+func (o *overlayState) rememberActivePicker() {
+	if o == nil || o.picker == nil {
+		return
+	}
+	snapshot := &overlayPickerSnapshot{
+		mode:      o.picker.mode,
+		items:     append([]overlayPickerItem(nil), o.picker.items...),
+		preferred: o.picker.preferred,
+		input:     append([]rune(nil), o.input...),
+		cursor:    o.cursor,
+	}
+	if selected, ok := o.pickerSelected(); ok {
+		snapshot.selectedKey = selected.key
+	}
+	o.lastPicker = snapshot
+}
+
+func (o *overlayState) recallLastPicker() bool {
+	if o == nil || o.lastPicker == nil {
+		return false
+	}
+	snapshot := o.lastPicker
+	o.visible = true
+	o.mode = snapshot.mode
+	o.running = false
+	o.selecting = false
+	o.selectBtn2 = false
+	o.selectStart = overlaySelectionPos{line: -1}
+	o.selectEnd = overlaySelectionPos{line: -1}
+	o.input = append([]rune(nil), snapshot.input...)
+	o.cursor = snapshot.cursor
+	if o.cursor < 0 {
+		o.cursor = 0
+	}
+	if o.cursor > len(o.input) {
+		o.cursor = len(o.input)
+	}
+	o.scroll = 0
+	o.recallIdx = -1
+	o.savedInput = o.savedInput[:0]
+	o.picker = &overlayPicker{
+		mode:      snapshot.mode,
+		items:     append([]overlayPickerItem(nil), snapshot.items...),
+		selected:  -1,
+		preferred: strings.TrimSpace(snapshot.preferred),
+	}
+	o.refreshPicker()
+	if snapshot.selectedKey != "" {
+		for i, idx := range o.picker.filtered {
+			if o.picker.items[idx].key == snapshot.selectedKey {
+				o.picker.selected = i
+				break
+			}
+		}
+	}
+	return true
 }
 
 func (o *overlayState) pickerMove(delta int) bool {

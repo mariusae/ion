@@ -2689,6 +2689,9 @@ func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 	if shouldRecordMenuCommandInHUD(":term:send") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:term:send) = true, want false")
 	}
+	if shouldRecordMenuCommandInHUD("~ rg foo") {
+		t.Fatal("shouldRecordMenuCommandInHUD(~ rg foo) = true, want false after alias normalization")
+	}
 	if shouldRecordMenuCommandInHUD(":ion:snarf") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:ion:snarf) = true, want false after alias normalization")
 	}
@@ -3015,5 +3018,19 @@ func TestPrepareDirectScriptNormalizesServerQuitAlias(t *testing.T) {
 	}
 	if want := ":ion:Q\n"; got != want {
 		t.Fatalf("prepareDirectScript() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeTerminalPseudoAliasMapsPickAlias(t *testing.T) {
+	t.Parallel()
+
+	if got, want := normalizeTerminalPseudoAlias("~ rg foo\n"), ":term:pick rg foo\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(~ with arg) = %q, want %q", got, want)
+	}
+	if got, want := normalizeTerminalPseudoAlias("~\n"), ":term:pick\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(~ empty) = %q, want %q", got, want)
+	}
+	if got := normalizeTerminalPseudoAlias("~rg foo\n"); got != "~rg foo\n" {
+		t.Fatalf("normalizeTerminalPseudoAlias(~ without separator) = %q, want unchanged", got)
 	}
 }

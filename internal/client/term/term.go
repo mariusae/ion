@@ -46,6 +46,7 @@ const (
 	keyFocusOut
 	keyCtrlMetaD
 	keyCtrlMetaL
+	keyCtrlTilde
 )
 
 var (
@@ -1055,7 +1056,29 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	executeLocalIonCommand := func(line string) (bool, bool, error) {
-		switch strings.TrimSpace(normalizeTerminalPseudoAlias(normalizeIonAlias(line))) {
+		normalized := strings.TrimSpace(normalizeTerminalPseudoAlias(normalizeIonAlias(line)))
+		if command, ok := splitTerminalPseudoCommandArg(normalized, ":term:pick"); ok {
+			if strings.TrimSpace(command) == "" {
+				buffer.status = "?usage: :term:pick <unix command>"
+				return true, false, nil
+			}
+			done, lines, err := executeDirect("!"+command+"\n", true)
+			if err != nil {
+				return true, false, err
+			}
+			if done {
+				return true, true, nil
+			}
+			items, preferred := buildPickPickerItems(lines)
+			if len(items) == 0 {
+				buffer.status = "?no results"
+				return true, false, nil
+			}
+			overlay.openPicker(overlayModePickPicker, items, preferred)
+			buffer.status = ""
+			return true, false, nil
+		}
+		switch normalized {
 		case ":term:write":
 			if strings.TrimSpace(buffer.name) == "" {
 				overlay.open("w ")
@@ -1412,6 +1435,33 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			flags |= renderInvalidateBuffer
 		}
 		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
+	}
+
+	recallLastPicker := func() error {
+		if !overlay.recallLastPicker() {
+			buffer.status = "?no picker"
+			return bufferRedraw(redrawBufferStatus)
+		}
+		if buffer != nil {
+			buffer.status = ""
+		}
+		if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker {
+			startFileID := 0
+			if buffer != nil {
+				startFileID = buffer.fileID
+			}
+			filePickerPreview.begin(startFileID)
+			previewChanged, err := syncFilePickerPreview()
+			if err != nil {
+				return err
+			}
+			flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+			if previewChanged {
+				flags |= renderInvalidateBuffer
+			}
+			return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
+		}
+		return overlaySurfaceRedraw(redrawOverlayOpen)
 	}
 
 	submitOverlay := func() (bool, error) {
@@ -1818,6 +1868,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = "?no match"
 			}
 			return false, classifiedBufferRedraw(previous)
+		case keyCtrlTilde:
+			return false, recallLastPicker()
 		case metaKey('!'):
 			overlay.open("!")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
@@ -1953,6 +2005,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, classifiedBufferRedraw(previous)
 		case 0x12:
 			return rerunLastUICommand()
+		case 0x00, 0x1e:
+			return false, recallLastPicker()
 		}
 		if r == '\r' {
 			r = '\n'
@@ -2238,6 +2292,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								}
 								continue
 							}
+						case overlayModePickPicker:
+							item, ok := overlay.pickerSelected()
+							overlay.close()
+							overlayReq = renderRequestForLayers(redrawOverlayClose, renderInvalidateBuffer|renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+							if !ok {
+								if err := redraw(overlayReq); err != nil {
+									return err
+								}
+								continue
+							}
+							if err := plumbTargetToken(item.value); err != nil {
+								buffer.status = diagnosticText(err)
+							}
 						default:
 							item, ok := overlay.pickerSelected()
 							if !ok {
@@ -2480,6 +2547,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				overlayReq := renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput)
 				switch r {
 				case '\r':
+					pickerBefore := overlay.pickerActive()
+					statusBefore := ""
+					if buffer != nil {
+						statusBefore = buffer.status
+					}
 					done, err := submitOverlay()
 					if err != nil {
 						return err
@@ -2489,6 +2561,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return err
 						}
 						return nil
+					}
+					if overlay.pickerActive() && !pickerBefore {
+						overlayReq = renderRequestForLayers(redrawOverlayOpen, renderInvalidateOverlayHistory|renderInvalidateOverlayInput)
+					}
+					if buffer != nil && buffer.status != statusBefore {
+						overlayReq.invalidation |= renderInvalidateBuffer
 					}
 				case '\n':
 					overlay.close()
@@ -2916,8 +2994,38 @@ func normalizeTerminalPseudoAlias(line string) string {
 	case ":ion:new":
 		return ":term:split" + newline
 	default:
+		if arg, ok := splitTerminalPseudoCommandArg(trimmed, "~"); ok {
+			return ":term:pick" + formatTerminalPseudoCommandArg(arg) + newline
+		}
 		return line
 	}
+}
+
+func splitTerminalPseudoCommandArg(line, prefix string) (string, bool) {
+	line = strings.TrimSpace(line)
+	prefix = strings.TrimSpace(prefix)
+	if line == prefix {
+		return "", true
+	}
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	if len(line) <= len(prefix) {
+		return "", true
+	}
+	switch line[len(prefix)] {
+	case ' ', '\t':
+		return strings.TrimSpace(line[len(prefix):]), true
+	default:
+		return "", false
+	}
+}
+
+func formatTerminalPseudoCommandArg(arg string) string {
+	if strings.TrimSpace(arg) == "" {
+		return ""
+	}
+	return " " + strings.TrimSpace(arg)
 }
 
 func shouldRecordMenuCommandInHUD(line string) bool {

@@ -1591,6 +1591,12 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "send dot or snarf to the command window",
 			help:    "Terminal HUD command that sends the current selection to the command window as if typed there, or uses the snarf buffer if the selection is empty. The sent text becomes the new snarf buffer.",
 		}, true
+	case ":term:pick":
+		return commandHelpDoc{
+			usage:   ":term:pick <unix command>",
+			summary: "run a shell command and pick one plumb target per line",
+			help:    "Terminal HUD command that runs one shell command as with !, then treats each stdout or stderr line as one B-style plumb target and opens a picker over the results.",
+		}, true
 	case ":term:look":
 		return commandHelpDoc{
 			usage:   ":term:look",

@@ -40,6 +40,7 @@ type overlayState struct {
 	recallIdx      int
 	savedInput     []rune
 	picker         *overlayPicker
+	lastPicker     *overlayPickerSnapshot
 }
 
 type overlaySelectionPos struct {
@@ -70,6 +71,7 @@ func newOverlayState() *overlayState {
 }
 
 func (o *overlayState) open(prefill string) {
+	o.rememberActivePicker()
 	o.visible = true
 	o.mode = overlayModeCommand
 	o.input = []rune(prefill)
@@ -84,6 +86,7 @@ func (o *overlayState) open(prefill string) {
 }
 
 func (o *overlayState) reopen() {
+	o.rememberActivePicker()
 	o.visible = true
 	o.mode = overlayModeCommand
 	o.running = false
@@ -106,6 +109,7 @@ func (o *overlayState) reopen() {
 }
 
 func (o *overlayState) close() {
+	o.rememberActivePicker()
 	o.visible = false
 	o.mode = overlayModeCommand
 	o.running = false
@@ -122,6 +126,7 @@ func (o *overlayState) close() {
 }
 
 func (o *overlayState) clearHistory() {
+	o.rememberActivePicker()
 	o.history = nil
 	o.commandIdx = nil
 	o.commandIdxLen = 0

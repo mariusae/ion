@@ -237,6 +237,67 @@ func TestReadBufferEscapeModifyOtherKeysCtrlMetaL(t *testing.T) {
 	}
 }
 
+func TestReadBufferEscapeEscCtrlTildeAsNUL(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("\x1b\x00"))
+	if _, _, err := reader.ReadRune(); err != nil {
+		t.Fatalf("prime reader with ESC: %v", err)
+	}
+	key, mouse, err := readBufferEscape(reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferEscape() error = %v", err)
+	}
+	if got, want := key, keyCtrlTilde; got != want {
+		t.Fatalf("key = %d, want %d", got, want)
+	}
+	if mouse != nil {
+		t.Fatalf("mouse = %#v, want nil", mouse)
+	}
+}
+
+func TestReadBufferEscapeCSIUCtrlTilde(t *testing.T) {
+	t.Parallel()
+
+	for _, seq := range []string{"\x1b[96;5u", "\x1b[126;5u"} {
+		reader := bufio.NewReader(strings.NewReader(seq))
+		if _, _, err := reader.ReadRune(); err != nil {
+			t.Fatalf("prime reader with ESC: %v", err)
+		}
+		key, mouse, err := readBufferEscape(reader, nil)
+		if err != nil {
+			t.Fatalf("readBufferEscape() error = %v", err)
+		}
+		if got, want := key, keyCtrlTilde; got != want {
+			t.Fatalf("seq %q key = %d, want %d", seq, got, want)
+		}
+		if mouse != nil {
+			t.Fatalf("seq %q mouse = %#v, want nil", seq, mouse)
+		}
+	}
+}
+
+func TestReadBufferEscapeModifyOtherKeysCtrlTilde(t *testing.T) {
+	t.Parallel()
+
+	for _, seq := range []string{"\x1b[27;5;96~", "\x1b[27;5;126~"} {
+		reader := bufio.NewReader(strings.NewReader(seq))
+		if _, _, err := reader.ReadRune(); err != nil {
+			t.Fatalf("prime reader with ESC: %v", err)
+		}
+		key, mouse, err := readBufferEscape(reader, nil)
+		if err != nil {
+			t.Fatalf("readBufferEscape() error = %v", err)
+		}
+		if got, want := key, keyCtrlTilde; got != want {
+			t.Fatalf("seq %q key = %d, want %d", seq, got, want)
+		}
+		if mouse != nil {
+			t.Fatalf("seq %q mouse = %#v, want nil", seq, mouse)
+		}
+	}
+}
+
 func TestReadBufferEscapeMetaShortcuts(t *testing.T) {
 	t.Parallel()
 

@@ -166,6 +166,8 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 		return keyCtrlMetaD, nil, nil
 	case 0x0c:
 		return keyCtrlMetaL, nil, nil
+	case 0x00:
+		return keyCtrlTilde, nil, nil
 	}
 	if b >= 0x20 && b <= 0x7e {
 		return metaKey(rune(b)), nil, nil
@@ -245,6 +247,12 @@ func decodeCSIUKey(body []byte) (int, bool) {
 			return keyCtrlMetaL, true
 		}
 	}
+	if modifier == 5 {
+		switch codepoint {
+		case int('`'), int('~'):
+			return keyCtrlTilde, true
+		}
+	}
 	return 0, false
 }
 
@@ -270,6 +278,12 @@ func decodeModifiedOtherKey(body []byte) (int, bool) {
 			return keyCtrlMetaD, true
 		case int('l'):
 			return keyCtrlMetaL, true
+		}
+	}
+	if modifier == 5 {
+		switch codepoint {
+		case int('`'), int('~'):
+			return keyCtrlTilde, true
 		}
 	}
 	return 0, false

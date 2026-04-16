@@ -491,6 +491,10 @@ func (s *Session) appendLogged(f *text.File, txt *text.String, p text.Posn, seq 
 	if len(runes) > 0 && runes[len(runes)-1] == 0 {
 		runes = runes[:len(runes)-1]
 	}
+	return s.appendRunesLogged(f, runes, p, seq)
+}
+
+func (s *Session) appendRunesLogged(f *text.File, runes []rune, p text.Posn, seq uint32) error {
 	if len(runes) > 0 {
 		if err := f.LogInsert(p, runes, seq); err != nil {
 			return err
@@ -501,15 +505,26 @@ func (s *Session) appendLogged(f *text.File, txt *text.String, p text.Posn, seq 
 }
 
 func (s *Session) replaceLogged(f *text.File, txt *text.String, start, end text.Posn, seq uint32) error {
+	var runes []rune
+	if txt != nil {
+		runes = txt.Runes()
+		if len(runes) > 0 && runes[len(runes)-1] == 0 {
+			runes = runes[:len(runes)-1]
+		}
+	}
+	return s.replaceRunesLogged(f, runes, start, end, seq)
+}
+
+func (s *Session) replaceRunesLogged(f *text.File, runes []rune, start, end text.Posn, seq uint32) error {
 	if end > start {
 		if err := f.LogDelete(start, end, seq); err != nil {
 			return err
 		}
 	}
-	if err := s.appendLogged(f, txt, end, seq); err != nil {
+	if err := s.appendRunesLogged(f, runes, end, seq); err != nil {
 		return err
 	}
-	f.NDot = text.Range{P1: start, P2: start + textStringLen(txt)}
+	f.NDot = text.Range{P1: start, P2: start + text.Posn(len(runes))}
 	return nil
 }
 
@@ -2549,12 +2564,9 @@ func (s *Session) printShellPrompt() error {
 }
 
 func (s *Session) replaceWithShellOutput(f *text.File, a ionaddr.Address, data []byte) error {
-	txt, _, err := textStringFromBytesElidingNulls(data)
-	if err != nil {
-		return err
-	}
+	runes := runesFromBytesElidingNulls(data)
 	return s.mutate(f, func(seq uint32) error {
-		return s.replaceLogged(f, txt, a.R.P1, a.R.P2, seq)
+		return s.replaceRunesLogged(f, runes, a.R.P1, a.R.P2, seq)
 	})
 }
 
@@ -2628,6 +2640,17 @@ func textStringFromBytesElidingNulls(data []byte) (*text.String, text.Posn, erro
 		return nil, 0, err
 	}
 	return &s, count, nil
+}
+
+func runesFromBytesElidingNulls(data []byte) []rune {
+	runes := make([]rune, 0, len(data))
+	for _, r := range string(data) {
+		if r == 0 {
+			continue
+		}
+		runes = append(runes, r)
+	}
+	return runes
 }
 
 func resetFileContents(f *text.File) error {

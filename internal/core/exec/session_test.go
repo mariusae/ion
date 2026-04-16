@@ -544,6 +544,47 @@ func TestRunShellCommandStreamsStdoutBeforeExit(t *testing.T) {
 	}
 }
 
+func TestShellReadAcceptsLargeStdout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "in.txt")
+	if err := os.WriteFile(path, []byte("stale\n"), 0o644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	var out bytes.Buffer
+	var diag bytes.Buffer
+	sess := NewSession(&out)
+	sess.Diag = &diag
+	if err := sess.OpenFilesPaths([]string{path}); err != nil {
+		t.Fatalf("OpenFilesPaths() error = %v", err)
+	}
+
+	cmd, err := cmdlang.NewParser(",<i=0; while [ $i -lt 5000 ]; do printf x; i=$((i+1)); done\n").Parse()
+	if err != nil {
+		t.Fatalf("parse shell read: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("Execute(shell read) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("Execute(shell read) requested stop")
+	}
+
+	got, err := sess.CurrentText()
+	if err != nil {
+		t.Fatalf("CurrentText() error = %v", err)
+	}
+	if want := strings.Repeat("x", 5000); got != want {
+		t.Fatalf("CurrentText() len=%d, want %d", len(got), len(want))
+	}
+	if strings.Contains(diag.String(), "string too long") {
+		t.Fatalf("diag = %q, want no string-too-long error", diag.String())
+	}
+}
+
 func TestRemoveCurrentFileLeavesNoCurrent(t *testing.T) {
 	t.Parallel()
 

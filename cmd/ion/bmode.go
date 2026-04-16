@@ -155,9 +155,6 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 	client, err := rt.dial(paths.socketPath)
 	if err == nil {
 		defer client.Close()
-		if len(effectiveCfg.files) == 0 {
-			return focusResidentPane(paths, ctx, rt.tmux)
-		}
 		sessionID, ok := selectBModeSession(client)
 		if !ok {
 			return splitAttachPane(ctx, effectiveCfg, rt)
@@ -403,7 +400,7 @@ func buildAttachCommand(exe string, cfg config) string {
 
 func buildBModeScript(files []string) string {
 	if len(files) == 0 {
-		return "\n"
+		return "B\n"
 	}
 	return "B " + strings.Join(files, " ") + "\n"
 }

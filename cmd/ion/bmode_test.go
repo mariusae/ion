@@ -293,6 +293,61 @@ func TestRunBModeExecutesBCommandInResidentSession(t *testing.T) {
 	}
 }
 
+func TestRunBModeWithoutTargetsPlumbsUnnamedBufferInResidentSession(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	tmux := &fakeTmux{
+		sessionID: "$1",
+		windowID:  "@2",
+		paneWindows: map[string]string{
+			"%9": "@7",
+		},
+	}
+	client := &fakeBModeClient{
+		sessionList: []wire.SessionSummary{{ID: 77}},
+	}
+	rt := bModeRuntime{
+		getenv: func(key string) string {
+			switch key {
+			case "TMUX":
+				return "/tmp/tmux.sock"
+			case "TMUX_PANE":
+				return "%4"
+			default:
+				return ""
+			}
+		},
+		tempDir: func() string { return tempDir },
+		dial:    func(string) (bModeClient, error) { return client, nil },
+		tmux:    tmux.run,
+		runTerm: runTermWithTargets,
+	}
+	paths := tmuxWindowPaths(tempDir, "tmux-window:@2")
+	if err := os.MkdirAll(filepath.Dir(paths.panePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeResidentPaneID(paths.panePath, "%9"); err != nil {
+		t.Fatalf("writeResidentPaneID() error = %v", err)
+	}
+
+	if err := runBModeWith(config{bmode: true}, nil, io.Discard, io.Discard, rt); err != nil {
+		t.Fatalf("runBModeWith() error = %v", err)
+	}
+	if got, want := client.executeCalls, []struct {
+		id     uint64
+		script string
+	}{{id: 77, script: "B\n"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExecuteSession() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.takeCalls, []uint64{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Take() calls = %#v, want %#v", got, want)
+	}
+	if got, want := client.returnCalls, []uint64{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Return() calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunBModeUsesPaneOverrideForResidentLookup(t *testing.T) {
 	t.Parallel()
 
@@ -537,6 +592,14 @@ func TestBuildBModeScriptPreservesWhitespaceTargets(t *testing.T) {
 
 	if got, want := buildBModeScript([]string{"/tmp/work/a b.txt"}), "B /tmp/work/a b.txt\n"; got != want {
 		t.Fatalf("buildBModeScript() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildBModeScriptUsesPlainBForUnnamedBuffer(t *testing.T) {
+	t.Parallel()
+
+	if got, want := buildBModeScript(nil), "B\n"; got != want {
+		t.Fatalf("buildBModeScript(nil) = %q, want %q", got, want)
 	}
 }
 

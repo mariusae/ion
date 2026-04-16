@@ -264,7 +264,7 @@ func TestFilePickerPreviewStateSyncAndCancelRestoresStartFile(t *testing.T) {
 	}
 
 	var preview filePickerPreviewState
-	preview.begin(1)
+	preview.begin(1, 0, 0)
 
 	changed, err := preview.syncSelection(svc, overlayPickerItem{fileID: 2}, apply)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestFilePickerPreviewStateCommitKeepsPreviewAndRecordsPreviousFile(t *testi
 	var previous int
 
 	var preview filePickerPreviewState
-	preview.begin(1)
+	preview.begin(1, 0, 0)
 
 	if _, err := preview.syncSelection(svc, overlayPickerItem{fileID: 2}, apply); err != nil {
 		t.Fatalf("syncSelection() error = %v", err)
@@ -349,7 +349,7 @@ func TestFilePickerPreviewStateCancelClosesTransientPreviewFile(t *testing.T) {
 	}
 
 	var preview filePickerPreviewState
-	preview.begin(1)
+	preview.begin(1, 0, 0)
 
 	changed, err := preview.syncSelection(svc, overlayPickerItem{key: "path:" + previewPath, path: previewPath}, apply)
 	if err != nil {
@@ -377,6 +377,77 @@ func TestFilePickerPreviewStateCancelClosesTransientPreviewFile(t *testing.T) {
 	}
 	if got, want := applied, []int{2, 1}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("applied views = %v, want %v", got, want)
+	}
+}
+
+func TestFilePickerPreviewStateCancelRestoresDotAfterTargetPreview(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			ID:       1,
+			Name:     "a.txt",
+			Path:     "a.txt",
+			DotStart: 3,
+			DotEnd:   5,
+		},
+		menuFiles: []wire.MenuFile{
+			{ID: 1, Name: "a.txt", Path: "a.txt", Current: true},
+		},
+	}
+	var applied []wire.BufferView
+	apply := func(view wire.BufferView) {
+		applied = append(applied, view)
+	}
+
+	var preview filePickerPreviewState
+	preview.begin(1, 3, 5)
+
+	changed, err := preview.syncTargetSelection(svc, "#9", apply)
+	if err != nil {
+		t.Fatalf("syncTargetSelection() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("syncTargetSelection() changed = false, want true")
+	}
+
+	changed, err = preview.finish(svc, false, overlayPickerItem{}, apply, func(int) {})
+	if err != nil {
+		t.Fatalf("finish(cancel) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("finish(cancel) changed = false, want true")
+	}
+	if got, want := svc.setDotCalls, 1; got != want {
+		t.Fatalf("setDotCalls = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotStart, 3; got != want {
+		t.Fatalf("lastDotStart = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotEnd, 5; got != want {
+		t.Fatalf("lastDotEnd = %d, want %d", got, want)
+	}
+	if got, want := applied[len(applied)-1].DotStart, 3; got != want {
+		t.Fatalf("restored DotStart = %d, want %d", got, want)
+	}
+	if got, want := applied[len(applied)-1].DotEnd, 5; got != want {
+		t.Fatalf("restored DotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestShouldPreviewPickTokenSkipsDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	ok, message, err := shouldPreviewPickToken(root)
+	if err != nil {
+		t.Fatalf("shouldPreviewPickToken() error = %v", err)
+	}
+	if ok {
+		t.Fatal("shouldPreviewPickToken(directory) = true, want false")
+	}
+	if got, want := message, "[directory not previewed]"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
 

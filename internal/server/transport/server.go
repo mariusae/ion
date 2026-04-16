@@ -1600,8 +1600,8 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 	case ":term:look":
 		return commandHelpDoc{
 			usage:   ":term:look",
-			summary: "find the current selection or token",
-			help:    "Terminal HUD command that searches forward for the current selection, or the token under the cursor if there is no selection.",
+			summary: "find the current selection or snarf",
+			help:    "Terminal HUD command that searches forward for the current selection, or the snarf buffer if the selection is empty.",
 		}, true
 	case ":term:regexp":
 		return commandHelpDoc{

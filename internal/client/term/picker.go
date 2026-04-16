@@ -94,8 +94,8 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 			},
 			{
 				Name:    "look",
-				Summary: "find the current selection or token",
-				Help:    "Searches forward for the current selection, or the token under the cursor if there is no selection.",
+				Summary: "find the current selection or snarf",
+				Help:    "Searches forward for the current selection, or the snarf buffer if the selection is empty.",
 			},
 			{
 				Name:    "regexp",

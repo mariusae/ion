@@ -1275,7 +1275,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = "sent"
 			return true, false, nil
 		case ":term:look":
-			next, ok, err := lookInBuffer(svc, buffer, true)
+			next, ok, err := lookInBuffer(svc, buffer, snarf, true)
 			if err != nil {
 				return true, false, err
 			}
@@ -1946,7 +1946,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return false, err
 						}
 					}
-					next, ok, err := lookInBuffer(svc, buffer, true)
+					next, ok, err := lookInBuffer(svc, buffer, snarf, true)
 					if err != nil {
 						return false, err
 					}
@@ -2020,7 +2020,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return deleteCurrentFile(true)
 		case keyCtrlMetaL:
 			previous := snapshotBufferState(buffer)
-			next, ok, err := lookInBuffer(svc, buffer, false)
+			next, ok, err := lookInBuffer(svc, buffer, snarf, false)
 			if err != nil {
 				return false, err
 			}
@@ -2155,7 +2155,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case 0x0c:
 			previous := snapshotBufferState(buffer)
-			next, ok, err := lookInBuffer(svc, buffer, true)
+			next, ok, err := lookInBuffer(svc, buffer, snarf, true)
 			if err != nil {
 				return false, err
 			}
@@ -5384,11 +5384,14 @@ func updateSelection(state *bufferState) {
 	state.dotEnd = state.cursor
 }
 
-func lookInBuffer(svc wire.TermService, state *bufferState, forward bool) (*bufferState, bool, error) {
-	if state == nil || state.dotEnd <= state.dotStart {
+func lookInBuffer(svc wire.TermService, state *bufferState, snarf []rune, forward bool) (*bufferState, bool, error) {
+	if state == nil {
 		return state, false, nil
 	}
-	target := append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+	target := lookTargetText(state, snarf)
+	if len(target) == 0 {
+		return state, false, nil
+	}
 	start, ok := findSelection(state.text, state.dotStart, state.dotEnd, target, forward)
 	if !ok {
 		return state, false, nil
@@ -5401,6 +5404,19 @@ func lookInBuffer(svc wire.TermService, state *bufferState, forward bool) (*buff
 	next.status = state.status
 	next = revealBufferDestination(state, next, nil, false, true)
 	return next, true, nil
+}
+
+func lookTargetText(state *bufferState, snarf []rune) []rune {
+	if state == nil {
+		return nil
+	}
+	if state.dotEnd > state.dotStart {
+		return append([]rune(nil), state.text[state.dotStart:state.dotEnd]...)
+	}
+	if len(snarf) == 0 {
+		return nil
+	}
+	return append([]rune(nil), snarf...)
 }
 
 func bufferCursorViewRow(state *bufferState, rows int) int {

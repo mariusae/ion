@@ -2637,7 +2637,7 @@ func TestLookInBufferPreservesCursorViewportRowForward(t *testing.T) {
 	state.origin = 0
 	beforeRow := bufferCursorViewRow(state, bufferViewRows(nil))
 
-	next, ok, err := lookInBuffer(svc, state, true)
+	next, ok, err := lookInBuffer(svc, state, nil, true)
 	if err != nil {
 		t.Fatalf("lookInBuffer(forward) error = %v", err)
 	}
@@ -2676,7 +2676,7 @@ func TestLookInBufferPreservesCursorViewportRowBackward(t *testing.T) {
 	state.origin = visualRowStartForPos(state.text, second-len("four\n"))
 	beforeRow := bufferCursorViewRow(state, bufferViewRows(nil))
 
-	next, ok, err := lookInBuffer(svc, state, false)
+	next, ok, err := lookInBuffer(svc, state, nil, false)
 	if err != nil {
 		t.Fatalf("lookInBuffer(backward) error = %v", err)
 	}
@@ -2688,6 +2688,70 @@ func TestLookInBufferPreservesCursorViewportRowBackward(t *testing.T) {
 	}
 	if got, want := bufferCursorViewRow(next, bufferViewRows(nil)), beforeRow; got != want {
 		t.Fatalf("cursor viewport row = %d, want preserved row %d", got, want)
+	}
+}
+
+func TestLookInBufferUsesSnarfWhenSelectionIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	text := "one\nmatch\nthree\nmatch\n"
+	first := strings.Index(text, "match")
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     text,
+			DotStart: first,
+			DotEnd:   first + len("match"),
+		},
+	}
+	state := newBufferState(wire.BufferView{
+		Text:     text,
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	next, ok, err := lookInBuffer(svc, state, []rune("match"), true)
+	if err != nil {
+		t.Fatalf("lookInBuffer(snarf) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("lookInBuffer(snarf) ok = false, want true")
+	}
+	if got, want := next.cursor, first; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotStart, first; got != want {
+		t.Fatalf("SetDot start = %d, want %d", got, want)
+	}
+	if got, want := svc.lastDotEnd, first+len("match"); got != want {
+		t.Fatalf("SetDot end = %d, want %d", got, want)
+	}
+}
+
+func TestLookInBufferWithoutSelectionOrSnarfDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	text := "one\nmatch\nthree\n"
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text: text,
+		},
+	}
+	state := newBufferState(wire.BufferView{
+		Text: text,
+	})
+
+	next, ok, err := lookInBuffer(svc, state, nil, true)
+	if err != nil {
+		t.Fatalf("lookInBuffer(empty) error = %v", err)
+	}
+	if ok {
+		t.Fatal("lookInBuffer(empty) ok = true, want false")
+	}
+	if next != state {
+		t.Fatal("lookInBuffer(empty) returned new state, want original")
+	}
+	if got, want := svc.setDotCalls, 0; got != want {
+		t.Fatalf("SetDot calls = %d, want %d", got, want)
 	}
 }
 

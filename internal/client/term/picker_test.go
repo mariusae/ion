@@ -216,12 +216,13 @@ func TestBuildDirectoryPickerItemsLeavesUnloadedFilesAligned(t *testing.T) {
 	}
 }
 
-func TestBuildPickPickerItemsSkipsBlankLinesAndPreservesOrder(t *testing.T) {
+func TestBuildPickPickerItemsSkipsBlankLinesAndShellSentinelAndPreservesOrder(t *testing.T) {
 	t.Parallel()
 
 	items, preferred := buildPickPickerItems([]string{
 		"",
 		"alpha.go:12",
+		"!",
 		"   ",
 		"beta.go:#34",
 	})

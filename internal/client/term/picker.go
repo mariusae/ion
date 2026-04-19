@@ -360,7 +360,8 @@ func buildPickPickerItems(lines []string) ([]overlayPickerItem, string) {
 	items := make([]overlayPickerItem, 0, len(lines))
 	preferred := ""
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "!" {
 			continue
 		}
 		key := fmt.Sprintf("pick:%06d", i)

@@ -2164,6 +2164,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				applyStatusResult(msg, lines)
 			}
 			return false, classifiedBufferRedraw(previous)
+		case metaKey('z'):
+			previous := snapshotBufferState(buffer)
+			view, err := svc.Undo()
+			if err != nil {
+				return false, err
+			}
+			next := newBufferStateWithPrevious(view, buffer)
+			next.origin = restoreBufferOrigin(next, buffer.origin)
+			next.status = buffer.status
+			next.pulseCursor = true
+			refreshCurrentBufferDirty(svc, next)
+			buffer = next
+			return false, classifiedBufferRedraw(previous)
 		case metaKey('q'):
 			dirty, err := hasDirtyFiles(svc)
 			if err != nil {
@@ -3643,7 +3656,7 @@ func applyBufferKeyWithOptions(svc wire.TermService, state *bufferState, key int
 			return state, nil
 		}
 		return replaceBufferRange(svc, state, start, state.cursor, "")
-	case 21, 26:
+	case 26:
 		view, err := svc.Undo()
 		if err != nil {
 			return nil, err
@@ -3654,6 +3667,15 @@ func applyBufferKeyWithOptions(svc wire.TermService, state *bufferState, key int
 		next.pulseCursor = true
 		refreshCurrentBufferDirty(svc, next)
 		return next, nil
+	case 21:
+		if state.dotStart != state.dotEnd {
+			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")
+		}
+		start := lineStart(state.text, state.cursor)
+		if start == state.cursor {
+			return state, nil
+		}
+		return replaceBufferRange(svc, state, start, state.cursor, "")
 	case 11:
 		if state.dotStart != state.dotEnd {
 			return replaceBufferRange(svc, state, state.dotStart, state.dotEnd, "")

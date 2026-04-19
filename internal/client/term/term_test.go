@@ -2393,7 +2393,40 @@ func TestApplyBufferKeyMovementSyncsDotToService(t *testing.T) {
 	}
 }
 
-func TestApplyBufferKeyUndoPreservesViewportAndPulsesCursor(t *testing.T) {
+func TestApplyBufferKeyCtrlUDeletesToLineStart(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\nbeta\n",
+			DotStart: 8,
+			DotEnd:   8,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, 21)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := string(next.text), "alpha\nta\n"; got != want {
+		t.Fatalf("text = %q, want %q", got, want)
+	}
+	if got, want := next.cursor, 6; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 6; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 6; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if next.pulseCursor {
+		t.Fatal("pulseCursor = true, want false for C-u")
+	}
+}
+
+func TestApplyBufferKeyCtrlZUndoPreservesViewportAndPulsesCursor(t *testing.T) {
 	t.Parallel()
 
 	svc := &fakeTermService{
@@ -2415,7 +2448,7 @@ func TestApplyBufferKeyUndoPreservesViewportAndPulsesCursor(t *testing.T) {
 	state.origin = 6
 	state.status = "saved"
 
-	next, err := applyBufferKey(svc, state, 21)
+	next, err := applyBufferKey(svc, state, 26)
 	if err != nil {
 		t.Fatalf("applyBufferKey() error = %v", err)
 	}
@@ -2423,7 +2456,7 @@ func TestApplyBufferKeyUndoPreservesViewportAndPulsesCursor(t *testing.T) {
 		t.Fatalf("origin = %d, want %d", got, want)
 	}
 	if !next.pulseCursor {
-		t.Fatal("pulseCursor = false, want true after undo")
+		t.Fatal("pulseCursor = false, want true after C-z undo")
 	}
 	if got, want := next.status, "saved"; got != want {
 		t.Fatalf("status = %q, want %q", got, want)

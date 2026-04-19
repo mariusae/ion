@@ -346,12 +346,6 @@ func legacyAltKey(key int) int {
 	switch r {
 	case 'b':
 		return keyAltLeft
-	case 'f':
-		return keyAltRight
-	case 'v':
-		return keyAltPageUp
-	case 'w':
-		return keyAltSnarf
 	case 0x08, 0x7f:
 		return keyAltBackspace
 	default:

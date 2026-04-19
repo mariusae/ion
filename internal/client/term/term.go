@@ -40,7 +40,6 @@ const (
 	keyAltLeft
 	keyAltRight
 	keyAltPageUp
-	keyAltSnarf
 	keyAltBackspace
 	keyFocusIn
 	keyFocusOut
@@ -1518,6 +1517,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	openCommandPicker := func() error {
+		if overlay.visible && overlay.pickerMode() == overlayModeCommandPicker {
+			overlay.close()
+			return overlaySurfaceRedraw(redrawOverlayClose)
+		}
 		var docs []wire.NamespaceProviderDoc
 		if provider, ok := svc.(namespaceDocProvider); ok {
 			var err error
@@ -1536,6 +1539,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	openFilePicker := func() error {
+		if overlay.visible && overlay.pickerMode() == overlayModeFilePicker {
+			previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+			if err != nil {
+				return err
+			}
+			overlay.close()
+			flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+			if previewChanged {
+				flags |= renderInvalidateBuffer
+			}
+			return redraw(renderRequestForLayers(redrawOverlayClose, flags))
+		}
 		snapshot, err := loadMenuSnapshot(svc)
 		if err != nil {
 			return err
@@ -1563,6 +1578,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	openDirectoryPicker := func() error {
+		if overlay.visible && overlay.pickerMode() == overlayModeDirectoryPicker {
+			previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+			if err != nil {
+				return err
+			}
+			overlay.close()
+			flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+			if previewChanged {
+				flags |= renderInvalidateBuffer
+			}
+			return redraw(renderRequestForLayers(redrawOverlayClose, flags))
+		}
 		snapshot, err := loadMenuSnapshot(svc)
 		if err != nil {
 			return err
@@ -2033,17 +2060,123 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, classifiedBufferRedraw(previous)
 		case keyCtrlTilde:
 			return false, recallLastPicker()
+		case metaKey('j'):
+			if overlay.visible {
+				overlay.close()
+				return false, overlaySurfaceRedraw(redrawOverlayClose)
+			}
+			overlay.reopen()
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
+		case metaKey('k'):
+			return false, openCommandPicker()
+		case metaKey('g'):
+			return false, showKeyboardMenu()
+		case metaKey('p'):
+			return false, openFilePicker()
+		case metaKey('f'):
+			return false, openDirectoryPicker()
+		case metaKey('d'):
+			return deleteCurrentFile(false)
+		case metaKey('c'):
+			if err := copyBufferSelectionLocal(); err != nil {
+				return false, err
+			}
+			return false, bufferRedraw(redrawBufferStatus)
+		case metaKey('x'):
+			previous := snapshotBufferState(buffer)
+			if err := cutBufferSelectionLocal(); err != nil {
+				return false, err
+			}
+			return false, classifiedBufferRedraw(previous)
+		case metaKey('v'):
+			previous := snapshotBufferState(buffer)
+			if err := pasteBufferSelectionLocal(); err != nil {
+				return false, err
+			}
+			return false, classifiedBufferRedraw(previous)
+		case metaKey('w'):
+			if strings.TrimSpace(buffer.name) == "" {
+				overlay.open("w ")
+				return false, overlaySurfaceRedraw(redrawOverlayOpen)
+			}
+			previous := snapshotBufferState(buffer)
+			msg, lines, err := saveWithCapture()
+			if err != nil {
+				buffer.status = diagnosticText(err)
+			} else {
+				applyStatusResult(msg, lines)
+			}
+			return false, classifiedBufferRedraw(previous)
+		case metaKey('q'):
+			dirty, err := hasDirtyFiles(svc)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, bufferRedraw(redrawBufferStatus)
+			}
+			if dirty {
+				done, lines, err := executeDirect("q\n", true)
+				overlay.open("")
+				for _, line := range lines {
+					overlay.addOutput(line)
+				}
+				if err != nil {
+					overlay.addOutput(diagnosticText(err))
+					return false, overlayHistoryRedraw(redrawOverlayHistory)
+				}
+				if done {
+					return true, nil
+				}
+				return false, overlayHistoryRedraw(redrawOverlayHistory)
+			}
+			done, _, err := executeDirect("q\n", false)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, bufferRedraw(redrawBufferStatus)
+			}
+			if done {
+				return true, nil
+			}
+			buffer.status = ""
+			return false, bufferRedraw(redrawBufferStatus)
+		case metaKey('/'):
+			overlay.open("/")
+			return false, overlaySurfaceRedraw(redrawOverlayOpen)
+		case metaKey('l'):
+			previous := snapshotBufferState(buffer)
+			next, ok, err := lookInBuffer(svc, buffer, snarf, true)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, classifiedBufferRedraw(previous)
+		case metaKey('L'):
+			previous := snapshotBufferState(buffer)
+			next, ok, err := lookInBuffer(svc, buffer, snarf, false)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				buffer = next
+				buffer.status = ""
+			} else {
+				buffer.status = "?no match"
+			}
+			return false, classifiedBufferRedraw(previous)
+		case metaKey('r'):
+			return rerunLastUICommand()
+		case metaKey('0'):
+			return false, recallLastPicker()
 		case metaKey('!'):
 			overlay.open("!")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case metaKey('\''):
 			overlay.open("\"")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
-		case keyAltSnarf:
-			if err := copyBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, bufferRedraw(redrawBufferStatus)
 		case keyPaste:
 			previous := snapshotBufferState(buffer)
 			paste, err := readBracketedPaste(reader)
@@ -2076,100 +2209,15 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 		}
 		switch r {
-		case 0x0b:
-			return false, openCommandPicker()
-		case 0x06:
-			return false, openDirectoryPicker()
-		case 0x07:
-			return false, showKeyboardMenu()
-		case 0x10:
-			return false, openFilePicker()
-		case 0x04:
-			return deleteCurrentFile(false)
-		case 0x03:
-			if err := copyBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, bufferRedraw(redrawBufferStatus)
 		case '\n':
 			overlay.reopen()
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
-		case 0x18:
-			previous := snapshotBufferState(buffer)
-			if err := cutBufferSelectionLocal(); err != nil {
-				return false, err
-			}
-			return false, classifiedBufferRedraw(previous)
-		case 0x16, 0x19:
+		case 0x19:
 			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
 			return false, classifiedBufferRedraw(previous)
-		case 0x11:
-			dirty, err := hasDirtyFiles(svc)
-			if err != nil {
-				buffer.status = diagnosticText(err)
-				return false, bufferRedraw(redrawBufferStatus)
-			}
-			if dirty {
-				done, lines, err := executeDirect("q\n", true)
-				overlay.open("")
-				for _, line := range lines {
-					overlay.addOutput(line)
-				}
-				if err != nil {
-					overlay.addOutput(diagnosticText(err))
-					return false, overlayHistoryRedraw(redrawOverlayHistory)
-				}
-				if done {
-					return true, nil
-				}
-				return false, overlayHistoryRedraw(redrawOverlayHistory)
-			}
-			done, _, err := executeDirect("q\n", false)
-			if err != nil {
-				buffer.status = diagnosticText(err)
-				return false, bufferRedraw(redrawBufferStatus)
-			}
-			if done {
-				return true, nil
-			}
-			buffer.status = ""
-			return false, bufferRedraw(redrawBufferStatus)
-		case 0x17:
-			if strings.TrimSpace(buffer.name) == "" {
-				overlay.open("w ")
-				return false, overlaySurfaceRedraw(redrawOverlayOpen)
-			}
-			previous := snapshotBufferState(buffer)
-			msg, lines, err := saveWithCapture()
-			if err != nil {
-				buffer.status = diagnosticText(err)
-			} else {
-				applyStatusResult(msg, lines)
-			}
-			return false, classifiedBufferRedraw(previous)
-		case 0x1f:
-			overlay.open("/")
-			return false, overlaySurfaceRedraw(redrawOverlayOpen)
-		case 0x0c:
-			previous := snapshotBufferState(buffer)
-			next, ok, err := lookInBuffer(svc, buffer, snarf, true)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				buffer = next
-				buffer.status = ""
-			} else {
-				buffer.status = "?no match"
-			}
-			return false, classifiedBufferRedraw(previous)
-		case 0x12:
-			return rerunLastUICommand()
-		case 0x00, 0x1e:
-			return false, recallLastPicker()
 		}
 		if r == '\r' {
 			r = '\n'

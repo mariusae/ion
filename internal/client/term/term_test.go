@@ -451,6 +451,27 @@ func TestShouldPreviewPickTokenSkipsDirectory(t *testing.T) {
 	}
 }
 
+func TestShouldPreviewPickTokenRejectsBinaryFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "bin.dat")
+	if err := os.WriteFile(path, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("WriteFile(bin) error = %v", err)
+	}
+
+	ok, message, err := shouldPreviewPickToken(path)
+	if err != nil {
+		t.Fatalf("shouldPreviewPickToken() error = %v", err)
+	}
+	if ok {
+		t.Fatal("shouldPreviewPickToken(binary) = true, want false")
+	}
+	if got, want := message, "[binary file not previewed]"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
 func TestNewBufferStateStartsAtDot(t *testing.T) {
 	t.Parallel()
 
@@ -2824,11 +2845,11 @@ func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 	if shouldRecordMenuCommandInHUD(":term:send") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:term:send) = true, want false")
 	}
-	if shouldRecordMenuCommandInHUD("~ rg foo") {
-		t.Fatal("shouldRecordMenuCommandInHUD(~ rg foo) = true, want false after alias normalization")
+	if shouldRecordMenuCommandInHUD("` rg foo") {
+		t.Fatal("shouldRecordMenuCommandInHUD(` rg foo) = true, want false after alias normalization")
 	}
-	if shouldRecordMenuCommandInHUD("~ls") {
-		t.Fatal("shouldRecordMenuCommandInHUD(~ls) = true, want false after attached alias normalization")
+	if shouldRecordMenuCommandInHUD("`ls") {
+		t.Fatal("shouldRecordMenuCommandInHUD(`ls) = true, want false after attached alias normalization")
 	}
 	if shouldRecordMenuCommandInHUD(":ion:snarf") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:ion:snarf) = true, want false after alias normalization")
@@ -3162,16 +3183,16 @@ func TestPrepareDirectScriptNormalizesServerQuitAlias(t *testing.T) {
 func TestNormalizeTerminalPseudoAliasMapsPickAlias(t *testing.T) {
 	t.Parallel()
 
-	if got, want := normalizeTerminalPseudoAlias("~ rg foo\n"), ":term:pick rg foo\n"; got != want {
-		t.Fatalf("normalizeTerminalPseudoAlias(~ with arg) = %q, want %q", got, want)
+	if got, want := normalizeTerminalPseudoAlias("` rg foo\n"), ":term:pick rg foo\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(` with arg) = %q, want %q", got, want)
 	}
-	if got, want := normalizeTerminalPseudoAlias("~ls\n"), ":term:pick ls\n"; got != want {
-		t.Fatalf("normalizeTerminalPseudoAlias(~ attached arg) = %q, want %q", got, want)
+	if got, want := normalizeTerminalPseudoAlias("`ls\n"), ":term:pick ls\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(` attached arg) = %q, want %q", got, want)
 	}
-	if got, want := normalizeTerminalPseudoAlias("~\n"), ":term:pick\n"; got != want {
-		t.Fatalf("normalizeTerminalPseudoAlias(~ empty) = %q, want %q", got, want)
+	if got, want := normalizeTerminalPseudoAlias("`\n"), ":term:pick\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(` empty) = %q, want %q", got, want)
 	}
-	if got, want := normalizeTerminalPseudoAlias("~rg foo\n"), ":term:pick rg foo\n"; got != want {
-		t.Fatalf("normalizeTerminalPseudoAlias(~ without separator) = %q, want %q", got, want)
+	if got, want := normalizeTerminalPseudoAlias("`rg foo\n"), ":term:pick rg foo\n"; got != want {
+		t.Fatalf("normalizeTerminalPseudoAlias(` without separator) = %q, want %q", got, want)
 	}
 }

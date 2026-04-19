@@ -348,6 +348,15 @@ func shouldPreviewPickToken(token string) (bool, string, error) {
 	if info.IsDir() && strings.TrimSpace(target.Address) == "" {
 		return false, "[directory not previewed]", nil
 	}
+	if !info.IsDir() {
+		ok, err := shouldPreviewDirectoryFile(target.Path)
+		if err != nil {
+			return false, "", err
+		}
+		if !ok {
+			return false, "[binary file not previewed]", nil
+		}
+	}
 	return true, "", nil
 }
 
@@ -1061,7 +1070,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				filePickerPreview.previewPath = ""
 				filePickerPreview.previewToken = token
 				if buffer != nil {
-					buffer.status = "?" + strings.Trim(strings.TrimSuffix(strings.TrimPrefix(message, "["), "]"), " ")
+					status := "?" + strings.Trim(strings.TrimSuffix(strings.TrimPrefix(message, "["), "]"), " ")
+					if message == "[binary file not previewed]" {
+						status = "?binary file"
+					}
+					buffer.status = status
 				}
 				return true, nil
 			}
@@ -2213,7 +2226,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, classifiedBufferRedraw(previous)
 		case metaKey('r'):
 			return rerunLastUICommand()
-		case metaKey('0'):
+		case metaKey('`'):
 			return false, recallLastPicker()
 		case metaKey('!'):
 			overlay.open("!")
@@ -3280,7 +3293,7 @@ func normalizeTerminalPseudoAlias(line string) string {
 
 func splitTerminalPickAlias(line string) (string, bool) {
 	line = strings.TrimSpace(line)
-	if line == "" || line[0] != '~' {
+	if line == "" || line[0] != '`' {
 		return "", false
 	}
 	if len(line) == 1 {

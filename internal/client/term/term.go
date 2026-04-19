@@ -43,9 +43,6 @@ const (
 	keyAltBackspace
 	keyFocusIn
 	keyFocusOut
-	keyCtrlMetaD
-	keyCtrlMetaL
-	keyCtrlTilde
 )
 
 var (
@@ -1623,6 +1620,70 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
 	}
 
+	var showKeyboardMenu func() error
+
+	toggleOverlayShortcut := func(key int) (bool, error) {
+		var open func() error
+		switch key {
+		case metaKey('j'):
+			open = func() error {
+				overlay.reopen()
+				return overlaySurfaceRedraw(redrawOverlayOpen)
+			}
+			if overlay.visible && !overlay.pickerActive() {
+				overlay.close()
+				return true, overlaySurfaceRedraw(redrawOverlayClose)
+			}
+		case metaKey('k'):
+			open = openCommandPicker
+			if overlay.visible && overlay.pickerMode() == overlayModeCommandPicker {
+				overlay.close()
+				return true, overlaySurfaceRedraw(redrawOverlayClose)
+			}
+		case metaKey('p'):
+			open = openFilePicker
+			if overlay.visible && overlay.pickerMode() == overlayModeFilePicker {
+				previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+				if err != nil {
+					return true, err
+				}
+				overlay.close()
+				flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+				if previewChanged {
+					flags |= renderInvalidateBuffer
+				}
+				return true, redraw(renderRequestForLayers(redrawOverlayClose, flags))
+			}
+		case metaKey('f'):
+			open = openDirectoryPicker
+			if overlay.visible && overlay.pickerMode() == overlayModeDirectoryPicker {
+				previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+				if err != nil {
+					return true, err
+				}
+				overlay.close()
+				flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+				if previewChanged {
+					flags |= renderInvalidateBuffer
+				}
+				return true, redraw(renderRequestForLayers(redrawOverlayClose, flags))
+			}
+		case metaKey('g'):
+			open = showKeyboardMenu
+		default:
+			return false, nil
+		}
+		if overlay.visible {
+			if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker || overlay.pickerMode() == overlayModePickPicker {
+				if _, err := finishFilePickerPreview(false, overlayPickerItem{}); err != nil {
+					return true, err
+				}
+			}
+			overlay.close()
+		}
+		return true, open()
+	}
+
 	recallLastPicker := func() error {
 		if !overlay.recallLastPicker() {
 			buffer.status = "?no picker"
@@ -1683,7 +1744,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return menuRedraw(redrawMenuOpen)
 	}
 
-	showKeyboardMenu := func() error {
+	showKeyboardMenu = func() error {
 		row, col := terminalCursorPosition(buffer, nil)
 		return showMenu(col, row)
 	}
@@ -2043,23 +2104,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, nil
 		}
 		switch key {
-		case keyCtrlMetaD:
-			return deleteCurrentFile(true)
-		case keyCtrlMetaL:
-			previous := snapshotBufferState(buffer)
-			next, ok, err := lookInBuffer(svc, buffer, snarf, false)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				buffer = next
-				buffer.status = ""
-			} else {
-				buffer.status = "?no match"
-			}
-			return false, classifiedBufferRedraw(previous)
-		case keyCtrlTilde:
-			return false, recallLastPicker()
 		case metaKey('j'):
 			if overlay.visible {
 				overlay.close()
@@ -2209,9 +2253,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 		}
 		switch r {
-		case '\n':
-			overlay.reopen()
-			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case 0x19:
 			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
@@ -2419,6 +2460,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 							continue
+						case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('f'), metaKey('g'):
+							handled, err := toggleOverlayShortcut(key)
+							if err != nil {
+								return err
+							}
+							if handled {
+								continue
+							}
 						default:
 							overlay.close()
 							if _, err := finishFilePickerPreview(false, overlayPickerItem{}); err != nil {
@@ -2733,6 +2782,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return err
 						}
 						continue
+					case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('f'), metaKey('g'):
+						handled, err := toggleOverlayShortcut(key)
+						if err != nil {
+							return err
+						}
+						if handled {
+							continue
+						}
 					default:
 						overlay.close()
 						done, err := handleBufferSpecial(key, mouse)

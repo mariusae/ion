@@ -162,12 +162,6 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 		}
 	case 'b', 'f', 'v', 'w', 0x08, 0x7f:
 		return metaKey(rune(b)), nil, nil
-	case 0x04:
-		return keyCtrlMetaD, nil, nil
-	case 0x0c:
-		return keyCtrlMetaL, nil, nil
-	case 0x00:
-		return keyCtrlTilde, nil, nil
 	}
 	if b >= 0x20 && b <= 0x7e {
 		return metaKey(rune(b)), nil, nil
@@ -231,27 +225,11 @@ func decodeCSIUKey(body []byte) (int, bool) {
 	if len(params) != 2 {
 		return 0, false
 	}
-	codepoint, ok := parseCSIParamInt(params[0])
-	if !ok {
+	if _, ok := parseCSIParamInt(params[0]); !ok {
 		return 0, false
 	}
-	modifier, ok := parseCSIParamInt(params[1])
-	if !ok {
+	if _, ok := parseCSIParamInt(params[1]); !ok {
 		return 0, false
-	}
-	if modifier == 7 {
-		switch codepoint {
-		case int('d'):
-			return keyCtrlMetaD, true
-		case int('l'):
-			return keyCtrlMetaL, true
-		}
-	}
-	if modifier == 5 {
-		switch codepoint {
-		case int('`'), int('~'):
-			return keyCtrlTilde, true
-		}
 	}
 	return 0, false
 }
@@ -264,27 +242,11 @@ func decodeModifiedOtherKey(body []byte) (int, bool) {
 	if num, ok := parseCSIParamInt(params[0]); !ok || num != 27 {
 		return 0, false
 	}
-	modifier, ok := parseCSIParamInt(params[1])
-	if !ok {
+	if _, ok := parseCSIParamInt(params[1]); !ok {
 		return 0, false
 	}
-	codepoint, ok := parseCSIParamInt(params[2])
-	if !ok {
+	if _, ok := parseCSIParamInt(params[2]); !ok {
 		return 0, false
-	}
-	if modifier == 7 {
-		switch codepoint {
-		case int('d'):
-			return keyCtrlMetaD, true
-		case int('l'):
-			return keyCtrlMetaL, true
-		}
-	}
-	if modifier == 5 {
-		switch codepoint {
-		case int('`'), int('~'):
-			return keyCtrlTilde, true
-		}
 	}
 	return 0, false
 }

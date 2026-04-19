@@ -2237,7 +2237,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				buffer.status = "?no match"
 			}
 			return false, classifiedBufferRedraw(previous)
-		case metaKey('r'):
+		case metaKey('.'):
 			return rerunLastUICommand()
 		case metaKey('`'):
 			return false, recallLastPicker()

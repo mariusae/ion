@@ -345,6 +345,11 @@ func runForeground(cfg config, ready io.WriteCloser) (err error) {
 		return err
 	}
 	defer aux.Close()
+	cancelClient, err := clientsession.DialUnixAs(cfg.socketPath, client.ID(), io.Discard, io.Discard)
+	if err != nil {
+		return err
+	}
+	defer cancelClient.Close()
 
 	manager := newLSPManager(root, cfg, func(message string) {
 		publishRecentStatus(aux, message)
@@ -367,7 +372,7 @@ func runForeground(cfg config, ready io.WriteCloser) (err error) {
 			}
 			return err
 		}
-		if err := handleInvocation(client, aux, manager, inv); err != nil {
+		if err := handleInvocation(client, aux, cancelClient, manager, inv); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -572,11 +577,15 @@ func (m *lspManager) serverForView(view wire.BufferView) (string, *lspServer, er
 	return path, server, nil
 }
 
-func handleInvocation(client, aux *clientsession.Client, manager *lspManager, inv wire.Invocation) error {
+func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *lspManager, inv wire.Invocation) error {
 	script := strings.TrimSpace(inv.Script)
 	session := client.Session(inv.SessionID)
 	if session == nil {
 		return client.FinishInvocation(inv.ID, "missing session", "", "")
+	}
+	ctx := context.Background()
+	if cancelClient != nil {
+		ctx = canceledInvocationContext(cancelClient, inv.ID)
 	}
 	if err := manager.syncBuffers(aux); err != nil {
 		_ = client.FinishInvocation(inv.ID, err.Error(), "", "")
@@ -595,15 +604,15 @@ func handleInvocation(client, aux *clientsession.Client, manager *lspManager, in
 	}
 	switch script {
 	case ":lsp:goto":
-		return finishGoto(client, session, manager, inv.ID, view, "textDocument/definition", "definition")
+		return finishGoto(ctx, client, session, manager, inv.ID, view, "textDocument/definition", "definition")
 	case ":lsp:gototype":
-		return finishGoto(client, session, manager, inv.ID, view, "textDocument/typeDefinition", "type definition")
+		return finishGoto(ctx, client, session, manager, inv.ID, view, "textDocument/typeDefinition", "type definition")
 	case ":lsp:show":
-		return finishHover(client, manager, inv.ID, view)
+		return finishHover(ctx, client, manager, inv.ID, view)
 	case ":lsp:usage":
-		return finishUsage(client, manager, inv.ID, view)
+		return finishUsage(ctx, client, manager, inv.ID, view)
 	case ":lsp:fmt":
-		return finishFormat(client, manager, inv.ID, view)
+		return finishFormat(ctx, client, manager, inv.ID, view)
 	case ":lsp:status":
 		return finishStatus(client, manager, inv.ID, view)
 	case ":lsp:log":
@@ -613,21 +622,45 @@ func handleInvocation(client, aux *clientsession.Client, manager *lspManager, in
 	}
 }
 
-func finishGoto(client *clientsession.Client, session *clientsession.Session, manager *lspManager, invocationID uint64, view wire.BufferView, method, label string) error {
+func canceledInvocationContext(client *clientsession.Client, invocationID uint64) context.Context {
+	if client == nil || invocationID == 0 {
+		return context.Background()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		canceled, err := client.WaitInvocationCancel(invocationID)
+		if err != nil || !canceled {
+			return
+		}
+		cancel()
+	}()
+	return ctx
+}
+
+func finishGoto(ctx context.Context, client *clientsession.Client, session *clientsession.Session, manager *lspManager, invocationID uint64, view wire.BufferView, method, label string) error {
 	server, pos, uri, err := manager.currentTarget(view)
 	if err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
 	}
-	result, err := server.Request(method, map[string]any{
+	result, err := server.RequestContext(ctx, method, map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     pos,
 	}, 30*time.Second)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return client.FinishInvocation(invocationID, "", "", "")
+		}
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
 	}
 	target, err := decodeLocationTarget(result)
 	if err != nil {
 		return client.FinishInvocation(invocationID, fmt.Sprintf("no %s found", label), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
 	}
 	if _, err := session.Execute(manager.pushCommand(view, server, target) + "\n"); err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
@@ -688,17 +721,23 @@ func (s *lspServer) DocumentText(path string) (string, bool) {
 	return doc.text, true
 }
 
-func finishHover(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+func finishHover(ctx context.Context, client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
 	server, pos, uri, err := manager.currentTarget(view)
 	if err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
 	}
-	result, err := server.Request("textDocument/hover", map[string]any{
+	result, err := server.RequestContext(ctx, "textDocument/hover", map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     pos,
 	}, 30*time.Second)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return client.FinishInvocation(invocationID, "", "", "")
+		}
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
 	}
 	text := formatHoverResult(result)
 	if strings.TrimSpace(text) == "" {
@@ -710,12 +749,12 @@ func finishHover(client *clientsession.Client, manager *lspManager, invocationID
 	return client.FinishInvocation(invocationID, "", text, "")
 }
 
-func finishUsage(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+func finishUsage(ctx context.Context, client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
 	server, pos, uri, err := manager.currentTarget(view)
 	if err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
 	}
-	result, err := server.Request("textDocument/references", map[string]any{
+	result, err := server.RequestContext(ctx, "textDocument/references", map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     pos,
 		"context": map[string]any{
@@ -723,7 +762,13 @@ func finishUsage(client *clientsession.Client, manager *lspManager, invocationID
 		},
 	}, 30*time.Second)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return client.FinishInvocation(invocationID, "", "", "")
+		}
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
 	}
 	targets, err := decodeLocationTargets(result)
 	if err != nil || len(targets) == 0 {
@@ -736,7 +781,7 @@ func finishUsage(client *clientsession.Client, manager *lspManager, invocationID
 	return client.FinishInvocation(invocationID, "", text, "")
 }
 
-func finishFormat(client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
+func finishFormat(ctx context.Context, client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView) error {
 	path, server, err := manager.serverForView(view)
 	if err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
@@ -746,7 +791,7 @@ func finishFormat(client *clientsession.Client, manager *lspManager, invocationI
 	if err := server.EnsureView(canonicalView); err != nil {
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
 	}
-	result, err := server.Request("textDocument/formatting", map[string]any{
+	result, err := server.RequestContext(ctx, "textDocument/formatting", map[string]any{
 		"textDocument": map[string]any{"uri": pathToURI(path)},
 		"options": map[string]any{
 			"tabSize":                4,
@@ -757,7 +802,13 @@ func finishFormat(client *clientsession.Client, manager *lspManager, invocationI
 		},
 	}, 30*time.Second)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return client.FinishInvocation(invocationID, "", "", "")
+		}
 		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
 	}
 	edits, err := decodeTextEdits(result)
 	if err != nil {
@@ -1027,6 +1078,18 @@ func (s *lspServer) ensureStarted() error {
 }
 
 func (s *lspServer) Request(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	return s.RequestContext(context.Background(), method, params, timeout)
+}
+
+func (s *lspServer) RequestContext(ctx context.Context, method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	if err := s.ensureStarted(); err != nil {
 		return nil, err
 	}
@@ -1049,8 +1112,6 @@ func (s *lspServer) Request(method string, params any, timeout time.Duration) (j
 		return nil, err
 	}
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 	select {
 	case env, ok := <-ch:
 		if !ok {
@@ -1060,9 +1121,28 @@ func (s *lspServer) Request(method string, params any, timeout time.Duration) (j
 			return nil, fmt.Errorf("%s: %s", s.name, env.Error.Message)
 		}
 		return env.Result, nil
-	case <-timer.C:
-		return nil, fmt.Errorf("%s %s timed out", s.name, method)
+	case <-ctx.Done():
+		if s.cancelPendingRequest(id) {
+			_ = s.Notify("$/cancelRequest", map[string]any{"id": id})
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%s %s timed out", s.name, method)
+		}
+		return nil, ctx.Err()
 	}
+}
+
+func (s *lspServer) cancelPendingRequest(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil {
+		return false
+	}
+	if _, ok := s.pending[id]; !ok {
+		return false
+	}
+	delete(s.pending, id)
+	return true
 }
 
 func (s *lspServer) Notify(method string, params any) error {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,6 +349,258 @@ func TestLSPServerLogReport(t *testing.T) {
 	}
 }
 
+func TestLSPServerRequestContextCancelSendsCancelNotification(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	defer reader.Close()
+
+	server := &lspServer{
+		name:        "go",
+		initialized: true,
+		stdin:       writer,
+		pending:     make(map[int64]chan rpcEnvelope),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := server.RequestContext(ctx, "textDocument/definition", map[string]any{
+			"textDocument": map[string]any{"uri": "file:///tmp/demo.go"},
+			"position":     lspPosition{Line: 1, Character: 2},
+		}, 30*time.Second)
+		resultCh <- err
+	}()
+
+	bufReader := bufio.NewReader(reader)
+	request, err := readRPCEnvelope(bufReader)
+	if err != nil {
+		t.Fatalf("readRPCEnvelope(request) error = %v", err)
+	}
+	if got, want := request.Method, "textDocument/definition"; got != want {
+		t.Fatalf("request method = %q, want %q", got, want)
+	}
+	requestID := append(json.RawMessage(nil), request.ID...)
+
+	cancel()
+
+	cancelEnv, err := readRPCEnvelope(bufReader)
+	if err != nil {
+		t.Fatalf("readRPCEnvelope(cancel) error = %v", err)
+	}
+	if got, want := cancelEnv.Method, "$/cancelRequest"; got != want {
+		t.Fatalf("cancel method = %q, want %q", got, want)
+	}
+	var cancelParams struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(cancelEnv.Params, &cancelParams); err != nil {
+		t.Fatalf("json.Unmarshal(cancel params) error = %v", err)
+	}
+	if got, want := mustRawJSON(cancelParams.ID), requestID; string(got) != string(want) {
+		t.Fatalf("cancel id = %s, want %s", got, want)
+	}
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RequestContext() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestContext() did not return after cancel")
+	}
+}
+
+func TestRunForegroundCancelSlowGotoCancelsLSPRequest(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "demo.go")
+	sourceText := "package main\n\nfunc target() {}\n\nfunc call() {\n\ttarget()\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(sourceText), 0o644); err != nil {
+		t.Fatalf("WriteFile(sourcePath) error = %v", err)
+	}
+
+	socketFile, err := os.CreateTemp("", "ion-lsp-cancel-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := socketFile.Name()
+	if err := socketFile.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove(socketPath) error = %v", err)
+	}
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := transport.New(workspace.New())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Shutdown()
+		_ = listener.Close()
+	}()
+
+	startFile := filepath.Join(root, "slowlsp-started")
+	cancelFile := filepath.Join(root, "slowlsp-canceled")
+	helperPath := buildSlowLSPHelper(t, root, startFile, cancelFile)
+
+	cfg := config{
+		socketPath: socketPath,
+		foreground: true,
+		servers: map[string]string{
+			"go": fmt.Sprintf("%q", helperPath),
+		},
+		matches: []matchRule{{
+			pattern: `\.go$`,
+			re:      regexp.MustCompile(`\.go$`),
+			server:  "go",
+		}},
+	}
+
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer readyR.Close()
+
+	foregroundDone := make(chan error, 1)
+	go func() {
+		foregroundDone <- runForeground(cfg, readyW)
+	}()
+
+	status, err := bufio.NewReader(readyR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("ReadString() error = %v", err)
+	}
+	if got, want := strings.TrimSpace(status), "ok"; got != want {
+		t.Fatalf("startup status = %q, want %q", got, want)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	caller, err := clientsession.DialUnix(socketPath, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+
+	if err := caller.Bootstrap([]string{sourcePath}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if err := waitForMenuCommands(caller, len(lspMenuCommands), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := caller.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() before goto error = %v", err)
+	}
+	offset := strings.LastIndex(view.Text, "target()")
+	if offset < 0 {
+		t.Fatal("did not find target() call in test source")
+	}
+	if _, err := caller.SetDot(offset, offset); err != nil {
+		t.Fatalf("SetDot(target call) error = %v", err)
+	}
+
+	session := caller.CurrentSession()
+	if session == nil {
+		t.Fatal("CurrentSession() = nil, want active session")
+	}
+	interruptClient, err := clientsession.DialUnixAs(socketPath, caller.ID(), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnixAs(interrupt) error = %v", err)
+	}
+	defer interruptClient.Close()
+	interruptSession := interruptClient.Session(session.ID())
+	if interruptSession == nil {
+		t.Fatal("interrupt session = nil, want session handle")
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := caller.Execute(":lsp:goto\n")
+		execDone <- err
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(startFile); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("Stat(startFile) error = %v", err)
+		}
+		select {
+		case err := <-execDone:
+			t.Fatalf("Execute(:lsp:goto) returned before slow request start: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s\nstdout=%s\nstderr=%s", startFile, stdout.String(), stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := interruptSession.Cancel(); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	select {
+	case err := <-execDone:
+		if err != nil {
+			t.Fatalf("Execute(:lsp:goto) error = %v\nstderr=%s", err, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Execute(:lsp:goto) did not return after cancel")
+	}
+
+	if err := waitForFile(cancelFile, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err = caller.CurrentView()
+	if err != nil {
+		t.Fatalf("CurrentView() after cancel error = %v", err)
+	}
+	if got, want := view.Name, sourcePath; got != want {
+		t.Fatalf("view.Name after cancel = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), ""; got != want {
+		t.Fatalf("stdout after cancel = %q, want empty output", got)
+	}
+	if got, want := stderr.String(), ""; got != want {
+		t.Fatalf("stderr after cancel = %q, want empty output", got)
+	}
+
+	_ = server.Shutdown()
+	select {
+	case err := <-foregroundDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("runForeground() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runForeground() did not exit")
+	}
+	select {
+	case err := <-serverDone:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve() did not return")
+	}
+}
+
 func TestRunForegroundWithGoplsSmoke(t *testing.T) {
 	if os.Getenv("ION_LSP_SMOKE") == "" {
 		t.Skip("set ION_LSP_SMOKE=1 to run the live gopls smoke test")
@@ -585,6 +838,21 @@ func waitForMenuCommands(client *clientsession.Client, want int, timeout time.Du
 	}
 }
 
+func waitForFile(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for %s", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func assertNavigationMatchesView(t *testing.T, client *clientsession.Client, view wire.BufferView) {
 	t.Helper()
 
@@ -602,4 +870,209 @@ func assertNavigationMatchesView(t *testing.T, client *clientsession.Client, vie
 	if got := nav.Entries[nav.Current].Label; got != want {
 		t.Fatalf("NavigationStack current label = %q, want %q", got, want)
 	}
+}
+
+func buildSlowLSPHelper(t *testing.T, dir, startFile, cancelFile string) string {
+	t.Helper()
+
+	source := fmt.Sprintf(`package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+type rpcEnvelope struct {
+	JSONRPC string          %[1]sjson:"jsonrpc"%[1]s
+	ID      json.RawMessage %[1]sjson:"id,omitempty"%[1]s
+	Method  string          %[1]sjson:"method,omitempty"%[1]s
+	Params  json.RawMessage %[1]sjson:"params,omitempty"%[1]s
+	Result  json.RawMessage %[1]sjson:"result,omitempty"%[1]s
+}
+
+func main() {
+	reader := bufio.NewReader(os.Stdin)
+	writer := bufio.NewWriter(os.Stdout)
+	defer writer.Flush()
+
+	var pendingID int64
+	for {
+		env, err := readRPCEnvelope(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		switch env.Method {
+		case "initialize":
+			if err := writeRPCEnvelope(writer, rpcEnvelope{
+				JSONRPC: "2.0",
+				ID:      env.ID,
+				Result: mustMarshalJSON(map[string]any{
+					"capabilities": map[string]any{
+						"definitionProvider": true,
+					},
+				}),
+			}); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		case "initialized", "textDocument/didOpen", "textDocument/didChange", "textDocument/didClose":
+		case "shutdown":
+			if err := writeRPCEnvelope(writer, rpcEnvelope{
+				JSONRPC: "2.0",
+				ID:      env.ID,
+				Result:  mustMarshalJSON(nil),
+			}); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		case "exit":
+			return
+		case "textDocument/definition":
+			id, ok := parseRPCID(env.ID)
+			if !ok {
+				fmt.Fprintln(os.Stderr, "missing request id for definition")
+				os.Exit(1)
+			}
+			pendingID = id
+			if err := os.WriteFile(%[2]q, []byte("started\n"), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		case "$/cancelRequest":
+			var params struct {
+				ID int64 %[1]sjson:"id"%[1]s
+			}
+			if err := json.Unmarshal(env.Params, &params); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if pendingID != 0 && params.ID == pendingID {
+				if err := os.WriteFile(%[3]q, []byte("canceled\n"), 0o644); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				if err := writeRPCEnvelope(writer, rpcEnvelope{
+					JSONRPC: "2.0",
+					ID:      mustRawJSON(pendingID),
+					Result: mustMarshalJSON([]map[string]any{{
+						"uri": "file://" + filepath.Join(filepath.Dir(%[2]q), "ignored.go"),
+						"range": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 0},
+						},
+					}}),
+				}); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				pendingID = 0
+			}
+		default:
+			if len(env.ID) != 0 {
+				if err := writeRPCEnvelope(writer, rpcEnvelope{
+					JSONRPC: "2.0",
+					ID:      env.ID,
+					Result:  mustMarshalJSON(nil),
+				}); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+			}
+		}
+	}
+}
+
+func readRPCEnvelope(reader *bufio.Reader) (rpcEnvelope, error) {
+	contentLength := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return rpcEnvelope{}, err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+			n, err := strconv.Atoi(strings.TrimSpace(line[len("content-length:"):]))
+			if err != nil {
+				return rpcEnvelope{}, err
+			}
+			contentLength = n
+		}
+	}
+	if contentLength <= 0 {
+		return rpcEnvelope{}, fmt.Errorf("bad content length")
+	}
+	body := make([]byte, contentLength)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return rpcEnvelope{}, err
+	}
+	var env rpcEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return rpcEnvelope{}, err
+	}
+	return env, nil
+}
+
+func writeRPCEnvelope(writer *bufio.Writer, env rpcEnvelope) error {
+	body, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Content-Length: %%d\r\n\r\n", len(body)); err != nil {
+		return err
+	}
+	if _, err := writer.Write(body); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+func parseRPCID(raw json.RawMessage) (int64, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var id int64
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func mustRawJSON(v int64) json.RawMessage {
+	return json.RawMessage(strconv.FormatInt(v, 10))
+}
+
+func mustMarshalJSON(v any) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+`, "`", startFile, cancelFile)
+
+	sourcePath := filepath.Join(dir, "slowlsp_helper.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o644); err != nil {
+		t.Fatalf("WriteFile(helper source) error = %v", err)
+	}
+	binaryPath := filepath.Join(dir, "slowlsp-helper")
+	cmd := exec.Command("go", "build", "-o", binaryPath, sourcePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build helper error = %v\n%s", err, output)
+	}
+	return binaryPath
 }

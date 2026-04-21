@@ -1667,7 +1667,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				return true, redraw(renderRequestForLayers(redrawOverlayClose, flags))
 			}
-		case metaKey('f'):
+		case metaKey('i'):
 			open = openDirectoryPicker
 			if overlay.visible && overlay.pickerMode() == overlayModeDirectoryPicker {
 				previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
@@ -2130,7 +2130,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, showKeyboardMenu()
 		case metaKey('p'):
 			return false, openFilePicker()
-		case metaKey('f'):
+		case metaKey('i'):
 			return false, openDirectoryPicker()
 		case metaKey('d'):
 			return deleteCurrentFile(false)
@@ -2486,7 +2486,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 							continue
-						case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('f'), metaKey('g'):
+						case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'):
 							handled, err := toggleOverlayShortcut(key)
 							if err != nil {
 								return err
@@ -2808,7 +2808,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return err
 						}
 						continue
-					case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('f'), metaKey('g'):
+					case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'):
 						handled, err := toggleOverlayShortcut(key)
 						if err != nil {
 							return err

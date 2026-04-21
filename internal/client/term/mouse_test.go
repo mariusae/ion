@@ -194,7 +194,7 @@ func TestLegacyAltKeyTranslatesEditorMetaBindings(t *testing.T) {
 		want int
 	}{
 		{name: "alt-b", key: metaKey('b'), want: keyAltLeft},
-		{name: "alt-f passthrough", key: metaKey('f'), want: metaKey('f')},
+		{name: "alt-i passthrough", key: metaKey('i'), want: metaKey('i')},
 		{name: "alt-v passthrough", key: metaKey('v'), want: metaKey('v')},
 		{name: "alt-w passthrough", key: metaKey('w'), want: metaKey('w')},
 		{name: "alt-backspace", key: metaKey(0x7f), want: keyAltBackspace},

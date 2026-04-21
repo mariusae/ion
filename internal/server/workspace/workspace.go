@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"ion/internal/core/cmdlang"
@@ -25,6 +26,8 @@ type Workspace struct {
 	watchedDirs  map[string]int
 	watchedPaths map[string]struct{}
 }
+
+const watchReconcileInterval = 250 * time.Millisecond
 
 // New constructs a workspace backed by a core execution session.
 func New() *Workspace {
@@ -420,6 +423,8 @@ func (w *Workspace) watchLoop() {
 	if w == nil || w.watcher == nil {
 		return
 	}
+	ticker := time.NewTicker(watchReconcileInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case event, ok := <-w.watcher.Events:
@@ -434,6 +439,9 @@ func (w *Workspace) watchLoop() {
 			if !ok {
 				return
 			}
+			w.reconcileWatchedFiles()
+		case <-ticker.C:
+			w.reconcileWatchedFiles()
 		}
 	}
 }
@@ -482,6 +490,24 @@ func (w *Workspace) handleWatchedFileLocked(f *text.File) {
 		return
 	}
 	_ = w.session.ReloadFileFromDisk(f)
+}
+
+func (w *Workspace) reconcileWatchedFiles() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reconcileWatchedFilesLocked()
+}
+
+func (w *Workspace) reconcileWatchedFilesLocked() {
+	if w == nil || w.session == nil {
+		return
+	}
+	for _, f := range w.session.Files {
+		w.handleWatchedFileLocked(f)
+	}
 }
 
 func (w *Workspace) resyncWatchesLocked() {

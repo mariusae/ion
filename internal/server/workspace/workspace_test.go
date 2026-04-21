@@ -190,6 +190,85 @@ func TestWorkspaceWatcherMarksDirtyChangedFileAndSaveStillRequiresConfirmation(t
 	}
 }
 
+func TestWorkspaceWatcherLoadsFileWhenMissingPathLaterAppears(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "nested")
+	path := filepath.Join(dir, "a.txt")
+
+	ws := New()
+	state := ws.NewSessionState()
+	if err := ws.Bootstrap(state, []string{path}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := ws.CurrentView(state)
+	if err != nil {
+		t.Fatalf("CurrentView() before create error = %v", err)
+	}
+	if got, want := view.Text, ""; got != want {
+		t.Fatalf("view.Text before create = %q, want %q", got, want)
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	waitForWorkspace(t, func() bool {
+		view, err := ws.CurrentView(state)
+		return err == nil && view.Text == "hello\n"
+	})
+}
+
+func TestWorkspaceWatcherReloadsCleanFileAfterDirectoryRecreated(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "nested")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ws := New()
+	state := ws.NewSessionState()
+	if err := ws.Bootstrap(state, []string{path}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(recreate) error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("beta\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(recreate) error = %v", err)
+	}
+
+	waitForWorkspace(t, func() bool {
+		view, err := ws.CurrentView(state)
+		return err == nil && view.Text == "beta\n"
+	})
+
+	files, err := ws.MenuFiles(state)
+	if err != nil {
+		t.Fatalf("MenuFiles() error = %v", err)
+	}
+	if got, want := len(files), 1; got != want {
+		t.Fatalf("menu files = %d, want %d", got, want)
+	}
+	if files[0].Dirty {
+		t.Fatalf("menu dirty = true, want false after reload")
+	}
+	if files[0].Changed {
+		t.Fatalf("menu changed = true, want false after reload")
+	}
+}
+
 func TestSetSessionStatusAppearsInCurrentView(t *testing.T) {
 	t.Parallel()
 

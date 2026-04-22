@@ -2020,8 +2020,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, nil
 			}
 			if mouse.button == 1 && mouse.pressed {
+				paste, err := middleClickPasteBuffer(snarf, readTmuxPasteBuffer)
+				if err != nil {
+					return false, err
+				}
 				previous := snapshotBufferState(buffer)
-				next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, buffer, snarf, mouse.y, mouse.x)
+				next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, buffer, paste, mouse.y, mouse.x)
 				if err != nil {
 					return false, err
 				}
@@ -5202,6 +5206,17 @@ func exchangeSnarfWithTmux(snarf []rune, read func() ([]byte, error), write func
 		return append([]rune(nil), snarf...), "", err
 	}
 	return []rune(string(current)), "tmux exchanged", nil
+}
+
+func middleClickPasteBuffer(snarf []rune, readTmux func() ([]byte, error)) ([]rune, error) {
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return append([]rune(nil), snarf...), nil
+	}
+	current, err := readTmux()
+	if err != nil {
+		return nil, err
+	}
+	return []rune(string(current)), nil
 }
 
 func readTmuxPasteBuffer() ([]byte, error) {

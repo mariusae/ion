@@ -2872,6 +2872,42 @@ func TestExchangeSnarfWithTmuxSwapsBuffers(t *testing.T) {
 	}
 }
 
+func TestMiddleClickPasteBufferUsesSnarfOutsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "")
+	called := false
+	got, err := middleClickPasteBuffer([]rune("local"), func() ([]byte, error) {
+		called = true
+		return []byte("remote"), nil
+	})
+	if err != nil {
+		t.Fatalf("middleClickPasteBuffer() error = %v", err)
+	}
+	if called {
+		t.Fatal("tmux reader called outside tmux, want snarf-only paste")
+	}
+	if want := "local"; string(got) != want {
+		t.Fatalf("paste buffer = %q, want %q", string(got), want)
+	}
+}
+
+func TestMiddleClickPasteBufferUsesTmuxInsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-123/default,999,0")
+	called := false
+	got, err := middleClickPasteBuffer([]rune("local"), func() ([]byte, error) {
+		called = true
+		return []byte("remote"), nil
+	})
+	if err != nil {
+		t.Fatalf("middleClickPasteBuffer() error = %v", err)
+	}
+	if !called {
+		t.Fatal("tmux reader not called inside tmux")
+	}
+	if want := "remote"; string(got) != want {
+		t.Fatalf("paste buffer = %q, want %q", string(got), want)
+	}
+}
+
 func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 	t.Parallel()
 

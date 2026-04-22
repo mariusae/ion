@@ -320,6 +320,30 @@ func TestFormatMenuItemLinePreservesFilePrefixWhenTrimmed(t *testing.T) {
 	}
 }
 
+func TestFormatMenuItemLinePreservesPopSuffixWhenTrimmed(t *testing.T) {
+	t.Parallel()
+
+	item := menuItem{
+		label:    " /very/long/path/to/internal/client/term/grid_test.go:#123",
+		shortcut: "(P)",
+		kind:     menuHistoryPop,
+	}
+
+	got := formatMenuItemLine(item, 24)
+	if !strings.HasPrefix(got, "│ ") {
+		t.Fatalf("formatMenuItemLine() = %q, want pop prefix preserved", got)
+	}
+	if !strings.Contains(got, "grid_test.go:#123") {
+		t.Fatalf("formatMenuItemLine() = %q, want pop tail preserved", got)
+	}
+	if strings.Contains(got, "/very/long/path") {
+		t.Fatalf("formatMenuItemLine() = %q, want left side trimmed for pop history", got)
+	}
+	if !strings.HasSuffix(got, "(P)│") {
+		t.Fatalf("formatMenuItemLine() = %q, want shortcut aligned at end", got)
+	}
+}
+
 func TestDirtyMarkUsesDoubleQuoteForDirtyChangedFile(t *testing.T) {
 	t.Parallel()
 

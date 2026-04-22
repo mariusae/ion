@@ -493,6 +493,15 @@ func fitMenuItemLabel(item menuItem, inner int) string {
 		suffix := label[len(label)-(limit-filePrefixRunes):]
 		return string(prefix) + string(suffix)
 	}
+	if item.kind == menuHistoryPop {
+		const popPrefixRunes = 1
+		if limit <= popPrefixRunes {
+			return string(label[:limit])
+		}
+		prefix := label[:popPrefixRunes]
+		suffix := label[len(label)-(limit-popPrefixRunes):]
+		return string(prefix) + string(suffix)
+	}
 	return string(label[:limit])
 }
 

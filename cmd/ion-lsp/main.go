@@ -19,6 +19,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf16"
 
 	clientsession "ion/internal/client/session"
@@ -61,6 +62,12 @@ func providerDoc() wire.NamespaceProviderDoc {
 				Name:    "usage",
 				Summary: "list usages of the symbol under dot",
 				Help:    "Requests textDocument/references for the symbol under dot and prints one usage per line as path:line:column with the matching source line. Takes no arguments.",
+			},
+			{
+				Name:    "symbol",
+				Args:    "<query>",
+				Summary: "search workspace symbols by name",
+				Help:    "Requests workspace/symbol from the matching LSP server and prints one result per line as path:line:column: symbol-name. The query argument is required.",
 			},
 			{
 				Name:    "fmt",
@@ -579,6 +586,7 @@ func (m *lspManager) serverForView(view wire.BufferView) (string, *lspServer, er
 
 func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *lspManager, inv wire.Invocation) error {
 	script := strings.TrimSpace(inv.Script)
+	command, args := splitInvocationScript(script)
 	session := client.Session(inv.SessionID)
 	if session == nil {
 		return client.FinishInvocation(inv.ID, "missing session", "", "")
@@ -602,7 +610,7 @@ func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *
 		_ = client.FinishInvocation(inv.ID, err.Error(), "", "")
 		return nil
 	}
-	switch script {
+	switch command {
 	case ":lsp:goto":
 		return finishGoto(ctx, client, session, manager, inv.ID, view, "textDocument/definition", "definition")
 	case ":lsp:gototype":
@@ -611,6 +619,8 @@ func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *
 		return finishHover(ctx, client, manager, inv.ID, view)
 	case ":lsp:usage":
 		return finishUsage(ctx, client, manager, inv.ID, view)
+	case ":lsp:symbol":
+		return finishWorkspaceSymbol(ctx, client, manager, inv.ID, view, args)
 	case ":lsp:fmt":
 		return finishFormat(ctx, client, manager, inv.ID, view)
 	case ":lsp:status":
@@ -620,6 +630,18 @@ func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *
 	default:
 		return client.FinishInvocation(inv.ID, fmt.Sprintf("unknown command `%s'", script), "", "")
 	}
+}
+
+func splitInvocationScript(script string) (string, string) {
+	script = strings.TrimSpace(script)
+	if script == "" {
+		return "", ""
+	}
+	split := strings.IndexFunc(script, unicode.IsSpace)
+	if split < 0 {
+		return script, ""
+	}
+	return script[:split], strings.TrimSpace(script[split:])
 }
 
 func canceledInvocationContext(client *clientsession.Client, invocationID uint64) context.Context {
@@ -777,6 +799,41 @@ func finishUsage(ctx context.Context, client *clientsession.Client, manager *lsp
 	text := formatUsageResult(manager, view, server, targets)
 	if text == "" {
 		return client.FinishInvocation(invocationID, "no usages found", "", "")
+	}
+	return client.FinishInvocation(invocationID, "", text, "")
+}
+
+func finishWorkspaceSymbol(ctx context.Context, client *clientsession.Client, manager *lspManager, invocationID uint64, view wire.BufferView, query string) error {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return client.FinishInvocation(invocationID, "missing symbol query", "", "")
+	}
+	if manager == nil {
+		return client.FinishInvocation(invocationID, "missing lsp manager", "", "")
+	}
+	_, server, err := manager.serverForView(view)
+	if err != nil {
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	result, err := server.RequestContext(ctx, "workspace/symbol", map[string]any{
+		"query": query,
+	}, 30*time.Second)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return client.FinishInvocation(invocationID, "", "", "")
+		}
+		return client.FinishInvocation(invocationID, err.Error(), "", "")
+	}
+	if ctx.Err() != nil {
+		return client.FinishInvocation(invocationID, "", "", "")
+	}
+	symbols, err := decodeWorkspaceSymbolTargets(result)
+	if err != nil || len(symbols) == 0 {
+		return client.FinishInvocation(invocationID, "no symbols found", "", "")
+	}
+	text := formatWorkspaceSymbolResult(manager.root, symbols)
+	if strings.TrimSpace(text) == "" {
+		return client.FinishInvocation(invocationID, "no symbols found", "", "")
 	}
 	return client.FinishInvocation(invocationID, "", text, "")
 }
@@ -1503,6 +1560,13 @@ type locationTarget struct {
 	Column int
 }
 
+type workspaceSymbolTarget struct {
+	Name          string
+	ContainerName string
+	Target        locationTarget
+	HasLocation   bool
+}
+
 func (t locationTarget) DisplayPath(root string) string {
 	rel, err := filepath.Rel(root, t.Path)
 	if err != nil {
@@ -1582,6 +1646,64 @@ func decodeTextEdits(raw json.RawMessage) ([]lspTextEdit, error) {
 		return nil, fmt.Errorf("bad text edits")
 	}
 	return edits, nil
+}
+
+func decodeWorkspaceSymbolTargets(raw json.RawMessage) ([]workspaceSymbolTarget, error) {
+	type rawWorkspaceSymbol struct {
+		Name          string          `json:"name"`
+		ContainerName string          `json:"containerName"`
+		Location      json.RawMessage `json:"location"`
+	}
+	var list []rawWorkspaceSymbol
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("bad workspace symbols")
+	}
+	out := make([]workspaceSymbolTarget, 0, len(list))
+	for _, item := range list {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		target, ok, err := decodeWorkspaceSymbolLocation(item.Location)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, workspaceSymbolTarget{
+			Name:          name,
+			ContainerName: strings.TrimSpace(item.ContainerName),
+			Target:        target,
+			HasLocation:   ok,
+		})
+	}
+	return out, nil
+}
+
+func decodeWorkspaceSymbolLocation(raw json.RawMessage) (locationTarget, bool, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return locationTarget{}, false, nil
+	}
+	var withRange struct {
+		URI   string    `json:"uri"`
+		Range *lspRange `json:"range"`
+	}
+	if err := json.Unmarshal(raw, &withRange); err == nil && strings.TrimSpace(withRange.URI) != "" && withRange.Range != nil {
+		target, err := targetFromLocation(lspLocation{URI: withRange.URI, Range: *withRange.Range})
+		if err != nil {
+			return locationTarget{}, false, err
+		}
+		return target, true, nil
+	}
+	var uriOnly struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(raw, &uriOnly); err == nil && strings.TrimSpace(uriOnly.URI) != "" {
+		path, err := pathFromURI(uriOnly.URI)
+		if err != nil {
+			return locationTarget{}, false, err
+		}
+		return locationTarget{Path: path}, true, nil
+	}
+	return locationTarget{}, false, nil
 }
 
 func targetFromLocation(loc lspLocation) (locationTarget, error) {
@@ -1817,6 +1939,43 @@ func formatUsageResult(manager *lspManager, view wire.BufferView, server *lspSer
 			continue
 		}
 		fmt.Fprintf(&b, "%s:%d:%d\n", target.DisplayPath(manager.root), target.Line, target.Column)
+	}
+	return b.String()
+}
+
+func formatWorkspaceSymbolResult(root string, symbols []workspaceSymbolTarget) string {
+	if len(symbols) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(symbols))
+	var b strings.Builder
+	for _, symbol := range symbols {
+		name := symbol.Name
+		if symbol.ContainerName != "" {
+			name = symbol.ContainerName + "." + name
+		}
+		switch {
+		case symbol.HasLocation && symbol.Target.Path != "" && symbol.Target.Line > 0:
+			key := fmt.Sprintf("%s:%d:%d:%s", symbol.Target.Path, symbol.Target.Line, symbol.Target.Column, name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			fmt.Fprintf(&b, "%s:%d:%d: %s\n", symbol.Target.DisplayPath(root), symbol.Target.Line, symbol.Target.Column, name)
+		case symbol.HasLocation && symbol.Target.Path != "":
+			key := fmt.Sprintf("%s:%s", symbol.Target.Path, name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			fmt.Fprintf(&b, "%s: %s\n", symbol.Target.DisplayPath(root), name)
+		default:
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			fmt.Fprintf(&b, "%s\n", name)
+		}
 	}
 	return b.String()
 }

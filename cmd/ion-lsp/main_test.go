@@ -160,15 +160,35 @@ func TestProviderDocIncludesStatusAndLog(t *testing.T) {
 	t.Parallel()
 
 	doc := providerDoc()
-	if got, want := len(doc.Commands), 7; got != want {
+	if got, want := len(doc.Commands), 8; got != want {
 		t.Fatalf("len(providerDoc().Commands) = %d, want %d", got, want)
 	}
 	names := make([]string, 0, len(doc.Commands))
 	for _, cmd := range doc.Commands {
 		names = append(names, cmd.Name)
 	}
-	if got := strings.Join(names, ","); got != "goto,show,gototype,usage,fmt,status,log" {
+	if got := strings.Join(names, ","); got != "goto,show,gototype,usage,symbol,fmt,status,log" {
 		t.Fatalf("providerDoc command names = %q", got)
+	}
+}
+
+func TestSplitInvocationScript(t *testing.T) {
+	t.Parallel()
+
+	command, args := splitInvocationScript(":lsp:symbol fmt.Println")
+	if got, want := command, ":lsp:symbol"; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+	if got, want := args, "fmt.Println"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+
+	command, args = splitInvocationScript(":lsp:goto")
+	if got, want := command, ":lsp:goto"; got != want {
+		t.Fatalf("bare command = %q, want %q", got, want)
+	}
+	if got, want := args, ""; got != want {
+		t.Fatalf("bare args = %q, want empty", got)
 	}
 }
 
@@ -256,6 +276,88 @@ func TestFormatUsageResult(t *testing.T) {
 	}})
 	if want := "demo.go:4:2: demo()\n"; got != want {
 		t.Fatalf("formatUsageResult() = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeWorkspaceSymbolTargetsSymbolInformation(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`[{"name":"Demo","containerName":"pkg","location":{"uri":"file:///tmp/demo.go","range":{"start":{"line":2,"character":5},"end":{"line":2,"character":8}}}}]`)
+	targets, err := decodeWorkspaceSymbolTargets(raw)
+	if err != nil {
+		t.Fatalf("decodeWorkspaceSymbolTargets() error = %v", err)
+	}
+	if got, want := len(targets), 1; got != want {
+		t.Fatalf("len(targets) = %d, want %d", got, want)
+	}
+	if got, want := targets[0].Name, "Demo"; got != want {
+		t.Fatalf("targets[0].Name = %q, want %q", got, want)
+	}
+	if got, want := targets[0].ContainerName, "pkg"; got != want {
+		t.Fatalf("targets[0].ContainerName = %q, want %q", got, want)
+	}
+	if !targets[0].HasLocation {
+		t.Fatal("targets[0].HasLocation = false, want true")
+	}
+	if got, want := targets[0].Target.Path, "/tmp/demo.go"; got != want {
+		t.Fatalf("targets[0].Target.Path = %q, want %q", got, want)
+	}
+	if got, want := targets[0].Target.Line, 3; got != want {
+		t.Fatalf("targets[0].Target.Line = %d, want %d", got, want)
+	}
+}
+
+func TestDecodeWorkspaceSymbolTargetsWorkspaceSymbolURIOnly(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`[{"name":"Demo","location":{"uri":"file:///tmp/demo.go"}}]`)
+	targets, err := decodeWorkspaceSymbolTargets(raw)
+	if err != nil {
+		t.Fatalf("decodeWorkspaceSymbolTargets() error = %v", err)
+	}
+	if got, want := len(targets), 1; got != want {
+		t.Fatalf("len(targets) = %d, want %d", got, want)
+	}
+	if !targets[0].HasLocation {
+		t.Fatal("targets[0].HasLocation = false, want true")
+	}
+	if got, want := targets[0].Target.Path, "/tmp/demo.go"; got != want {
+		t.Fatalf("targets[0].Target.Path = %q, want %q", got, want)
+	}
+	if got, want := targets[0].Target.Line, 0; got != want {
+		t.Fatalf("targets[0].Target.Line = %d, want %d for uri-only location", got, want)
+	}
+}
+
+func TestFormatWorkspaceSymbolResult(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	got := formatWorkspaceSymbolResult(root, []workspaceSymbolTarget{
+		{
+			Name:          "Demo",
+			ContainerName: "pkg",
+			Target: locationTarget{
+				Path:   filepath.Join(root, "demo.go"),
+				Line:   3,
+				Column: 6,
+			},
+			HasLocation: true,
+		},
+		{
+			Name: "DemoNoRange",
+			Target: locationTarget{
+				Path: filepath.Join(root, "other.go"),
+			},
+			HasLocation: true,
+		},
+		{
+			Name: "NameOnly",
+		},
+	})
+
+	if want := "demo.go:3:6: pkg.Demo\nother.go: DemoNoRange\nNameOnly\n"; got != want {
+		t.Fatalf("formatWorkspaceSymbolResult() = %q, want %q", got, want)
 	}
 }
 

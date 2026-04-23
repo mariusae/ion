@@ -437,6 +437,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
+	metaLookPending := false
+	metaLookPendingPos := 0
 	scrollOrigins := make(map[int]int)
 	lastMouseClick := time.Time{}
 	lastMouseClickPos := -1
@@ -2039,36 +2041,31 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if mouse.button == 2 && mouse.pressed {
 				return false, showMenu(mouse.x, mouse.y)
 			}
-			if mouse.button == 8 && mouse.pressed {
-				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
-				if ok {
-					if buffer.dotStart == buffer.dotEnd {
-						start, end := wordSpanAt(buffer.text, pos)
-						buffer.dotStart = start
-						buffer.dotEnd = end
-						buffer.cursor = start
-						if err := syncBufferDot(); err != nil {
-							return false, err
-						}
-					}
-					next, ok, err := lookInBuffer(svc, buffer, snarf, true)
+			if metaLookPending {
+				if mouse.baseButton() == 0 && mouse.isMotion() && mouse.metaModified() && !mouse.noButtonsDown() {
+					startPendingMetaLookDrag(buffer, metaLookPendingPos, &mouseSelecting, &mouseSelectStart)
+					metaLookPending = false
+				} else if mouse.baseButton() == 0 && !mouse.pressed && !mouse.isMotion() {
+					metaLookPending = false
+					previous := snapshotBufferState(buffer)
+					next, err := performBufferLookForward(stdout, svc, buffer, snarf)
 					if err != nil {
 						return false, err
 					}
-					if ok {
-						buffer = next
-						buffer.status = ""
-						if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
-							return false, err
-						}
-					}
-					return false, bufferRedraw(redrawBufferSelection)
+					buffer = next
+					return false, classifiedBufferRedraw(previous)
+				} else if !mouse.metaModified() || mouse.baseButton() != 0 {
+					metaLookPending = false
 				}
-				return false, nil
 			}
-			if mouse.button == 0 && mouse.pressed {
+			if mouse.baseButton() == 0 && mouse.pressed && !mouse.isMotion() {
 				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
 				if ok {
+					if shouldDeferMetaLookClick(buffer, *mouse) {
+						metaLookPending = true
+						metaLookPendingPos = pos
+						return false, nil
+					}
 					now := time.Now()
 					doubleClick := lastMouseClickPos == pos &&
 						!lastMouseClick.IsZero() &&
@@ -2108,7 +2105,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				selectionCompleted := wasSelecting && !mouseSelecting &&
 					((mouse.baseButton() == 0 && !mouse.pressed) || mouse.noButtonsDown())
-				if selectionCompleted && buffer.dotEnd > buffer.dotStart {
+				if selectionCompleted && mouse.metaModified() {
+					prepareBufferLookSelection(buffer, mouse.y, mouse.x)
+					if err := syncBufferDot(); err != nil {
+						return false, err
+					}
+					next, err := performBufferLookForward(stdout, svc, buffer, snarf)
+					if err != nil {
+						return false, err
+					}
+					buffer = next
+				} else if selectionCompleted && buffer.dotEnd > buffer.dotStart {
 					if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 						return false, err
 					}
@@ -5177,6 +5184,56 @@ func copyToClipboard(stdout io.Writer, text []rune) error {
 	encoded := base64.StdEncoding.EncodeToString([]byte(string(text)))
 	_, err := fmt.Fprintf(stdout, "\x1b]52;c;%s\x07", encoded)
 	return err
+}
+
+func performBufferLookForward(stdout io.Writer, svc wire.TermService, state *bufferState, snarf []rune) (*bufferState, error) {
+	next, ok, err := lookInBuffer(svc, state, snarf, true)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return state, nil
+	}
+	next.status = ""
+	if err := copyToClipboard(stdout, snarfSelection(next)); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func prepareBufferLookSelection(state *bufferState, row, col int) {
+	if state == nil || state.dotEnd > state.dotStart {
+		return
+	}
+	pos, ok := screenToPos(state, nil, row, col)
+	if !ok {
+		pos = state.cursor
+	}
+	start, end := wordSpanAt(state.text, pos)
+	state.cursor = start
+	state.dotStart = start
+	state.dotEnd = end
+}
+
+func shouldDeferMetaLookClick(state *bufferState, event mouseEvent) bool {
+	return state != nil &&
+		state.dotEnd > state.dotStart &&
+		event.baseButton() == 0 &&
+		event.pressed &&
+		!event.isMotion() &&
+		event.metaModified()
+}
+
+func startPendingMetaLookDrag(state *bufferState, pos int, selecting *bool, selectStart *int) {
+	if state == nil || selecting == nil || selectStart == nil {
+		return
+	}
+	*selecting = true
+	*selectStart = pos
+	state.cursor = pos
+	state.markMode = false
+	state.dotStart = pos
+	state.dotEnd = pos
 }
 
 func textForCommandWindowSend(state *bufferState, snarf []rune) []rune {

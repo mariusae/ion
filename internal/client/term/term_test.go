@@ -2809,6 +2809,145 @@ func TestLookInBufferWithoutSelectionOrSnarfDoesNothing(t *testing.T) {
 	}
 }
 
+func TestPerformBufferLookForwardUsesSelectionAndCopiesMatch(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	text := "match one match two\n"
+	first := strings.Index(text, "match")
+	second := strings.LastIndex(text, "match")
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     text,
+			DotStart: first,
+			DotEnd:   first + len("match"),
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := performBufferLookForward(&out, svc, state, nil)
+	if err != nil {
+		t.Fatalf("performBufferLookForward() error = %v", err)
+	}
+	if got, want := next.cursor, second; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, second; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, second+len("match"); got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if got, want := next.status, ""; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := out.String(), "\x1b]52;c;bWF0Y2g=\a"; got != want {
+		t.Fatalf("clipboard sequence = %q, want %q", got, want)
+	}
+}
+
+func TestPerformBufferLookForwardLeavesStateWhenNoMatch(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 0,
+			DotEnd:   len("alpha"),
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := performBufferLookForward(&out, svc, state, []rune("beta"))
+	if err != nil {
+		t.Fatalf("performBufferLookForward() error = %v", err)
+	}
+	if next != state {
+		t.Fatal("performBufferLookForward() returned new state on no match, want original")
+	}
+	if got, want := svc.setDotCalls, 0; got != want {
+		t.Fatalf("SetDot calls = %d, want %d", got, want)
+	}
+	if got := out.Len(); got != 0 {
+		t.Fatalf("clipboard output length = %d, want 0", got)
+	}
+}
+
+func TestPrepareBufferLookSelectionExpandsCollapsedCursorToWord(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 80
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha beta\n",
+		DotStart: 7,
+		DotEnd:   7,
+	})
+
+	prepareBufferLookSelection(state, 0, 7)
+	if got, want := state.dotStart, 6; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := state.dotEnd, 10; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if got, want := state.cursor, 6; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
+func TestShouldDeferMetaLookClickRequiresExistingSelection(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha beta\n",
+		DotStart: 0,
+		DotEnd:   5,
+	})
+	if !shouldDeferMetaLookClick(state, mouseEvent{button: 8, pressed: true}) {
+		t.Fatal("shouldDeferMetaLookClick() = false, want true for meta click with selection")
+	}
+
+	state.dotEnd = state.dotStart
+	if shouldDeferMetaLookClick(state, mouseEvent{button: 8, pressed: true}) {
+		t.Fatal("shouldDeferMetaLookClick() = true, want false without selection")
+	}
+}
+
+func TestStartPendingMetaLookDragStartsNewSelectionAtAnchor(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha beta\n",
+		DotStart: 0,
+		DotEnd:   5,
+	})
+	selecting := false
+	selectStart := 0
+
+	startPendingMetaLookDrag(state, 6, &selecting, &selectStart)
+	if !selecting {
+		t.Fatal("selecting = false, want true")
+	}
+	if got, want := selectStart, 6; got != want {
+		t.Fatalf("selectStart = %d, want %d", got, want)
+	}
+	if got, want := state.dotStart, 6; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := state.dotEnd, 6; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if got, want := state.cursor, 6; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
 func TestTextForCommandWindowSendUsesDotBeforeSnarf(t *testing.T) {
 	t.Parallel()
 

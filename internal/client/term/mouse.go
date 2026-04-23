@@ -308,6 +308,8 @@ func legacyAltKey(key int) int {
 	switch r {
 	case 'b':
 		return keyAltLeft
+	case 'f':
+		return keyAltRight
 	case 0x08, 0x7f:
 		return keyAltBackspace
 	default:

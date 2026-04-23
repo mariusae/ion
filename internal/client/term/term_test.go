@@ -3116,6 +3116,33 @@ func TestApplyBufferKeyAltBackspaceDeletesWord(t *testing.T) {
 	}
 }
 
+func TestApplyBufferKeyAltRightMovesForwardWord(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha beta gamma\n",
+			DotStart: 0,
+			DotEnd:   0,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, err := applyBufferKey(svc, state, keyAltRight)
+	if err != nil {
+		t.Fatalf("applyBufferKey() error = %v", err)
+	}
+	if got, want := next.cursor, 6; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 6; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 6; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
 func TestReadBufferKeyPaste(t *testing.T) {
 	t.Parallel()
 

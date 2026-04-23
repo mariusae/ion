@@ -295,20 +295,6 @@ func TestMouseEventDismissesOverlayOutside(t *testing.T) {
 	}
 }
 
-func TestMouseEventMetaModified(t *testing.T) {
-	t.Parallel()
-
-	if !((mouseEvent{button: 8}).metaModified()) {
-		t.Fatal("metaModified() = false, want true for meta press")
-	}
-	if !((mouseEvent{button: 40}).metaModified()) {
-		t.Fatal("metaModified() = false, want true for meta drag motion")
-	}
-	if (mouseEvent{button: 0}).metaModified() {
-		t.Fatal("metaModified() = true, want false without meta bit")
-	}
-}
-
 func TestHandleOverlayMouseEventIgnoresPassiveMotionWithoutSelection(t *testing.T) {
 	t.Parallel()
 

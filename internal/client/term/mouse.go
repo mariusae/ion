@@ -29,10 +29,6 @@ func (e mouseEvent) baseButton() int {
 	return e.button & 3
 }
 
-func (e mouseEvent) metaModified() bool {
-	return e.button&8 != 0
-}
-
 func (e mouseEvent) verticalWheelDirection() (int, bool) {
 	if !e.isWheel() {
 		return 0, false

@@ -96,6 +96,37 @@ func TestGridRendererOverlayInputRedrawTouchesPromptRowOnly(t *testing.T) {
 	}
 }
 
+func TestGridRendererRendersCarriageReturnVisibly(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/cr.txt",
+		Text:     "a\rb\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "a␍b") {
+		t.Fatalf("Draw(initial) = %q, want visible carriage return glyph", got)
+	}
+	if strings.Contains(got, "\r") {
+		t.Fatalf("Draw(initial) = %q, want no raw carriage return", got)
+	}
+}
+
 func TestGridRendererMenuHoverRedrawIsIncremental(t *testing.T) {
 	t.Parallel()
 

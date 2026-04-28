@@ -147,7 +147,7 @@ func (b *ttyRenderBackend) writeCellRange(cells []gridCell) {
 		if r == 0 {
 			r = ' '
 		}
-		b.buf.WriteRune(r)
+		b.buf.WriteRune(displayRune(r))
 	}
 	if currentStyle != 0 {
 		b.buf.WriteString(styleReset())

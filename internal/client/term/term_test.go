@@ -847,6 +847,33 @@ func TestDrawBufferLineHighlightsExpandedTabSpaces(t *testing.T) {
 	}
 }
 
+func TestDrawBufferLineRendersCarriageReturnVisibly(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 16
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "a\rb\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferLine(&out, state, 0, 3, false, nil); err != nil {
+		t.Fatalf("drawBufferLine() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "a␍b") {
+		t.Fatalf("drawBufferLine() = %q, want visible carriage return glyph", got)
+	}
+	if strings.Contains(out.String(), "\r") {
+		t.Fatalf("drawBufferLine() = %q, want no raw carriage return", out.String())
+	}
+}
+
 func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20

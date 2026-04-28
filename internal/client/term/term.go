@@ -4344,10 +4344,19 @@ func writeDisplayRune(stdout io.Writer, r rune, col, maxCols, tabWidth int) (int
 		}
 		return col + advance, nil
 	}
-	if _, err := io.WriteString(stdout, string(r)); err != nil {
+	if _, err := io.WriteString(stdout, string(displayRune(r))); err != nil {
 		return col, err
 	}
 	return col + 1, nil
+}
+
+func displayRune(r rune) rune {
+	switch r {
+	case '\r':
+		return '␍'
+	default:
+		return r
+	}
 }
 
 func runeDisplayAdvance(r rune, col, maxCols, tabWidth int) int {

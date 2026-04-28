@@ -1341,10 +1341,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if !ok {
 				return false, false, nil
 			}
-			var files []string
-			if name := strings.TrimSpace(buffer.name); name != "" {
-				files = []string{name}
-			}
+			files := splitTargetsForBuffer(buffer)
 			if err := opener.OpenNewPane(files); err != nil {
 				buffer.status = diagnosticText(err)
 			}
@@ -3755,6 +3752,32 @@ func restoreBufferOrigin(state *bufferState, origin int) int {
 	}
 	clamped := clampIndex(origin, len(state.text))
 	return visualRowStartForPos(state.text, clamped)
+}
+
+func splitTargetsForBuffer(state *bufferState) []string {
+	if state == nil {
+		return nil
+	}
+	path := strings.TrimSpace(state.path)
+	if path == "" {
+		path = strings.TrimSpace(state.name)
+	}
+	if path == "" {
+		return nil
+	}
+	start := state.dotStart
+	end := state.dotEnd
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	addr := fmt.Sprintf("#%d", start)
+	if end != start {
+		addr = fmt.Sprintf("#%d,#%d", start, end)
+	}
+	return []string{path + ":" + addr}
 }
 
 func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int, repl string) (*bufferState, error) {

@@ -119,6 +119,70 @@ func TestWorkspaceWatcherReloadsCleanFile(t *testing.T) {
 	}
 }
 
+func TestSessionStateKeepsDotLocalPerFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ws := New()
+	state1 := ws.NewSessionState()
+	state2 := ws.NewSessionState()
+	if err := ws.Bootstrap(state1, []string{path}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("Bootstrap(state1) error = %v", err)
+	}
+	if err := ws.Bootstrap(state2, []string{path}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("Bootstrap(state2) error = %v", err)
+	}
+
+	view1, err := ws.SetDot(state1, 2, 5)
+	if err != nil {
+		t.Fatalf("SetDot(state1) error = %v", err)
+	}
+	if got, want := view1.DotStart, 2; got != want {
+		t.Fatalf("state1 DotStart = %d, want %d", got, want)
+	}
+	if got, want := view1.DotEnd, 5; got != want {
+		t.Fatalf("state1 DotEnd = %d, want %d", got, want)
+	}
+
+	view2, err := ws.CurrentView(state2)
+	if err != nil {
+		t.Fatalf("CurrentView(state2) error = %v", err)
+	}
+	if got, want := view2.DotStart, 0; got != want {
+		t.Fatalf("state2 DotStart = %d, want %d", got, want)
+	}
+	if got, want := view2.DotEnd, 0; got != want {
+		t.Fatalf("state2 DotEnd = %d, want %d", got, want)
+	}
+
+	view2, err = ws.SetDot(state2, 6, 10)
+	if err != nil {
+		t.Fatalf("SetDot(state2) error = %v", err)
+	}
+	if got, want := view2.DotStart, 6; got != want {
+		t.Fatalf("state2 updated DotStart = %d, want %d", got, want)
+	}
+	if got, want := view2.DotEnd, 10; got != want {
+		t.Fatalf("state2 updated DotEnd = %d, want %d", got, want)
+	}
+
+	view1, err = ws.CurrentView(state1)
+	if err != nil {
+		t.Fatalf("CurrentView(state1) error = %v", err)
+	}
+	if got, want := view1.DotStart, 2; got != want {
+		t.Fatalf("state1 persisted DotStart = %d, want %d", got, want)
+	}
+	if got, want := view1.DotEnd, 5; got != want {
+		t.Fatalf("state1 persisted DotEnd = %d, want %d", got, want)
+	}
+}
+
 func TestWorkspaceWatcherMarksDirtyChangedFileAndSaveStillRequiresConfirmation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {

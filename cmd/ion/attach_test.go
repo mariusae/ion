@@ -63,6 +63,52 @@ func TestPaneTrackingClientOpenNewPaneResolvesTargetsLikeNMode(t *testing.T) {
 	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
 }
 
+func TestPaneTrackingClientOpenNewPanePreservesExplicitAddress(t *testing.T) {
+	t.Parallel()
+
+	tmux := &fakeTmux{
+		windowID:  "@7",
+		splitPane: "%11",
+		paneWindows: map[string]string{
+			"%3": "@7",
+		},
+	}
+	client := &paneTrackingClient{
+		cfg: config{autoindent: true},
+		rt: residentRuntime{
+			getenv: func(name string) string {
+				switch name {
+				case "TMUX":
+					return "/tmp/tmux.sock"
+				case "TMUX_PANE":
+					return "%3"
+				default:
+					return ""
+				}
+			},
+			getwd:      func() (string, error) { return "/tmp/work", nil },
+			executable: func() (string, error) { return "/tmp/bin/ion", nil },
+			tmux:       tmux.run,
+		},
+		paneID: "%3",
+	}
+
+	if err := client.OpenNewPane([]string{"todo.txt:#12,#18"}); err != nil {
+		t.Fatalf("OpenNewPane() error = %v", err)
+	}
+
+	for _, call := range tmux.calls {
+		if len(call) < 9 || call[0] != "split-window" {
+			continue
+		}
+		if got, want := call[8], "exec '/tmp/bin/ion' -A -- '/tmp/work/todo.txt:#12,#18'"; got != want {
+			t.Fatalf("split-window command = %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatalf("tmux calls = %#v, want split-window call", tmux.calls)
+}
+
 func TestResidentAttachKeyUsesTmuxWindowWhenAvailable(t *testing.T) {
 	t.Parallel()
 

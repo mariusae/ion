@@ -176,6 +176,33 @@ func (f *fakeTermService) Save() (string, error) {
 	return "saved", nil
 }
 
+func TestSplitTargetsForBufferUsesPathAndCurrentAddress(t *testing.T) {
+	t.Parallel()
+
+	state := &bufferState{
+		name:     "a.txt",
+		path:     "/tmp/work/a.txt",
+		dotStart: 12,
+		dotEnd:   18,
+	}
+	if got, want := fmt.Sprint(splitTargetsForBuffer(state)), fmt.Sprint([]string{"/tmp/work/a.txt:#12,#18"}); got != want {
+		t.Fatalf("splitTargetsForBuffer() = %s, want %s", got, want)
+	}
+}
+
+func TestSplitTargetsForBufferFallsBackToName(t *testing.T) {
+	t.Parallel()
+
+	state := &bufferState{
+		name:     "scratch",
+		dotStart: 7,
+		dotEnd:   7,
+	}
+	if got, want := fmt.Sprint(splitTargetsForBuffer(state)), fmt.Sprint([]string{"scratch:#7"}); got != want {
+		t.Fatalf("splitTargetsForBuffer() = %s, want %s", got, want)
+	}
+}
+
 func TestDeleteCurrentMenuFileFocusesFallbackFile(t *testing.T) {
 	t.Parallel()
 

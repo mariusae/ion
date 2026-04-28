@@ -2249,11 +2249,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			overlay.open("\"")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case keyPaste:
-			previous := snapshotBufferState(buffer)
 			paste, err := readBracketedPaste(reader)
 			if err != nil {
 				return false, err
 			}
+			paste = normalizePastedRunes(paste)
 			if len(paste) == 0 {
 				return false, nil
 			}
@@ -2262,7 +2262,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, err
 			}
 			buffer.status = ""
-			return false, classifiedBufferRedraw(previous)
+			// tmux paste selection UIs can dirty the visible terminal without a
+			// focus change, so repaint the whole scene after bracketed paste.
+			return false, fullRedraw(redrawRecover)
 		}
 		previous := snapshotBufferState(buffer)
 		buffer, err = applyBufferKeyWithOptions(svc, buffer, key, options)
@@ -2736,7 +2738,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							filtered = append(filtered, pr)
 						}
 						overlay.insert(filtered)
-						if err := overlayInputRedraw(redrawOverlayInput); err != nil {
+						if err := fullRedraw(redrawRecover); err != nil {
 							return err
 						}
 						continue
@@ -5163,6 +5165,7 @@ func cutBufferSelection(stdout io.Writer, svc wire.TermService, state *bufferSta
 }
 
 func pasteBufferSnarf(svc wire.TermService, state *bufferState, snarf []rune) (*bufferState, string, error) {
+	snarf = normalizePastedRunes(snarf)
 	if len(snarf) == 0 {
 		return state, "", nil
 	}
@@ -5334,6 +5337,25 @@ func readBracketedPaste(reader *bufio.Reader) ([]rune, error) {
 			out = append(out, r)
 		}
 	}
+}
+
+func normalizePastedRunes(text []rune) []rune {
+	if len(text) == 0 {
+		return text
+	}
+	out := make([]rune, 0, len(text))
+	for i := 0; i < len(text); i++ {
+		r := text[i]
+		if r != '\r' {
+			out = append(out, r)
+			continue
+		}
+		out = append(out, '\n')
+		if i+1 < len(text) && text[i+1] == '\n' {
+			i++
+		}
+	}
+	return out
 }
 
 func isWordRune(r rune) bool {

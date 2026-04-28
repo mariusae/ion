@@ -2695,6 +2695,30 @@ func TestPasteBufferSnarfAtScreenPosIgnoresClicksOutsideBuffer(t *testing.T) {
 	}
 }
 
+func TestPasteBufferSnarfNormalizesCarriageReturns(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeTermService{
+		view: wire.BufferView{
+			Text:     "alpha\n",
+			DotStart: 1,
+			DotEnd:   4,
+		},
+	}
+	state := newBufferState(svc.view)
+
+	next, status, err := pasteBufferSnarf(svc, state, []rune("X\r\nY\rZ"))
+	if err != nil {
+		t.Fatalf("pasteBufferSnarf() error = %v", err)
+	}
+	if got, want := status, ""; got != want {
+		t.Fatalf("status = %q, want empty", got)
+	}
+	if got, want := string(next.text), "aX\nY\nZa\n"; got != want {
+		t.Fatalf("buffer text = %q, want %q", got, want)
+	}
+}
+
 func TestLookInBufferPreservesCursorViewportRowForward(t *testing.T) {
 	t.Parallel()
 
@@ -3227,6 +3251,15 @@ func TestReadBracketedPaste(t *testing.T) {
 	}
 	if want := "hello"; string(got) != want {
 		t.Fatalf("readBracketedPaste() = %q, want %q", string(got), want)
+	}
+}
+
+func TestNormalizePastedRunesMapsCRLFAndCRToLF(t *testing.T) {
+	t.Parallel()
+
+	got := string(normalizePastedRunes([]rune("one\r\ntwo\rthree\n")))
+	if want := "one\ntwo\nthree\n"; got != want {
+		t.Fatalf("normalizePastedRunes() = %q, want %q", got, want)
 	}
 }
 

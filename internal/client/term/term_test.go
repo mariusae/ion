@@ -523,6 +523,25 @@ func TestRefinePreviewStateSyncAndRestore(t *testing.T) {
 	}
 }
 
+func TestReopenCommandOverlayClearsPickerInput(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:0", label: "alpha", value: "alpha"},
+	}, "refine:0")
+	overlay.insert([]rune("needle"))
+
+	reopenCommandOverlay(overlay, true)
+
+	if got, want := overlay.mode, overlayModeCommand; got != want {
+		t.Fatalf("mode = %v, want %v", got, want)
+	}
+	if got, want := string(overlay.input), ""; got != want {
+		t.Fatalf("input = %q, want %q", got, want)
+	}
+}
+
 func TestShouldPreviewPickTokenSkipsDirectory(t *testing.T) {
 	t.Parallel()
 

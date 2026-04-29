@@ -129,6 +129,17 @@ type refinePreviewState struct {
 	start  *bufferState
 }
 
+func reopenCommandOverlay(overlay *overlayState, fromPicker bool) {
+	if overlay == nil {
+		return
+	}
+	if fromPicker {
+		overlay.open("")
+		return
+	}
+	overlay.reopen()
+}
+
 func newOverlayOutputQueue() *overlayOutputQueue {
 	return &overlayOutputQueue{
 		notify: make(chan struct{}, 1),
@@ -1777,10 +1788,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	toggleOverlayShortcut := func(key int) (bool, error) {
 		var open func() error
 		refinePreviewChanged := false
+		fromPicker := overlay.visible && overlay.pickerActive()
 		switch key {
 		case metaKey('j'):
 			open = func() error {
-				overlay.reopen()
+				reopenCommandOverlay(overlay, fromPicker)
 				return overlaySurfaceRedraw(redrawOverlayOpen)
 			}
 			if overlay.visible && !overlay.pickerActive() {

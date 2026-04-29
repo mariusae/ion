@@ -462,6 +462,40 @@ func TestRestoreOverlayPickerInputAndSelectionRestoresAgainstCurrentItems(t *tes
 	}
 }
 
+func TestRestoreOverlayPickerInputAndSelectionFallsBackToSelectedValue(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:0", label: "alpha", value: "alpha", search: "alpha"},
+		{key: "refine:6", label: "beta", value: "beta", search: "beta"},
+		{key: "refine:11", label: "gamma", value: "gamma", search: "gamma"},
+	}, "refine:0")
+	overlay.insert([]rune("a|b"))
+	if !overlay.pickerMove(1) {
+		t.Fatal("pickerMove(1) = false, want beta selected")
+	}
+	snapshot := snapshotOverlayPicker(overlay)
+	if snapshot == nil {
+		t.Fatal("snapshotOverlayPicker() = nil, want snapshot")
+	}
+
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:100", label: "alpha changed", value: "alpha changed", search: "alpha changed"},
+		{key: "refine:200", label: "beta", value: "beta", search: "beta"},
+		{key: "refine:300", label: "gamma changed", value: "gamma changed", search: "gamma changed"},
+	}, "refine:100")
+	restoreOverlayPickerInputAndSelection(overlay, snapshot)
+
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() after restore = false, want selected item")
+	}
+	if got, want := selected.key, "refine:200"; got != want {
+		t.Fatalf("selected key after restore = %q, want %q", got, want)
+	}
+}
+
 func TestOverlayRecallLastPickerIgnoresOtherPickerKinds(t *testing.T) {
 	t.Parallel()
 

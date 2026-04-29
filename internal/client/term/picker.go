@@ -52,6 +52,7 @@ type overlayPickerSnapshot struct {
 	input       []rune
 	cursor      int
 	selectedKey string
+	selectedVal string
 }
 
 func snapshotOverlayPicker(o *overlayState) *overlayPickerSnapshot {
@@ -67,6 +68,7 @@ func snapshotOverlayPicker(o *overlayState) *overlayPickerSnapshot {
 	}
 	if selected, ok := o.pickerSelected(); ok {
 		snapshot.selectedKey = selected.key
+		snapshot.selectedVal = selected.value
 	}
 	return snapshot
 }
@@ -87,13 +89,23 @@ func restoreOverlayPickerInputAndSelection(o *overlayState, snapshot *overlayPic
 	o.recallIdx = -1
 	o.savedInput = o.savedInput[:0]
 	o.refreshPicker()
-	if snapshot.selectedKey == "" || o.picker == nil {
+	if o.picker == nil {
 		return
 	}
-	for i, idx := range o.picker.filtered {
-		if o.picker.items[idx].key == snapshot.selectedKey {
-			o.picker.selected = i
-			return
+	if snapshot.selectedKey != "" {
+		for i, idx := range o.picker.filtered {
+			if o.picker.items[idx].key == snapshot.selectedKey {
+				o.picker.selected = i
+				return
+			}
+		}
+	}
+	if snapshot.selectedVal != "" {
+		for i, idx := range o.picker.filtered {
+			if o.picker.items[idx].value == snapshot.selectedVal {
+				o.picker.selected = i
+				return
+			}
 		}
 	}
 }

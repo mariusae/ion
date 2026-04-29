@@ -579,6 +579,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var syncRefinePickerPreview func() bool
 	var closeRefinePicker func(commit bool) bool
 	var openRefinePicker func() error
+	var rebuildRefinePicker func()
 
 	openTargetToken := func(token string) error {
 		if token == "" {
@@ -784,6 +785,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		applyBufferViewWithReveal(view, forceReveal)
 		if overlay.visible && overlay.pickerActive() {
 			if overlay.pickerMode() == overlayModeRefinePicker {
+				rebuildRefinePicker()
 				syncRefinePickerPreview()
 			} else if syncFilePickerPreview != nil {
 				if _, err := syncFilePickerPreview(); err != nil {
@@ -876,6 +878,17 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if snapshot := snapshotOverlayPicker(overlay); snapshot != nil {
 			refinePickers[buffer.fileID] = snapshot
 		}
+	}
+
+	rebuildRefinePicker = func() {
+		if overlay == nil || overlay.pickerMode() != overlayModeRefinePicker || buffer == nil {
+			return
+		}
+		snapshot := snapshotOverlayPicker(overlay)
+		items, preferred := buildRefinePickerItems(buffer)
+		overlay.openPicker(overlayModeRefinePicker, items, preferred)
+		overlay.maxHeightRows = termRows
+		restoreOverlayPickerInputAndSelection(overlay, snapshot)
 	}
 
 	syncRefinePickerPreview = func() bool {

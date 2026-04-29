@@ -462,6 +462,67 @@ func TestFilePickerPreviewStateCancelRestoresDotAfterTargetPreview(t *testing.T)
 	}
 }
 
+func TestRefinePreviewStateSyncAndRestore(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 2
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	state := newBufferState(wire.BufferView{
+		ID:       7,
+		Name:     "alpha.txt",
+		Text:     "one\ntwo\nthree\nfour\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var preview refinePreviewState
+	preview.begin(state)
+
+	item := overlayPickerItem{
+		key:   "refine:8",
+		value: "three",
+		start: 8,
+		end:   13,
+	}
+	next, changed := preview.sync(state, item, nil, nil)
+	if !changed {
+		t.Fatal("preview.sync() changed = false, want true")
+	}
+	if got, want := next.cursor, 8; got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+	if got, want := next.dotStart, 8; got != want {
+		t.Fatalf("dotStart = %d, want %d", got, want)
+	}
+	if got, want := next.dotEnd, 13; got != want {
+		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+	if got, want := next.origin, 8; got != want {
+		t.Fatalf("origin = %d, want %d", got, want)
+	}
+
+	restored, changed := preview.restore(next)
+	if !changed {
+		t.Fatal("preview.restore() changed = false, want true")
+	}
+	if got, want := restored.cursor, state.cursor; got != want {
+		t.Fatalf("restored cursor = %d, want %d", got, want)
+	}
+	if got, want := restored.origin, state.origin; got != want {
+		t.Fatalf("restored origin = %d, want %d", got, want)
+	}
+	if got, want := restored.dotStart, state.dotStart; got != want {
+		t.Fatalf("restored dotStart = %d, want %d", got, want)
+	}
+	if got, want := restored.dotEnd, state.dotEnd; got != want {
+		t.Fatalf("restored dotEnd = %d, want %d", got, want)
+	}
+}
+
 func TestShouldPreviewPickTokenSkipsDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -2991,6 +3052,9 @@ func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 
 	if shouldRecordMenuCommandInHUD(":term:send") {
 		t.Fatal("shouldRecordMenuCommandInHUD(:term:send) = true, want false")
+	}
+	if shouldRecordMenuCommandInHUD(":term:refine") {
+		t.Fatal("shouldRecordMenuCommandInHUD(:term:refine) = true, want false")
 	}
 	if shouldRecordMenuCommandInHUD("` rg foo") {
 		t.Fatal("shouldRecordMenuCommandInHUD(` rg foo) = true, want false after alias normalization")

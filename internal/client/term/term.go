@@ -124,6 +124,11 @@ type filePickerPreviewState struct {
 	messageActive    bool
 }
 
+type refinePreviewState struct {
+	active bool
+	start  *bufferState
+}
+
 func newOverlayOutputQueue() *overlayOutputQueue {
 	return &overlayOutputQueue{
 		notify: make(chan struct{}, 1),
@@ -326,6 +331,66 @@ func (s *filePickerPreviewState) finish(svc wire.TermService, commit bool, item 
 	return changed, nil
 }
 
+func (s *refinePreviewState) begin(start *bufferState) {
+	if start == nil {
+		s.clear()
+		return
+	}
+	*s = refinePreviewState{
+		active: true,
+		start:  snapshotBufferState(start),
+	}
+}
+
+func (s *refinePreviewState) clear() {
+	*s = refinePreviewState{}
+}
+
+func (s *refinePreviewState) sync(current *bufferState, item overlayPickerItem, query []rune, overlay *overlayState) (*bufferState, bool) {
+	if !s.active || current == nil {
+		return current, false
+	}
+	start, end, ok := refineMatchRange(item, query)
+	if !ok {
+		start = item.start
+		end = item.end
+		if end < start {
+			end = start
+		}
+	}
+	if current.fileID == s.start.fileID &&
+		current.cursor == start &&
+		current.dotStart == start &&
+		current.dotEnd == end {
+		return current, false
+	}
+	next := snapshotBufferState(current)
+	next.cursor = clampIndex(start, len(next.text))
+	next.dotStart = clampIndex(start, len(next.text))
+	next.dotEnd = clampIndex(end, len(next.text))
+	next.markMode = false
+	next = revealBufferDestination(current, next, overlay, false, true)
+	return next, true
+}
+
+func (s *refinePreviewState) restore(current *bufferState) (*bufferState, bool) {
+	if !s.active || s.start == nil {
+		return current, false
+	}
+	if current != nil &&
+		current.fileID == s.start.fileID &&
+		current.cursor == s.start.cursor &&
+		current.origin == s.start.origin &&
+		current.dotStart == s.start.dotStart &&
+		current.dotEnd == s.start.dotEnd &&
+		current.markMode == s.start.markMode &&
+		current.markPos == s.start.markPos &&
+		current.status == s.start.status {
+		return current, false
+	}
+	return snapshotBufferState(s.start), true
+}
+
 func shouldPreviewPickToken(token string) (bool, string, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -438,15 +503,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	mouseSelecting := false
 	mouseSelectStart := 0
 	scrollOrigins := make(map[int]int)
+	refinePickers := make(map[int]*overlayPickerSnapshot)
 	lastMouseClick := time.Time{}
 	lastMouseClickPos := -1
 	overlay := newOverlayState()
 	menu := newMenuState()
+	refineSavedMaxHeight := 0
 	menuSticky := menuStickyState{itemIndex: -1}
 	menuSawHover := false
 	menuLostReleaseSuspect := false
 	var menuLostReleaseTimer *time.Timer
 	var filePickerPreview filePickerPreviewState
+	var refinePreview refinePreviewState
 	renderer := newGridRenderer()
 	var renderQueue renderScheduler
 	renderStats := newFrameRenderStats(stderr)
@@ -495,6 +563,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			buffer.status = ""
 		}
 	}
+
+	var saveRefinePicker func()
+	var syncRefinePickerPreview func() bool
+	var closeRefinePicker func(commit bool) bool
+	var openRefinePicker func() error
 
 	openTargetToken := func(token string) error {
 		if token == "" {
@@ -698,9 +771,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return err
 		}
 		applyBufferViewWithReveal(view, forceReveal)
-		if overlay.visible && overlay.pickerActive() && syncFilePickerPreview != nil {
-			if _, err := syncFilePickerPreview(); err != nil {
-				return err
+		if overlay.visible && overlay.pickerActive() {
+			if overlay.pickerMode() == overlayModeRefinePicker {
+				syncRefinePickerPreview()
+			} else if syncFilePickerPreview != nil {
+				if _, err := syncFilePickerPreview(); err != nil {
+					return err
+				}
 			}
 		}
 		if buffer != nil && buffer.dirty && buffer.diskChanged && !prevChanged {
@@ -779,6 +856,66 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	allLayersRedraw := func(class redrawClass) error {
 		return redraw(renderRequestForLayers(class, renderInvalidateAllLayers))
+	}
+
+	saveRefinePicker = func() {
+		if overlay == nil || overlay.pickerMode() != overlayModeRefinePicker || buffer == nil || buffer.fileID == 0 {
+			return
+		}
+		if snapshot := snapshotOverlayPicker(overlay); snapshot != nil {
+			refinePickers[buffer.fileID] = snapshot
+		}
+	}
+
+	syncRefinePickerPreview = func() bool {
+		if overlay == nil || overlay.pickerMode() != overlayModeRefinePicker {
+			return false
+		}
+		item, ok := overlay.pickerSelected()
+		if !ok {
+			return false
+		}
+		next, changed := refinePreview.sync(buffer, item, overlay.input, overlay)
+		if changed {
+			buffer = next
+		}
+		return changed
+	}
+
+	closeRefinePicker = func(commit bool) bool {
+		previewChanged := false
+		saveRefinePicker()
+		if !commit {
+			next, changed := refinePreview.restore(buffer)
+			if changed {
+				buffer = next
+				previewChanged = true
+			}
+		}
+		refinePreview.clear()
+		overlay.maxHeightRows = refineSavedMaxHeight
+		overlay.close()
+		return previewChanged
+	}
+
+	openRefinePicker = func() error {
+		items, preferred := buildRefinePickerItems(buffer)
+		if len(items) == 0 {
+			buffer.status = "?no lines"
+			return bufferRedraw(redrawBufferStatus)
+		}
+		refineSavedMaxHeight = overlay.maxHeightRows
+		refinePreview.begin(buffer)
+		overlay.openPicker(overlayModeRefinePicker, items, preferred)
+		overlay.maxHeightRows = termRows
+		if buffer != nil && buffer.fileID != 0 {
+			restoreOverlayPickerInputAndSelection(overlay, refinePickers[buffer.fileID])
+		}
+		syncRefinePickerPreview()
+		if buffer != nil {
+			buffer.status = ""
+		}
+		return overlaySurfaceRedraw(redrawOverlayOpen)
 	}
 
 	fullRedraw := func(class redrawClass) error {
@@ -1314,6 +1451,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			buffer.status = ""
 			return true, false, nil
+		case ":term:refine":
+			if err := openRefinePicker(); err != nil {
+				return true, false, err
+			}
+			return true, false, nil
 		case ":term:plumb":
 			token := resolvePlumbTargetToken(buffer, plumbToken(buffer))
 			if token == "" {
@@ -1634,6 +1776,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	toggleOverlayShortcut := func(key int) (bool, error) {
 		var open func() error
+		refinePreviewChanged := false
 		switch key {
 		case metaKey('j'):
 			open = func() error {
@@ -1680,18 +1823,38 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 		case metaKey('g'):
 			open = showKeyboardMenu
+		case metaKey('r'):
+			open = openRefinePicker
+			if overlay.visible && overlay.pickerMode() == overlayModeRefinePicker {
+				previewChanged := closeRefinePicker(false)
+				flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+				if previewChanged {
+					flags |= renderInvalidateBuffer
+				}
+				return true, redraw(renderRequestForLayers(redrawOverlayClose, flags))
+			}
 		default:
 			return false, nil
 		}
 		if overlay.visible {
-			if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker || overlay.pickerMode() == overlayModePickPicker {
+			if overlay.pickerMode() == overlayModeRefinePicker {
+				refinePreviewChanged = closeRefinePicker(false)
+			} else if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker || overlay.pickerMode() == overlayModePickPicker {
 				if _, err := finishFilePickerPreview(false, overlayPickerItem{}); err != nil {
 					return true, err
 				}
+				overlay.close()
+			} else {
+				overlay.close()
 			}
-			overlay.close()
 		}
-		return true, open()
+		if err := open(); err != nil {
+			return true, err
+		}
+		if refinePreviewChanged {
+			return true, allLayersRedraw(redrawRefresh)
+		}
+		return true, nil
 	}
 
 	recallLastPicker := func() error {
@@ -2133,6 +2296,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, openFilePicker()
 		case metaKey('i'):
 			return false, openDirectoryPicker()
+		case metaKey('r'):
+			return false, openRefinePicker()
 		case metaKey('d'):
 			return deleteCurrentFile(false)
 		case metaKey('c'):
@@ -2400,13 +2565,18 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 						switch key {
 						case keyEsc:
-							overlay.close()
+							refinePreviewChanged := false
+							if overlay.pickerMode() == overlayModeRefinePicker {
+								refinePreviewChanged = closeRefinePicker(false)
+							} else {
+								overlay.close()
+							}
 							previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
 							if err != nil {
 								return err
 							}
 							flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
-							if previewChanged {
+							if previewChanged || refinePreviewChanged {
 								flags |= renderInvalidateBuffer
 							}
 							if err := redraw(renderRequestForLayers(redrawOverlayClose, flags)); err != nil {
@@ -2426,6 +2596,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 									previewChanged, err = finishFilePickerPreview(false, overlayPickerItem{})
 								} else if overlay.pickerMode() == overlayModeFilePicker || overlay.pickerMode() == overlayModeDirectoryPicker || overlay.pickerMode() == overlayModePickPicker {
 									previewChanged, err = syncFilePickerPreview()
+								} else if overlay.pickerMode() == overlayModeRefinePicker {
+									previewChanged = syncRefinePickerPreview()
 								}
 								if err != nil {
 									return err
@@ -2489,7 +2661,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								return err
 							}
 							continue
-						case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'):
+						case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'), metaKey('r'):
 							handled, err := toggleOverlayShortcut(key)
 							if err != nil {
 								return err
@@ -2498,8 +2670,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 								continue
 							}
 						default:
-							overlay.close()
-							if _, err := finishFilePickerPreview(false, overlayPickerItem{}); err != nil {
+							if overlay.pickerMode() == overlayModeRefinePicker {
+								closeRefinePicker(false)
+							} else {
+								overlay.close()
+							}
+							_, err := finishFilePickerPreview(false, overlayPickerItem{})
+							if err != nil {
 								return err
 							}
 							done, err := handleBufferSpecial(key, mouse)
@@ -2512,6 +2689,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							continue
 						}
 						previewChanged, err := syncFilePickerPreview()
+						if overlay.pickerMode() == overlayModeRefinePicker {
+							previewChanged = syncRefinePickerPreview()
+						}
 						if err != nil {
 							return err
 						}
@@ -2603,6 +2783,26 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							if err := plumbTargetToken(plumbTargetLineToken(item.value)); err != nil {
 								buffer.status = diagnosticText(err)
 							}
+						case overlayModeRefinePicker:
+							item, ok := overlay.pickerSelected()
+							if !ok {
+								continue
+							}
+							start, end, ok := refineMatchRange(item, overlay.input)
+							if !ok {
+								continue
+							}
+							closeRefinePicker(true)
+							view, err := svc.SetDot(start, end)
+							if err != nil {
+								return err
+							}
+							applyBufferViewWithReveal(view, true)
+							buffer.status = ""
+							if err := redraw(renderRequestForLayers(redrawOverlayClose, renderInvalidateAllLayers)); err != nil {
+								return err
+							}
+							continue
 						default:
 							item, ok := overlay.pickerSelected()
 							if !ok {
@@ -2661,9 +2861,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						if err != nil {
 							return err
 						}
-						if previewChanged {
-							overlayReq.invalidation |= renderInvalidateBuffer
-						}
+					} else if overlay.pickerMode() == overlayModeRefinePicker {
+						previewChanged = syncRefinePickerPreview()
+					}
+					if previewChanged {
+						overlayReq.invalidation |= renderInvalidateBuffer
 					}
 					if err := redraw(overlayReq); err != nil {
 						return err
@@ -2811,7 +3013,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							return err
 						}
 						continue
-					case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'):
+					case metaKey('j'), metaKey('k'), metaKey('p'), metaKey('i'), metaKey('g'), metaKey('r'):
 						handled, err := toggleOverlayShortcut(key)
 						if err != nil {
 							return err

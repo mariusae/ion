@@ -28,7 +28,7 @@ func TestCommandCompletionsFromDocsIncludesLocalTermAndMenuCommands(t *testing.T
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:pick", ":term:regexp", ":term:split", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:pick", ":term:regexp", ":term:refine", ":term:split", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -244,6 +244,100 @@ func TestBuildPickPickerItemsSkipsBlankLinesAndShellSentinelAndPreservesOrder(t 
 	}
 }
 
+func TestBuildRefinePickerItemsPrefersCurrentLineAndTracksRanges(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\nBeta match\ngamma",
+		DotStart: 8,
+		DotEnd:   8,
+	})
+
+	items, preferred := buildRefinePickerItems(state)
+	if got, want := preferred, "refine:6"; got != want {
+		t.Fatalf("preferred = %q, want %q", got, want)
+	}
+	if got, want := len(items), 3; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[1].label, "Beta match"; got != want {
+		t.Fatalf("items[1].label = %q, want %q", got, want)
+	}
+	if got, want := items[1].start, 6; got != want {
+		t.Fatalf("items[1].start = %d, want %d", got, want)
+	}
+	if got, want := items[1].end, 16; got != want {
+		t.Fatalf("items[1].end = %d, want %d", got, want)
+	}
+}
+
+func TestRefineMatchRangeFindsFirstRegexpMatch(t *testing.T) {
+	t.Parallel()
+
+	item := overlayPickerItem{
+		key:   "refine:6",
+		value: "Beta match beta",
+		start: 6,
+		end:   21,
+	}
+
+	start, end, ok := refineMatchRange(item, []rune("m.tch"))
+	if !ok {
+		t.Fatal("refineMatchRange() ok = false, want true")
+	}
+	if got, want := start, 11; got != want {
+		t.Fatalf("start = %d, want %d", got, want)
+	}
+	if got, want := end, 16; got != want {
+		t.Fatalf("end = %d, want %d", got, want)
+	}
+}
+
+func TestOverlayRefinePickerFiltersByRegexp(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:0", label: "alpha", value: "alpha"},
+		{key: "refine:6", label: "beta", value: "beta"},
+		{key: "refine:11", label: "gamma", value: "gamma"},
+	}, "refine:0")
+
+	overlay.insert([]rune("a.*a"))
+	if got, want := len(overlay.picker.filtered), 2; got != want {
+		t.Fatalf("filtered len = %d, want %d", got, want)
+	}
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() after regex filter = false, want selected item")
+	}
+	if got, want := selected.key, "refine:0"; got != want {
+		t.Fatalf("selected key = %q, want %q", got, want)
+	}
+}
+
+func TestRefineMatchRangeUsesWholeLineWhenQueryEmpty(t *testing.T) {
+	t.Parallel()
+
+	item := overlayPickerItem{
+		key:   "refine:6",
+		value: "Beta match",
+		start: 6,
+		end:   16,
+	}
+
+	start, end, ok := refineMatchRange(item, nil)
+	if !ok {
+		t.Fatal("refineMatchRange() ok = false, want true")
+	}
+	if got, want := start, 6; got != want {
+		t.Fatalf("start = %d, want %d", got, want)
+	}
+	if got, want := end, 16; got != want {
+		t.Fatalf("end = %d, want %d", got, want)
+	}
+}
+
 func TestShouldPreviewDirectoryFileRejectsBinary(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +419,46 @@ func TestOverlayRecallLastPickerRestoresQueryAndSelection(t *testing.T) {
 	}
 	if got, want := selected.key, "pick:3"; got != want {
 		t.Fatalf("selected key after recall = %q, want %q", got, want)
+	}
+}
+
+func TestRestoreOverlayPickerInputAndSelectionRestoresAgainstCurrentItems(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:0", label: "alpha", value: "alpha", search: "alpha"},
+		{key: "refine:6", label: "beta", value: "beta", search: "beta"},
+		{key: "refine:11", label: "gamma", value: "gamma", search: "gamma"},
+	}, "refine:0")
+	overlay.insert([]rune("a"))
+	if !overlay.pickerMove(1) {
+		t.Fatal("pickerMove(1) = false, want second filtered entry selected")
+	}
+	snapshot := snapshotOverlayPicker(overlay)
+	if snapshot == nil {
+		t.Fatal("snapshotOverlayPicker() = nil, want snapshot")
+	}
+
+	overlay.openPicker(overlayModeRefinePicker, []overlayPickerItem{
+		{key: "refine:0", label: "alpha updated", value: "alpha updated", search: "alpha updated"},
+		{key: "refine:6", label: "beta updated", value: "beta updated", search: "beta updated"},
+		{key: "refine:11", label: "gamma updated", value: "gamma updated", search: "gamma updated"},
+	}, "refine:11")
+	restoreOverlayPickerInputAndSelection(overlay, snapshot)
+
+	if got, want := string(overlay.input), "a"; got != want {
+		t.Fatalf("restored input = %q, want %q", got, want)
+	}
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() after restore = false, want selected item")
+	}
+	if got, want := selected.key, "refine:6"; got != want {
+		t.Fatalf("selected key after restore = %q, want %q", got, want)
+	}
+	if got, want := selected.label, "beta updated"; got != want {
+		t.Fatalf("selected label after restore = %q, want %q", got, want)
 	}
 }
 

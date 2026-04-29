@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -21,6 +22,7 @@ const (
 	overlayModeFilePicker
 	overlayModeDirectoryPicker
 	overlayModePickPicker
+	overlayModeRefinePicker
 )
 
 type overlayPickerItem struct {
@@ -31,6 +33,8 @@ type overlayPickerItem struct {
 	fileID  int
 	path    string
 	current bool
+	start   int
+	end     int
 }
 
 type overlayPicker struct {
@@ -48,6 +52,71 @@ type overlayPickerSnapshot struct {
 	input       []rune
 	cursor      int
 	selectedKey string
+}
+
+func snapshotOverlayPicker(o *overlayState) *overlayPickerSnapshot {
+	if o == nil || o.picker == nil {
+		return nil
+	}
+	snapshot := &overlayPickerSnapshot{
+		mode:      o.picker.mode,
+		items:     append([]overlayPickerItem(nil), o.picker.items...),
+		preferred: o.picker.preferred,
+		input:     append([]rune(nil), o.input...),
+		cursor:    o.cursor,
+	}
+	if selected, ok := o.pickerSelected(); ok {
+		snapshot.selectedKey = selected.key
+	}
+	return snapshot
+}
+
+func restoreOverlayPickerInputAndSelection(o *overlayState, snapshot *overlayPickerSnapshot) {
+	if o == nil || snapshot == nil {
+		return
+	}
+	o.input = append([]rune(nil), snapshot.input...)
+	o.cursor = snapshot.cursor
+	if o.cursor < 0 {
+		o.cursor = 0
+	}
+	if o.cursor > len(o.input) {
+		o.cursor = len(o.input)
+	}
+	o.scroll = 0
+	o.recallIdx = -1
+	o.savedInput = o.savedInput[:0]
+	o.refreshPicker()
+	if snapshot.selectedKey == "" || o.picker == nil {
+		return
+	}
+	for i, idx := range o.picker.filtered {
+		if o.picker.items[idx].key == snapshot.selectedKey {
+			o.picker.selected = i
+			return
+		}
+	}
+}
+
+func restoreOverlayPickerSnapshot(o *overlayState, snapshot *overlayPickerSnapshot) {
+	if o == nil || snapshot == nil {
+		return
+	}
+	o.visible = true
+	o.mode = snapshot.mode
+	o.running = false
+	o.selecting = false
+	o.selectBtn2 = false
+	o.selectStart = overlaySelectionPos{line: -1}
+	o.selectEnd = overlaySelectionPos{line: -1}
+	o.scroll = 0
+	o.picker = &overlayPicker{
+		mode:      snapshot.mode,
+		items:     append([]overlayPickerItem(nil), snapshot.items...),
+		selected:  -1,
+		preferred: strings.TrimSpace(snapshot.preferred),
+	}
+	restoreOverlayPickerInputAndSelection(o, snapshot)
 }
 
 func localTermNamespaceDoc() wire.NamespaceProviderDoc {
@@ -101,6 +170,11 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 				Name:    "regexp",
 				Summary: "repeat the previous regexp search",
 				Help:    "Re-runs the most recently used sam regexp search pattern. If no regexp has been used yet, reports a warning.",
+			},
+			{
+				Name:    "refine",
+				Summary: "filter the current buffer by line and set dot from a match",
+				Help:    "Opens a full-screen line picker over the current buffer. Typing filters visible lines, and accepting a line sets dot to the first match for the query within that line.",
 			},
 			{
 				Name:    "plumb",
@@ -378,6 +452,77 @@ func buildPickPickerItems(lines []string) ([]overlayPickerItem, string) {
 	return items, preferred
 }
 
+func buildRefinePickerItems(state *bufferState) ([]overlayPickerItem, string) {
+	if state == nil {
+		return nil, ""
+	}
+	if len(state.text) == 0 {
+		return []overlayPickerItem{{
+			key:    "refine:0",
+			label:  "",
+			value:  "",
+			search: "",
+			start:  0,
+			end:    0,
+		}}, "refine:0"
+	}
+	items := make([]overlayPickerItem, 0, 64)
+	preferred := ""
+	currentLine := lineStart(state.text, state.dotStart)
+	for start := 0; start < len(state.text); {
+		end := lineEnd(state.text, start)
+		label := string(state.text[start:end])
+		key := fmt.Sprintf("refine:%d", start)
+		items = append(items, overlayPickerItem{
+			key:    key,
+			label:  label,
+			value:  label,
+			search: strings.ToLower(label),
+			start:  start,
+			end:    end,
+		})
+		if start == currentLine {
+			preferred = key
+		}
+		if end >= len(state.text) {
+			break
+		}
+		start = end + 1
+	}
+	return items, preferred
+}
+
+func refineMatchRange(item overlayPickerItem, query []rune) (int, int, bool) {
+	start := item.start
+	end := item.end
+	if end < start {
+		end = start
+	}
+	if len(query) == 0 {
+		return start, end, true
+	}
+	matchStart, matchEnd, ok := refineLineMatch(item.value, string(query))
+	if !ok {
+		return 0, 0, false
+	}
+	return start + matchStart, start + matchEnd, true
+}
+
+func refineLineMatch(line, query string) (int, int, bool) {
+	if strings.TrimSpace(query) == "" {
+		return 0, utf8.RuneCountInString(line), true
+	}
+	re, err := regexp.Compile(query)
+	if err != nil {
+		return 0, 0, false
+	}
+	loc := re.FindStringIndex(line)
+	if loc == nil {
+		return 0, 0, false
+	}
+	return utf8.RuneCountInString(line[:loc[0]]), utf8.RuneCountInString(line[:loc[1]]), true
+}
+
 func shouldPreviewDirectoryFile(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -479,57 +624,14 @@ func (o *overlayState) rememberActivePicker() {
 	if o == nil || o.picker == nil || o.picker.mode != overlayModePickPicker {
 		return
 	}
-	snapshot := &overlayPickerSnapshot{
-		mode:      o.picker.mode,
-		items:     append([]overlayPickerItem(nil), o.picker.items...),
-		preferred: o.picker.preferred,
-		input:     append([]rune(nil), o.input...),
-		cursor:    o.cursor,
-	}
-	if selected, ok := o.pickerSelected(); ok {
-		snapshot.selectedKey = selected.key
-	}
-	o.lastPicker = snapshot
+	o.lastPicker = snapshotOverlayPicker(o)
 }
 
 func (o *overlayState) recallLastPicker() bool {
 	if o == nil || o.lastPicker == nil {
 		return false
 	}
-	snapshot := o.lastPicker
-	o.visible = true
-	o.mode = snapshot.mode
-	o.running = false
-	o.selecting = false
-	o.selectBtn2 = false
-	o.selectStart = overlaySelectionPos{line: -1}
-	o.selectEnd = overlaySelectionPos{line: -1}
-	o.input = append([]rune(nil), snapshot.input...)
-	o.cursor = snapshot.cursor
-	if o.cursor < 0 {
-		o.cursor = 0
-	}
-	if o.cursor > len(o.input) {
-		o.cursor = len(o.input)
-	}
-	o.scroll = 0
-	o.recallIdx = -1
-	o.savedInput = o.savedInput[:0]
-	o.picker = &overlayPicker{
-		mode:      snapshot.mode,
-		items:     append([]overlayPickerItem(nil), snapshot.items...),
-		selected:  -1,
-		preferred: strings.TrimSpace(snapshot.preferred),
-	}
-	o.refreshPicker()
-	if snapshot.selectedKey != "" {
-		for i, idx := range o.picker.filtered {
-			if o.picker.items[idx].key == snapshot.selectedKey {
-				o.picker.selected = i
-				break
-			}
-		}
-	}
+	restoreOverlayPickerSnapshot(o, o.lastPicker)
 	return true
 }
 
@@ -566,9 +668,26 @@ func (o *overlayState) refreshPicker() {
 	if selected, ok := o.pickerSelected(); ok {
 		previousKey = selected.key
 	}
-	query := strings.ToLower(strings.TrimSpace(string(o.input)))
+	rawQuery := strings.TrimSpace(string(o.input))
+	query := strings.ToLower(rawQuery)
+	var refineRe *regexp.Regexp
+	if o.picker.mode == overlayModeRefinePicker && rawQuery != "" {
+		var err error
+		refineRe, err = regexp.Compile(rawQuery)
+		if err != nil {
+			o.picker.filtered = nil
+			o.picker.selected = -1
+			return
+		}
+	}
 	filtered := make([]int, 0, len(o.picker.items))
 	for i, item := range o.picker.items {
+		if o.picker.mode == overlayModeRefinePicker {
+			if rawQuery == "" || refineRe.MatchString(item.value) {
+				filtered = append(filtered, i)
+			}
+			continue
+		}
 		if query == "" || strings.Contains(item.search, query) {
 			filtered = append(filtered, i)
 		}

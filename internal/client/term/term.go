@@ -1534,8 +1534,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if !strings.HasSuffix(line, "\n") {
 			line += "\n"
 		}
-		if recordHistory {
+		historyAdded := false
+		if shouldRecordCommandImmediately(recordHistory, revealOnOutput, overlay.visible) {
 			overlay.addCommand(historyLine)
+			historyAdded = true
 		}
 		navigationHint := navigationCommandHint(line)
 		pending = append(pending, []rune(line)...)
@@ -1544,6 +1546,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		resultCh := make(chan overlayResult, 1)
 		drainOverlayLines := func() (bool, int) {
 			lines := queue.popAll()
+			if recordHistory && !historyAdded && len(lines) > 0 {
+				overlay.addCommand(historyLine)
+				historyAdded = true
+			}
 			opened := appendOverlayOutputLines(overlay, lines, revealOnOutput)
 			return opened, len(lines)
 		}
@@ -1561,6 +1567,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			if !canceled {
 				return nil
+			}
+			if recordHistory && !historyAdded {
+				overlay.addCommand(historyLine)
+				historyAdded = true
 			}
 			opened := appendOverlayOutputLines(overlay, []string{"^C"}, revealOnOutput)
 			if opened {
@@ -1661,7 +1671,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		navigationHint := navigationCommandHint(line)
 		overlayBefore := snapshotOverlayInputState()
 		if handled, done, err := executeLocalIonCommand(line); handled {
-			if recordHistory {
+			if shouldRecordCommandImmediately(recordHistory, revealOnOutput, overlay.visible) {
 				overlay.addCommand(historyLine)
 			}
 			if !overlayInputChanged(overlayBefore) {
@@ -3620,6 +3630,13 @@ func formatTerminalPseudoCommandArg(arg string) string {
 func shouldRecordMenuCommandInHUD(line string) bool {
 	line = strings.TrimSpace(normalizeTerminalPseudoAlias(line))
 	return !strings.HasPrefix(line, ":term:")
+}
+
+func shouldRecordCommandImmediately(recordHistory, revealOnOutput, overlayVisible bool) bool {
+	if !recordHistory {
+		return false
+	}
+	return !revealOnOutput || overlayVisible
 }
 
 func appendOverlayOutputLines(overlay *overlayState, lines []string, revealOnOutput bool) bool {

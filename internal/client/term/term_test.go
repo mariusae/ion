@@ -3119,6 +3119,23 @@ func TestShouldRecordMenuCommandInHUD(t *testing.T) {
 	}
 }
 
+func TestShouldRecordCommandImmediately(t *testing.T) {
+	t.Parallel()
+
+	if !shouldRecordCommandImmediately(true, false, false) {
+		t.Fatal("shouldRecordCommandImmediately(explicit HUD command) = false, want true")
+	}
+	if shouldRecordCommandImmediately(true, true, false) {
+		t.Fatal("shouldRecordCommandImmediately(hidden reveal-on-output command) = true, want false")
+	}
+	if !shouldRecordCommandImmediately(true, true, true) {
+		t.Fatal("shouldRecordCommandImmediately(visible reveal-on-output command) = false, want true")
+	}
+	if shouldRecordCommandImmediately(false, false, true) {
+		t.Fatal("shouldRecordCommandImmediately(record disabled) = true, want false")
+	}
+}
+
 func TestApplyBufferKeyBackspaceDeletesPreviousRune(t *testing.T) {
 	t.Parallel()
 

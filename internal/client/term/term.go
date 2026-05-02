@@ -1016,12 +1016,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return pulseBufferCursor()
 	}
 
-	recoverAfterPaste := func() error {
-		// Paste can leave the visible terminal out of sync with the backing
-		// buffer, so force a full repaint for all paste entry points.
-		return fullRedraw(redrawRecover)
-	}
-
 	flashOverlaySelection := func() error {
 		if overlay == nil || !overlay.hasSelection() {
 			return nil
@@ -1429,9 +1423,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return true, false, nil
 		case ":term:paste":
 			if err := pasteBufferSelectionLocal(); err != nil {
-				return true, false, err
-			}
-			if err := recoverAfterPaste(); err != nil {
 				return true, false, err
 			}
 			return true, false, nil
@@ -2235,6 +2226,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				if err != nil {
 					return false, err
 				}
+				previous := snapshotBufferState(buffer)
 				next, status, ok, err := pasteBufferSnarfAtScreenPos(svc, buffer, paste, mouse.y, mouse.x)
 				if err != nil {
 					return false, err
@@ -2244,7 +2236,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				buffer = next
 				buffer.status = status
-				return false, recoverAfterPaste()
+				return false, classifiedBufferRedraw(previous)
 			}
 			if mouse.button == 2 && mouse.pressed {
 				return false, showMenu(mouse.x, mouse.y)
@@ -2362,10 +2354,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return false, classifiedBufferRedraw(previous)
 		case metaKey('v'):
+			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, recoverAfterPaste()
+			return false, classifiedBufferRedraw(previous)
 		case metaKey('w'):
 			if strings.TrimSpace(buffer.name) == "" {
 				overlay.open("w ")
@@ -2497,10 +2490,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		}
 		switch r {
 		case 0x19:
+			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
 				return false, err
 			}
-			return false, recoverAfterPaste()
+			return false, classifiedBufferRedraw(previous)
 		}
 		if r == '\r' {
 			r = '\n'

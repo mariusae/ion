@@ -513,6 +513,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	var snarf []rune
 	mouseSelecting := false
 	mouseSelectStart := 0
+	lastBufferMouseSelection := recentMouseSelection{}
 	scrollOrigins := make(map[int]int)
 	refinePickers := make(map[int]*overlayPickerSnapshot)
 	lastMouseClick := time.Time{}
@@ -627,6 +628,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	var plumbTargetToken func(string) error
+
+	clearLastBufferMouseSelection := func() {
+		lastBufferMouseSelection = recentMouseSelection{}
+	}
 
 	copyBufferSelectionLocal := func() error {
 		copied, status, err := copyBufferSelection(stdout, buffer)
@@ -2164,6 +2169,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, err
 			}
 		}
+		if key != keyMouse {
+			clearLastBufferMouseSelection()
+		}
 		if key == keyEsc {
 			if menu.visible {
 				menu.dismiss()
@@ -2222,6 +2230,14 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, nil
 			}
 			if mouse.button == 1 && mouse.pressed {
+				if lastBufferMouseSelection.containsScreenPos(buffer, mouse.y, mouse.x) {
+					previous := snapshotBufferState(buffer)
+					if err := cutBufferSelectionLocal(); err != nil {
+						return false, err
+					}
+					clearLastBufferMouseSelection()
+					return false, classifiedBufferRedraw(previous)
+				}
 				paste, err := middleClickPasteBuffer(snarf, readTmuxPasteBuffer)
 				if err != nil {
 					return false, err
@@ -2239,9 +2255,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, classifiedBufferRedraw(previous)
 			}
 			if mouse.button == 2 && mouse.pressed {
+				clearLastBufferMouseSelection()
 				return false, showMenu(mouse.x, mouse.y)
 			}
 			if mouse.button == 8 && mouse.pressed {
+				clearLastBufferMouseSelection()
 				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
 				if ok {
 					if buffer.dotStart == buffer.dotEnd {
@@ -2269,6 +2287,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, nil
 			}
 			if mouse.button == 0 && mouse.pressed {
+				clearLastBufferMouseSelection()
 				pos, ok := screenToPos(buffer, nil, mouse.y, mouse.x)
 				if ok {
 					now := time.Now()
@@ -2286,6 +2305,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							buffer.cursor = start
 							buffer.dotStart = start
 							buffer.dotEnd = end
+							lastBufferMouseSelection = recentMouseSelection{valid: true, start: start, end: end}
 							if err := syncBufferDot(); err != nil {
 								return false, err
 							}
@@ -2311,12 +2331,19 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				selectionCompleted := wasSelecting && !mouseSelecting &&
 					((mouse.baseButton() == 0 && !mouse.pressed) || mouse.noButtonsDown())
 				if selectionCompleted && buffer.dotEnd > buffer.dotStart {
+					lastBufferMouseSelection = recentMouseSelection{
+						valid: true,
+						start: buffer.dotStart,
+						end:   buffer.dotEnd,
+					}
 					if err := copyToClipboard(stdout, snarfSelection(buffer)); err != nil {
 						return false, err
 					}
 					if err := flashBufferSelection(); err != nil {
 						return false, err
 					}
+				} else if !mouseSelecting {
+					clearLastBufferMouseSelection()
 				}
 				return false, classifiedBufferRedraw(previous)
 			}
@@ -2481,6 +2508,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleBufferRune := func(r rune) (bool, error) {
+		clearLastBufferMouseSelection()
 		if err := clearNavigationCursorHint(); err != nil {
 			return false, err
 		}
@@ -4043,6 +4071,26 @@ func replaceBufferRange(svc wire.TermService, state *bufferState, start, end int
 	}
 	refreshCurrentBufferDirty(svc, next)
 	return next, nil
+}
+
+type recentMouseSelection struct {
+	valid bool
+	start int
+	end   int
+}
+
+func (s recentMouseSelection) containsScreenPos(state *bufferState, row, col int) bool {
+	if !s.valid || state == nil || s.start >= s.end {
+		return false
+	}
+	if state.dotStart != s.start || state.dotEnd != s.end {
+		return false
+	}
+	pos, ok := screenToPos(state, nil, row, col)
+	if !ok {
+		return false
+	}
+	return pos >= s.start && pos < s.end
 }
 
 func drawBufferModeRequest(stdout io.Writer, renderer *gridRenderer, stats *frameRenderStats, req renderRequest, state *bufferState, overlay *overlayState, menu *menuState, theme *uiTheme, focused bool) error {

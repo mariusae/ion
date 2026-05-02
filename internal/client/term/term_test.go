@@ -275,6 +275,36 @@ func TestDeleteCurrentMenuFileReturnsDoneWhenNoFilesRemain(t *testing.T) {
 	}
 }
 
+func TestRecentMouseSelectionContainsScreenPos(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 8, 80
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "alpha\nbeta\n",
+		DotStart: 1,
+		DotEnd:   4,
+	})
+	selection := recentMouseSelection{valid: true, start: 1, end: 4}
+
+	if !selection.containsScreenPos(state, 0, 1) {
+		t.Fatal("containsScreenPos() = false, want true for click inside current mouse selection")
+	}
+	if selection.containsScreenPos(state, 1, 1) {
+		t.Fatal("containsScreenPos() = true, want false for click outside current mouse selection")
+	}
+
+	state.dotStart = 0
+	state.dotEnd = 0
+	if selection.containsScreenPos(state, 0, 1) {
+		t.Fatal("containsScreenPos() = true, want false after selection changed")
+	}
+}
+
 func TestFilePickerPreviewStateSyncAndCancelRestoresStartFile(t *testing.T) {
 	t.Parallel()
 

@@ -127,6 +127,42 @@ func TestGridRendererRendersCarriageReturnVisibly(t *testing.T) {
 	}
 }
 
+func TestGridRendererResetReplaysTerminalSetup(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 1,
+		DotEnd:   1,
+	})
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	renderer.Reset()
+	out.Reset()
+	if err := renderer.Draw(&out, fullRenderRequest(redrawResize), state, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(resize) error = %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{"\x1b[?1049h", "\x1b[6 q", "\x1b[?1003h", "\x1b[r\x1b[H\x1b[2J"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Draw(resize) = %q, want %q after reset", got, want)
+		}
+	}
+}
+
 func TestGridRendererMenuHoverRedrawIsIncremental(t *testing.T) {
 	t.Parallel()
 

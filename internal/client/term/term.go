@@ -2539,6 +2539,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						case wakeWinch:
 							refreshTerminalSize()
 							if inBufferMode {
+								renderer.Reset()
 								if err := fullRedraw(redrawResize); err != nil {
 									return err
 								}

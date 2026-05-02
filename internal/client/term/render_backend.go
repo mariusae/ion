@@ -93,7 +93,7 @@ func (b *ttyRenderBackend) ClearAll() {
 	if b == nil {
 		return
 	}
-	b.buf.WriteString("\x1b[2J")
+	b.buf.WriteString("\x1b[r\x1b[H\x1b[2J")
 }
 
 func (b *ttyRenderBackend) ScrollRegion(top, bottom, delta int) {

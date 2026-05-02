@@ -2456,6 +2456,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			overlay.open("\"")
 			return false, overlaySurfaceRedraw(redrawOverlayOpen)
 		case keyPaste:
+			previous := snapshotBufferState(buffer)
 			paste, err := readBracketedPaste(reader)
 			if err != nil {
 				return false, err
@@ -2469,9 +2470,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return false, err
 			}
 			buffer.status = ""
-			// tmux paste selection UIs can dirty the visible terminal without a
-			// focus change, so repaint the whole scene after bracketed paste.
-			return false, fullRedraw(redrawRecover)
+			return false, redrawBufferAfterEdit(previous)
 		}
 		previous := snapshotBufferState(buffer)
 		buffer, err = applyBufferKeyWithOptions(svc, buffer, key, options)
@@ -2983,7 +2982,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							filtered = append(filtered, pr)
 						}
 						overlay.insert(filtered)
-						if err := fullRedraw(redrawRecover); err != nil {
+						if err := overlayInputRedraw(redrawOverlayInput); err != nil {
 							return err
 						}
 						continue

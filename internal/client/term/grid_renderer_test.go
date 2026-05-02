@@ -96,6 +96,45 @@ func TestGridRendererOverlayInputRedrawTouchesPromptRowOnly(t *testing.T) {
 	}
 }
 
+func TestGridRendererOverlayPasteRedrawStaysIncremental(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "alpha\nbeta\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	overlay := newOverlayState()
+	overlay.open(",")
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, overlay, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	out.Reset()
+	overlay.insert([]rune("paste"))
+	if err := renderer.Draw(&out, renderRequestForLayers(redrawOverlayInput, renderInvalidateOverlayInput), state, overlay, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(overlay paste) error = %v", err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("Draw(overlay paste) = %q, want no full clear", got)
+	}
+	if !strings.Contains(got, "\x1b[5;") {
+		t.Fatalf("Draw(overlay paste) = %q, want prompt row repaint", got)
+	}
+}
+
 func TestGridRendererRendersCarriageReturnVisibly(t *testing.T) {
 	t.Parallel()
 

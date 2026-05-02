@@ -313,7 +313,7 @@ func TestHandleOverlayMouseEventIgnoresPassiveMotionWithoutSelection(t *testing.
 		x:       2,
 		y:       overlayTopRow(overlay) + 1,
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
 	}
@@ -343,7 +343,7 @@ func TestHandleOverlayMouseEventIgnoresUnknownWheelButton(t *testing.T) {
 		x:       2,
 		y:       overlayTopRow(overlay) + 1,
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
 	}
@@ -370,7 +370,7 @@ func TestHandleOverlayMouseEventIgnoresNoOpScrollAtBoundary(t *testing.T) {
 		x:       2,
 		y:       overlayTopRow(overlay) + 1,
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
 	}
@@ -400,7 +400,7 @@ func TestHandleOverlayMouseEventCoalescedWheelScrollsMultipleSteps(t *testing.T)
 		y:       overlayTopRow(overlay) + 1,
 		pressed: true,
 		repeat:  2,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
 	}
@@ -435,7 +435,7 @@ func TestHandleOverlayMouseEventDragTopBorderExpandsMaxHeight(t *testing.T) {
 		button:  0,
 		y:       overlayTopRow(overlay),
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent(press) error = %v", err)
 	}
@@ -447,7 +447,7 @@ func TestHandleOverlayMouseEventDragTopBorderExpandsMaxHeight(t *testing.T) {
 		button:  32,
 		y:       4,
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent(drag) error = %v", err)
 	}
@@ -465,7 +465,7 @@ func TestHandleOverlayMouseEventDragTopBorderExpandsMaxHeight(t *testing.T) {
 		button:  0,
 		y:       4,
 		pressed: false,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent(release) error = %v", err)
 	}
@@ -496,7 +496,7 @@ func TestHandleOverlayMouseEventDragTopBorderShrinksMaxHeight(t *testing.T) {
 		button:  0,
 		y:       overlayTopRow(overlay),
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent(press) error = %v", err)
 	}
@@ -508,7 +508,7 @@ func TestHandleOverlayMouseEventDragTopBorderShrinksMaxHeight(t *testing.T) {
 		button:  32,
 		y:       14,
 		pressed: true,
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("handleOverlayMouseEvent(drag) error = %v", err)
 	}
@@ -520,6 +520,43 @@ func TestHandleOverlayMouseEventDragTopBorderShrinksMaxHeight(t *testing.T) {
 	}
 	if got, want := overlayHeight(overlay), 4; got != want {
 		t.Fatalf("overlayHeight(shrunk) = %d, want %d", got, want)
+	}
+}
+
+func TestHandleOverlayMouseEventMiddleClickPastesIntoPrompt(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.open("")
+	called := false
+
+	handled, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  1,
+		x:       0,
+		y:       termRows - overlayBottomPadRows(overlay) - 1,
+		pressed: true,
+	}, nil, nil, func() error {
+		called = true
+		overlay.insert([]rune("paste"))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleOverlayMouseEvent() handled = false, want true")
+	}
+	if !called {
+		t.Fatal("paste callback not invoked")
+	}
+	if got, want := string(overlay.input), "paste"; got != want {
+		t.Fatalf("overlay input = %q, want %q", got, want)
 	}
 }
 

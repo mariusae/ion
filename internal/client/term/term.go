@@ -2140,7 +2140,24 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleOverlayMouse := func(event mouseEvent) (bool, error) {
-		return handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection)
+		return handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection, func() error {
+			paste, err := middleClickPasteBuffer(snarf, readTmuxPasteBuffer)
+			if err != nil {
+				return err
+			}
+			filtered := paste[:0]
+			for _, pr := range paste {
+				if pr == '\r' || pr == '\n' {
+					continue
+				}
+				filtered = append(filtered, pr)
+			}
+			if len(filtered) == 0 {
+				return nil
+			}
+			overlay.insert(filtered)
+			return fullRedraw(redrawRecover)
+		})
 	}
 
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
@@ -4041,7 +4058,7 @@ func drawBufferModeRequest(stdout io.Writer, renderer *gridRenderer, stats *fram
 	return renderer.Draw(stdout, req, state, overlay, menu, theme, focused, stats)
 }
 
-func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error) (bool, error) {
+func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mouseEvent, openTarget func(string) error, flashSelection func() error, pasteInput func() error) (bool, error) {
 	if !overlay.visible {
 		return false, nil
 	}
@@ -4074,6 +4091,14 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 			return true, nil
 		}
 		return false, nil
+	}
+	promptTop := termRows - overlayPromptRows(overlay) - overlayBottomPadRows(overlay)
+	promptBottom := termRows - overlayBottomPadRows(overlay)
+	if event.baseButton() == 1 && event.pressed && !event.isMotion() && event.y >= promptTop && event.y < promptBottom {
+		if pasteInput != nil {
+			return true, pasteInput()
+		}
+		return true, nil
 	}
 	if overlay.pickerActive() {
 		if dir, ok := event.verticalWheelDirection(); ok {

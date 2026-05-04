@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1096,6 +1097,54 @@ func TestEditCommandWithoutArgumentReloadsLargeCurrentFile(t *testing.T) {
 	}
 	if got, want := out.String(), large; got != want {
 		t.Fatalf("buffer contents length = %d, want %d", len(got), len(want))
+	}
+}
+
+func TestReadCommandReadsLargeFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	large := strings.Repeat("x", text.MaxStringRunes+257) + "\n"
+	if err := os.WriteFile(path, []byte(large), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	var diag bytes.Buffer
+	sess := NewSession(io.Discard)
+	sess.Diag = &diag
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+	f := text.NewFile(d)
+	f.Unread = false
+	sess.AddFile(f)
+	sess.Current = f
+
+	cmd, err := cmdlang.NewParser("r " + path + "\n").Parse()
+	if err != nil {
+		t.Fatalf("parse read: %v", err)
+	}
+	ok, err := sess.Execute(cmd)
+	if err != nil {
+		t.Fatalf("execute read: %v", err)
+	}
+	if !ok {
+		t.Fatal("read requested stop")
+	}
+	got, err := sess.CurrentText()
+	if err != nil {
+		t.Fatalf("CurrentText() error = %v", err)
+	}
+	if got != large {
+		t.Fatalf("buffer contents length = %d, want %d", len(got), len(large))
+	}
+	if want := fmt.Sprintf("#%d\n", len(large)); diag.String() != want {
+		t.Fatalf("diag = %q, want %q", diag.String(), want)
 	}
 }
 

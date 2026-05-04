@@ -1377,10 +1377,8 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 	if err != nil {
 		return openFileError(name, err)
 	}
-	txt, runeCount, err := textStringFromBytes(data)
-	if err != nil {
-		return err
-	}
+	runes := []rune(string(data))
+	runeCount := text.Posn(len(runes))
 	if err := s.mutate(f, func(seq uint32) error {
 		if currentName == "" && explicitName != "" {
 			next := text.NewStringFromUTF8(explicitName)
@@ -1388,7 +1386,7 @@ func (s *Session) readFileInto(f *text.File, a ionaddr.Address, nameToken *text.
 				return err
 			}
 		}
-		if err := s.replaceLogged(f, txt, a.R.P1, a.R.P2, seq); err != nil {
+		if err := s.replaceRunesLogged(f, runes, a.R.P1, a.R.P2, seq); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(s.Diag, "#%d\n", len(data)); err != nil {
@@ -2270,21 +2268,6 @@ func textStringLen(s *text.String) text.Posn {
 		return text.Posn(len(runes) - 1)
 	}
 	return text.Posn(len(runes))
-}
-
-func textStringFromBytes(data []byte) (*text.String, text.Posn, error) {
-	s := text.NewString()
-	count := text.Posn(0)
-	for _, r := range string(data) {
-		if err := s.Add(r); err != nil {
-			return nil, 0, err
-		}
-		count++
-	}
-	if err := s.Add(0); err != nil {
-		return nil, 0, err
-	}
-	return &s, count, nil
 }
 
 func containsNullByte(data []byte) bool {

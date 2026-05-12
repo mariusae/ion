@@ -601,6 +601,34 @@ func (m *DisconnectRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// ClientEjectedEvent tells a client that the server is intentionally closing it.
+type ClientEjectedEvent struct {
+	Reason string
+}
+
+func (m *ClientEjectedEvent) Kind() Kind { return KindClientEjectedEvent }
+
+func (m *ClientEjectedEvent) MarshalBinary() ([]byte, error) {
+	var b bytes.Buffer
+	if err := writeString(&b, m.Reason); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (m *ClientEjectedEvent) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	reason, err := readString(r)
+	if err != nil {
+		return err
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("client-ejected event has trailing data")
+	}
+	m.Reason = reason
+	return nil
+}
+
 // BufferSnapshotsRequest asks for the current shared buffer snapshots without
 // requiring a visible session.
 type BufferSnapshotsRequest struct{}

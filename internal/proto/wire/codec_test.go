@@ -127,6 +127,41 @@ func TestInterruptRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClientEjectedEventRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := &ClientEjectedEvent{Reason: "restart requested"}
+	data, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+	var got ClientEjectedEvent
+	if err := got.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, *want) {
+		t.Fatalf("round trip = %#v, want %#v", got, *want)
+	}
+	frameData, err := EncodeFrame(3, 0, want)
+	if err != nil {
+		t.Fatalf("EncodeFrame() error = %v", err)
+	}
+	frame, err := ReadFrame(bytes.NewReader(frameData))
+	if err != nil {
+		t.Fatalf("ReadFrame() error = %v", err)
+	}
+	if got, wantKind := frame.Kind, KindClientEjectedEvent; got != wantKind {
+		t.Fatalf("frame.Kind = %d, want %d", got, wantKind)
+	}
+	msg, err := DecodeMessage(frame)
+	if err != nil {
+		t.Fatalf("DecodeMessage() error = %v", err)
+	}
+	if !reflect.DeepEqual(msg, want) {
+		t.Fatalf("DecodeMessage() = %#v, want %#v", msg, want)
+	}
+}
+
 func TestCloseSessionRequestRoundTrip(t *testing.T) {
 	t.Parallel()
 

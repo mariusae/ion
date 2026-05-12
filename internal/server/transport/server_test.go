@@ -1034,6 +1034,104 @@ func TestServerMenuAddAndDeleteCommandsAffectSharedMenuSnapshot(t *testing.T) {
 	}
 }
 
+func TestEjectNamespaceNotifiesClientAndRemovesOwnedMenuCommands(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	service, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(service) error = %v", err)
+	}
+	defer service.Close()
+	if err := service.RegisterNamespace("demolsp"); err != nil {
+		t.Fatalf("RegisterNamespace() error = %v", err)
+	}
+
+	waitErr := make(chan error, 1)
+	go func() {
+		_, err := service.WaitInvocation()
+		waitErr <- err
+	}()
+
+	caller, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(caller) error = %v", err)
+	}
+	defer caller.Close()
+	if err := caller.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := caller.Execute(":ion:menuadd :demolsp:goto \"symbol\" g\n"); err != nil {
+		t.Fatalf("Execute(:ion:menuadd) error = %v", err)
+	}
+	if _, err := caller.Execute(":ion:eject-namespace demolsp restart requested\n"); err != nil {
+		t.Fatalf("Execute(:ion:eject-namespace) error = %v", err)
+	}
+
+	select {
+	case err := <-waitErr:
+		var ejected *clientsession.EjectedError
+		if !errors.As(err, &ejected) {
+			t.Fatalf("WaitInvocation() error = %v, want EjectedError", err)
+		}
+		if !strings.Contains(ejected.Reason, "restart requested") {
+			t.Fatalf("ejection reason = %q, want restart requested", ejected.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitInvocation() did not return after ejection")
+	}
+
+	snapshot, err := caller.MenuSnapshot()
+	if err != nil {
+		t.Fatalf("MenuSnapshot() error = %v", err)
+	}
+	if len(snapshot.Commands) != 0 {
+		t.Fatalf("menu commands after ejection = %#v, want none", snapshot.Commands)
+	}
+	docs, err := caller.NamespaceDocs()
+	if err != nil {
+		t.Fatalf("NamespaceDocs() error = %v", err)
+	}
+	for _, doc := range docs {
+		if doc.Namespace == "demolsp" {
+			t.Fatalf("namespace docs still include ejected namespace: %#v", docs)
+		}
+	}
+}
+
 func TestServerCloseSessionRemovesOwnedSession(t *testing.T) {
 	t.Parallel()
 

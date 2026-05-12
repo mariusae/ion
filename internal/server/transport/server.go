@@ -28,13 +28,14 @@ type Server struct {
 	mu             sync.Mutex
 	listener       net.Listener
 	conns          map[io.ReadWriteCloser]struct{}
+	connStates     map[io.ReadWriteCloser]*connState
 	nextClient     uint64
 	nextInvocation uint64
 	clients        map[uint64]*serverClient
 	sessions       map[uint64]*managedSession
 	namespaces     map[string]registeredNamespace
 	invocations    map[uint64]*invocationState
-	menuCommands   []wire.MenuCommand
+	menuCommands   []ownedMenuCommand
 }
 
 // LifecycleHooks observes logical client activity on the server.
@@ -77,6 +78,11 @@ type delegatedIO struct {
 	stderr io.Writer
 }
 
+type ownedMenuCommand struct {
+	ownerClientID uint64
+	command       wire.MenuCommand
+}
+
 type invocationState struct {
 	id               uint64
 	providerClientID uint64
@@ -93,8 +99,33 @@ type invocationState struct {
 }
 
 type connState struct {
+	mu        sync.Mutex
 	clientID  uint64
 	auxiliary bool
+}
+
+func (s *connState) snapshot() (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientID, s.auxiliary
+}
+
+func (s *connState) set(clientID uint64, auxiliary bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.clientID = clientID
+	s.auxiliary = auxiliary
+	s.mu.Unlock()
+}
+
+func (s *connState) hasClient(clientID uint64) bool {
+	got, _ := s.snapshot()
+	return got == clientID
 }
 
 type sessionCommand struct {
@@ -129,6 +160,7 @@ func NewWithNotifier(ws *workspace.Workspace, notify func()) *Server {
 		ws:           ws,
 		changeNotify: notify,
 		conns:        make(map[io.ReadWriteCloser]struct{}),
+		connStates:   make(map[io.ReadWriteCloser]*connState),
 		clients:      make(map[uint64]*serverClient),
 		sessions:     make(map[uint64]*managedSession),
 		namespaces:   make(map[string]registeredNamespace),
@@ -172,13 +204,16 @@ func (s *Server) Serve(listener net.Listener) error {
 // ServeConn handles requests for one transport connection.
 func (s *Server) ServeConn(conn io.ReadWriteCloser) error {
 	defer conn.Close()
-	s.trackConn(conn)
+	state := &connState{}
+	s.trackConn(conn, state)
 	defer s.untrackConn(conn)
 
-	state := &connState{}
 	stdout := &eventWriter{conn: conn, kind: wire.KindStdoutEvent}
 	stderr := &eventWriter{conn: conn, kind: wire.KindStderrEvent}
-	defer s.releaseClient(state.clientID, state.auxiliary)
+	defer func() {
+		clientID, auxiliary := state.snapshot()
+		s.releaseClient(clientID, auxiliary)
+	}()
 
 	for {
 		frame, err := wire.ReadFrame(conn)
@@ -209,45 +244,45 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
-		state.clientID = clientID
-		state.auxiliary = auxiliary
+		state.set(clientID, auxiliary)
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.ConnectResponse{ClientID: clientID})
 	}
 
-	if state.clientID == 0 {
+	clientID, auxiliary := state.snapshot()
+	if clientID == 0 {
 		return writeError(conn, frame.RequestID, frame.SessionID, fmt.Errorf("client not connected"))
 	}
 
 	switch msg := msg.(type) {
 	case *wire.NewSessionRequest:
-		session, err := s.newSession(state.clientID)
+		session, err := s.newSession(clientID)
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, session.id, &wire.NewSessionResponse{SessionID: session.id})
 	case *wire.SessionListRequest:
-		summaries, err := s.listSessions(state.clientID)
+		summaries, err := s.listSessions(clientID)
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.SessionListResponse{Sessions: summaries})
 	case *wire.TakeSessionRequest:
-		if err := s.takeSession(msg.SessionID, state.clientID); err != nil {
+		if err := s.takeSession(msg.SessionID, clientID); err != nil {
 			return writeError(conn, frame.RequestID, msg.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.ReturnSessionRequest:
-		if err := s.returnSession(msg.SessionID, state.clientID); err != nil {
+		if err := s.returnSession(msg.SessionID, clientID); err != nil {
 			return writeError(conn, frame.RequestID, msg.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.CloseSessionRequest:
-		if err := s.closeSession(msg.SessionID, state.clientID); err != nil {
+		if err := s.closeSession(msg.SessionID, clientID); err != nil {
 			return writeError(conn, frame.RequestID, msg.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.NamespaceRegisterRequest:
-		if err := s.registerNamespace(state.clientID, msg.Provider); err != nil {
+		if err := s.registerNamespace(clientID, msg.Provider); err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
@@ -266,7 +301,7 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.InvocationWaitRequest:
-		inv, err := s.waitInvocation(state.clientID)
+		inv, err := s.waitInvocation(clientID)
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
@@ -276,12 +311,12 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			Script:    inv.script,
 		}})
 	case *wire.InvocationFinishRequest:
-		if err := s.finishInvocation(state.clientID, msg); err != nil {
+		if err := s.finishInvocation(clientID, msg); err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.InvocationCancelWaitRequest:
-		canceled, err := s.waitInvocationCancel(state.clientID, msg.InvocationID)
+		canceled, err := s.waitInvocationCancel(clientID, msg.InvocationID)
 		if err != nil {
 			return writeError(conn, frame.RequestID, 0, err)
 		}
@@ -291,8 +326,8 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 			Providers: s.listNamespaceDocs(),
 		})
 	case *wire.DisconnectRequest:
-		s.releaseClient(state.clientID, state.auxiliary)
-		state.clientID = 0
+		s.releaseClient(clientID, auxiliary)
+		state.set(0, false)
 		return wire.WriteFrame(conn, frame.RequestID, 0, &wire.OKResponse{})
 	case *wire.CommandRequest:
 		colon, ok, err := parseColonCommand(msg.Script)
@@ -310,9 +345,9 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 				if err != nil {
 					return writeError(conn, frame.RequestID, frame.SessionID, err)
 				}
-				return s.handleSessionCommand(conn, state.clientID, stdout, stderr, frame, cmd)
+				return s.handleSessionCommand(conn, clientID, stdout, stderr, frame, cmd)
 			}
-			if inv, ok, err := s.beginInvocation(state.clientID, frame.SessionID, colon); ok {
+			if inv, ok, err := s.beginInvocation(clientID, frame.SessionID, colon); ok {
 				if err != nil {
 					return writeError(conn, frame.RequestID, frame.SessionID, err)
 				}
@@ -322,7 +357,7 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		}
 	}
 
-	managed, err := s.waitForControlledSession(frame.SessionID, state.clientID, msg)
+	managed, err := s.waitForControlledSession(frame.SessionID, clientID, msg)
 	if err != nil {
 		return writeError(conn, frame.RequestID, frame.SessionID, err)
 	}
@@ -484,6 +519,8 @@ func (s *Server) releaseClient(clientID uint64, auxiliary bool) {
 	if clientID == 0 {
 		return
 	}
+	var onIdle func()
+	removedMenus := false
 	s.mu.Lock()
 	client, ok := s.clients[clientID]
 	if !ok {
@@ -504,6 +541,23 @@ func (s *Server) releaseClient(clientID uint64, auxiliary bool) {
 		s.mu.Unlock()
 		return
 	}
+	removedMenus = s.cleanupClientLocked(clientID, "namespace provider disconnected")
+	onIdle = s.lifecycle.OnIdle
+	idle := len(s.clients) == 0
+	s.mu.Unlock()
+	if removedMenus && s.changeNotify != nil {
+		s.changeNotify()
+	}
+	if idle && onIdle != nil {
+		onIdle()
+	}
+}
+
+func (s *Server) cleanupClientLocked(clientID uint64, invocationReason string) bool {
+	client, ok := s.clients[clientID]
+	if !ok {
+		return false
+	}
 	client.closed = true
 	client.cond.Broadcast()
 	owned := append([]uint64(nil), client.ownedSession...)
@@ -517,18 +571,14 @@ func (s *Server) releaseClient(clientID uint64, auxiliary bool) {
 			managed.close()
 		}
 	}
+	removedMenus := s.removeMenuCommandsOwnedByLocked(clientID)
 	for _, inv := range s.invocations {
 		if inv.providerClientID != clientID {
 			continue
 		}
-		inv.finish("namespace provider disconnected", "", "")
+		inv.finish(invocationReason, "", "")
 	}
-	onIdle := s.lifecycle.OnIdle
-	idle := len(s.clients) == 0
-	s.mu.Unlock()
-	if idle && onIdle != nil {
-		onIdle()
-	}
+	return removedMenus
 }
 
 func (s *Server) newSession(clientID uint64) (*managedSession, error) {
@@ -840,6 +890,72 @@ func (s *Server) closeSession(sessionID, clientID uint64) error {
 	return nil
 }
 
+func (s *Server) ejectNamespace(namespace, reason string) error {
+	namespace = normalizeNamespace(namespace)
+	if namespace == "" {
+		return fmt.Errorf("namespace expected")
+	}
+	s.mu.Lock()
+	registered, ok := s.namespaces[namespace]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown namespace %q", namespace)
+	}
+	return s.ejectClient(registered.clientID, reason)
+}
+
+func (s *Server) ejectClient(clientID uint64, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "client ejected"
+	}
+
+	s.mu.Lock()
+	if _, ok := s.clients[clientID]; !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("unknown client %d", clientID)
+	}
+	conns := s.connsForClientLocked(clientID)
+	s.mu.Unlock()
+
+	for _, conn := range conns {
+		_ = wire.WriteFrame(conn, 0, 0, &wire.ClientEjectedEvent{Reason: reason})
+	}
+
+	s.mu.Lock()
+	for _, conn := range conns {
+		if state := s.connStates[conn]; state != nil {
+			state.set(0, false)
+		}
+	}
+	s.cleanupClientLocked(clientID, reason)
+	onIdle := s.lifecycle.OnIdle
+	idle := len(s.clients) == 0
+	s.mu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+	if s.changeNotify != nil {
+		s.changeNotify()
+	}
+	if idle && onIdle != nil {
+		onIdle()
+	}
+	return nil
+}
+
+func (s *Server) connsForClientLocked(clientID uint64) []io.ReadWriteCloser {
+	conns := make([]io.ReadWriteCloser, 0)
+	for conn, state := range s.connStates {
+		if state == nil || !state.hasClient(clientID) {
+			continue
+		}
+		conns = append(conns, conn)
+	}
+	return conns
+}
+
 func (s *Server) lookupSession(sessionID uint64) (*managedSession, error) {
 	if sessionID == 0 {
 		return nil, fmt.Errorf("missing session id")
@@ -945,7 +1061,7 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
 	case "menuadd":
-		if err := s.addMenuCommand(wire.MenuCommand{Command: cmd.arg, Label: cmd.arg2, Shortcut: cmd.arg3}); err != nil {
+		if err := s.addMenuCommand(clientID, wire.MenuCommand{Command: cmd.arg, Label: cmd.arg2, Shortcut: cmd.arg3}); err != nil {
 			return writeError(conn, frame.RequestID, frame.SessionID, err)
 		}
 		if s.changeNotify != nil {
@@ -956,6 +1072,21 @@ func (s *Server) handleSessionCommand(conn io.Writer, clientID uint64, stdout, s
 		s.removeMenuCommand(cmd.arg)
 		if s.changeNotify != nil {
 			s.changeNotify()
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "client-list":
+		if err := s.writeClientList(stderr); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "eject-client":
+		if err := s.ejectClient(cmd.sessionID, cmd.arg); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
+		}
+		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
+	case "eject-namespace":
+		if err := s.ejectNamespace(cmd.arg, cmd.arg2); err != nil {
+			return writeError(conn, frame.RequestID, frame.SessionID, err)
 		}
 		return wire.WriteFrame(conn, frame.RequestID, frame.SessionID, &wire.CommandResponse{Continue: true})
 	case "terminal-only":
@@ -1081,6 +1212,42 @@ func parseSessionCommand(cmd colonCommand) (sessionCommand, bool, error) {
 			return sessionCommand{}, true, fmt.Errorf("bad menu command %q", arg)
 		}
 		return sessionCommand{name: "menudel", arg: arg}, true, nil
+	case "ion:client:list":
+		if cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		return sessionCommand{name: "client-list"}, true, nil
+	case "ion:eject-client":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		idText, reason, _ := strings.Cut(arg, " ")
+		id, err := strconv.ParseUint(strings.TrimSpace(idText), 10, 64)
+		if err != nil || id == 0 {
+			return sessionCommand{}, true, fmt.Errorf("bad client id %q", idText)
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			reason = "ejected by operator"
+		}
+		return sessionCommand{name: "eject-client", sessionID: id, arg: reason}, true, nil
+	case "ion:eject-namespace":
+		if !cmd.hasRest {
+			return sessionCommand{}, false, nil
+		}
+		namespace, reason, _ := strings.Cut(arg, " ")
+		namespace = normalizeNamespace(namespace)
+		if namespace == "" {
+			return sessionCommand{}, true, fmt.Errorf("namespace expected")
+		}
+		if isBuiltinNamespace(namespace) {
+			return sessionCommand{}, true, fmt.Errorf("namespace %q is built in", namespace)
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			reason = "namespace " + namespace + " ejected by operator"
+		}
+		return sessionCommand{name: "eject-namespace", arg: namespace, arg2: reason}, true, nil
 	default:
 		return sessionCommand{}, false, nil
 	}
@@ -1244,25 +1411,39 @@ func normalizeMenuCommand(item wire.MenuCommand) (wire.MenuCommand, error) {
 	}, nil
 }
 
-func (s *Server) addMenuCommand(item wire.MenuCommand) error {
+func (s *Server) addMenuCommand(clientID uint64, item wire.MenuCommand) error {
 	normalized, err := normalizeMenuCommand(item)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ownerClientID := s.menuOwnerForCommandLocked(normalized.Command)
 	for i := range s.menuCommands {
-		if normalized.Shortcut != "" && s.menuCommands[i].Command != normalized.Command && strings.EqualFold(s.menuCommands[i].Shortcut, normalized.Shortcut) {
-			return fmt.Errorf("menu shortcut %q already used by %s", normalized.Shortcut, s.menuCommands[i].Command)
+		existing := s.menuCommands[i].command
+		if normalized.Shortcut != "" && existing.Command != normalized.Command && strings.EqualFold(existing.Shortcut, normalized.Shortcut) {
+			return fmt.Errorf("menu shortcut %q already used by %s", normalized.Shortcut, existing.Command)
 		}
-		if s.menuCommands[i].Command != normalized.Command {
+		if existing.Command != normalized.Command {
 			continue
 		}
-		s.menuCommands[i] = normalized
+		s.menuCommands[i] = ownedMenuCommand{ownerClientID: ownerClientID, command: normalized}
 		return nil
 	}
-	s.menuCommands = append(s.menuCommands, normalized)
+	s.menuCommands = append(s.menuCommands, ownedMenuCommand{ownerClientID: ownerClientID, command: normalized})
 	return nil
+}
+
+func (s *Server) menuOwnerForCommandLocked(command string) uint64 {
+	namespace, _, ok := parseCommandReference(command)
+	if !ok {
+		return 0
+	}
+	registered, ok := s.namespaces[namespace]
+	if !ok {
+		return 0
+	}
+	return registered.clientID
 }
 
 func splitMenuAddShortcut(rest string) (shortcut, label string, err error) {
@@ -1335,7 +1516,7 @@ func (s *Server) removeMenuCommand(command string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.menuCommands {
-		if s.menuCommands[i].Command != command {
+		if s.menuCommands[i].command.Command != command {
 			continue
 		}
 		s.menuCommands = append(s.menuCommands[:i], s.menuCommands[i+1:]...)
@@ -1343,10 +1524,70 @@ func (s *Server) removeMenuCommand(command string) {
 	}
 }
 
+func (s *Server) removeMenuCommandsOwnedByLocked(clientID uint64) bool {
+	removed := false
+	out := s.menuCommands[:0]
+	for _, item := range s.menuCommands {
+		if item.ownerClientID == clientID {
+			removed = true
+			continue
+		}
+		out = append(out, item)
+	}
+	s.menuCommands = out
+	return removed
+}
+
+func (s *Server) writeClientList(w io.Writer) error {
+	type clientRow struct {
+		id         uint64
+		namespaces []string
+		sessions   []uint64
+	}
+	s.mu.Lock()
+	rows := make([]clientRow, 0, len(s.clients))
+	for _, client := range s.clients {
+		row := clientRow{
+			id:       client.id,
+			sessions: append([]uint64(nil), client.ownedSession...),
+		}
+		for namespace := range client.namespaces {
+			row.namespaces = append(row.namespaces, namespace)
+		}
+		sort.Strings(row.namespaces)
+		sort.Slice(row.sessions, func(i, j int) bool { return row.sessions[i] < row.sessions[j] })
+		rows = append(rows, row)
+	}
+	s.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].id < rows[j].id })
+	for _, row := range rows {
+		namespaces := "-"
+		if len(row.namespaces) != 0 {
+			namespaces = strings.Join(row.namespaces, ",")
+		}
+		sessionText := "-"
+		if len(row.sessions) != 0 {
+			parts := make([]string, 0, len(row.sessions))
+			for _, id := range row.sessions {
+				parts = append(parts, strconv.FormatUint(id, 10))
+			}
+			sessionText = strings.Join(parts, ",")
+		}
+		if _, err := fmt.Fprintf(w, "%d\t%s\t%s\n", row.id, namespaces, sessionText); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Server) menuSnapshotCommands() []wire.MenuCommand {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]wire.MenuCommand(nil), s.menuCommands...)
+	out := make([]wire.MenuCommand, 0, len(s.menuCommands))
+	for _, item := range s.menuCommands {
+		out = append(out, item.command)
+	}
+	return out
 }
 
 func normalizeNamespace(namespace string) string {
@@ -1582,6 +1823,24 @@ func builtinCommandDoc(target string) (commandHelpDoc, bool) {
 			summary: "remove a shared custom context-menu item",
 			help:    "Removes one previously registered server-global menu item identified by its command text.",
 		}, true
+	case ":ion:client:list":
+		return commandHelpDoc{
+			usage:   ":ion:client:list",
+			summary: "list connected clients",
+			help:    "Prints each connected client id, registered provider namespaces, and owned session ids.",
+		}, true
+	case ":ion:eject-client":
+		return commandHelpDoc{
+			usage:   ":ion:eject-client <client-id> [reason]",
+			summary: "disconnect one client",
+			help:    "Sends an ejection notice to one logical client, closes its connections, and removes client-owned sessions, namespaces, and menu commands.",
+		}, true
+	case ":ion:eject-namespace":
+		return commandHelpDoc{
+			usage:   ":ion:eject-namespace <namespace> [reason]",
+			summary: "disconnect a namespace provider",
+			help:    "Finds the client that registered a provider namespace, sends an ejection notice, closes its connections, and removes its registrations and menu commands.",
+		}, true
 	case ":term:write":
 		return commandHelpDoc{
 			usage:   ":term:write",
@@ -1693,6 +1952,23 @@ func builtinNamespaceDocs() []wire.NamespaceProviderDoc {
 					Args:    "<command>",
 					Summary: "remove a shared custom context-menu item",
 					Help:    "Removes one previously registered server-global menu item identified by its command text.",
+				},
+				{
+					Name:    "client:list",
+					Summary: "list connected clients",
+					Help:    "Prints each connected client id, registered provider namespaces, and owned session ids.",
+				},
+				{
+					Name:    "eject-client",
+					Args:    "<client-id> [reason]",
+					Summary: "disconnect one client",
+					Help:    "Sends an ejection notice to one logical client, closes its connections, and removes client-owned sessions, namespaces, and menu commands.",
+				},
+				{
+					Name:    "eject-namespace",
+					Args:    "<namespace> [reason]",
+					Summary: "disconnect a namespace provider",
+					Help:    "Finds the client that registered a provider namespace, sends an ejection notice, closes its connections, and removes its registrations and menu commands.",
 				},
 			},
 		},
@@ -1986,12 +2262,15 @@ func (s *Server) Shutdown() error {
 	return shutdownErr
 }
 
-func (s *Server) trackConn(conn io.ReadWriteCloser) {
+func (s *Server) trackConn(conn io.ReadWriteCloser, state *connState) {
 	if s == nil || conn == nil {
 		return
 	}
 	s.mu.Lock()
 	s.conns[conn] = struct{}{}
+	if state != nil {
+		s.connStates[conn] = state
+	}
 	s.mu.Unlock()
 }
 
@@ -2001,6 +2280,7 @@ func (s *Server) untrackConn(conn io.ReadWriteCloser) {
 	}
 	s.mu.Lock()
 	delete(s.conns, conn)
+	delete(s.connStates, conn)
 	s.mu.Unlock()
 }
 

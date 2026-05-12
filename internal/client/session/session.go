@@ -26,6 +26,19 @@ type Client struct {
 
 var _ wire.TermService = (*Client)(nil)
 
+// EjectedError reports that the server intentionally disconnected the client.
+type EjectedError struct {
+	Reason string
+}
+
+func (e *EjectedError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		return "client ejected"
+	}
+	return "client ejected: " + reason
+}
+
 // New constructs a client around an existing transport connection.
 func New(conn io.ReadWriteCloser, stdout, stderr io.Writer) *Client {
 	if stdout == nil {
@@ -755,6 +768,16 @@ func (c *Client) roundTripLocked(sessionID uint64, req wire.Message) (wire.Frame
 		if err != nil {
 			return wire.Frame{}, nil, err
 		}
+		if frame.Kind == wire.KindClientEjectedEvent {
+			event, ok := msg.(*wire.ClientEjectedEvent)
+			if !ok {
+				return wire.Frame{}, nil, fmt.Errorf("client-ejected event type %T, want *wire.ClientEjectedEvent", msg)
+			}
+			c.connected = false
+			c.sessionID = 0
+			c.takeStack = nil
+			return wire.Frame{}, nil, &EjectedError{Reason: event.Reason}
+		}
 		if frame.RequestID != reqID {
 			return wire.Frame{}, nil, fmt.Errorf("unexpected response id %d, want %d", frame.RequestID, reqID)
 		}
@@ -807,6 +830,12 @@ func isSessionControlScript(script string) bool {
 		return true
 	case trimmed == ":sess:return":
 		return true
+	case trimmed == ":ion:client:list":
+		return true
+	case strings.HasPrefix(trimmed, ":ion:eject-client "):
+		return true
+	case strings.HasPrefix(trimmed, ":ion:eject-namespace "):
+		return true
 	default:
 		return false
 	}
@@ -838,6 +867,12 @@ func parseSessionControlScript(script string) (sessionControlScript, bool) {
 			return sessionControlScript{}, false
 		}
 		return sessionControlScript{name: "take", sessionID: id}, true
+	case strings.HasPrefix(trimmed, ":ion:eject-client "):
+		return sessionControlScript{name: "eject-client"}, true
+	case trimmed == ":ion:client:list":
+		return sessionControlScript{name: "client-list"}, true
+	case strings.HasPrefix(trimmed, ":ion:eject-namespace "):
+		return sessionControlScript{name: "eject-namespace"}, true
 	default:
 		return sessionControlScript{}, false
 	}

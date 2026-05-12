@@ -63,6 +63,7 @@ const (
 	KindSessionStatusRequest
 	KindNamespaceDocsRequest
 	KindNamespaceDocsResponse
+	KindClientEjectedEvent
 )
 
 // Frame is the versioned binary envelope shared by all wire messages.
@@ -279,6 +280,9 @@ func DecodeMessage(frame Frame) (any, error) {
 		return &NamespaceDocsRequest{}, nil
 	case KindNamespaceDocsResponse:
 		var msg NamespaceDocsResponse
+		return &msg, msg.UnmarshalBinary(frame.Payload)
+	case KindClientEjectedEvent:
+		var msg ClientEjectedEvent
 		return &msg, msg.UnmarshalBinary(frame.Payload)
 	default:
 		return nil, fmt.Errorf("unknown frame kind %d", frame.Kind)

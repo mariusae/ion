@@ -194,7 +194,7 @@ func (w *Workspace) OpenFiles(state *SessionState, files []string, stdout, stder
 	restoreState := w.withSessionState(state)
 	defer restoreState()
 
-	if err := w.session.OpenFilesPathsAtomic(files); err != nil {
+	if err := w.session.OpenFilesPathsAtomicNoNameless(files); err != nil {
 		return wire.BufferView{}, err
 	}
 	w.resyncWatchesLocked()

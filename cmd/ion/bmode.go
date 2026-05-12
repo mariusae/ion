@@ -165,8 +165,14 @@ func runBModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt bMod
 		defer func() {
 			_ = client.Return(sessionID)
 		}()
-		if _, err := client.ExecuteSession(sessionID, buildBModeScript(effectiveCfg.files)); err != nil {
-			return err
+		if len(effectiveCfg.files) == 0 {
+			if _, err := client.ExecuteSession(sessionID, buildBModeScript(nil)); err != nil {
+				return err
+			}
+		} else {
+			if _, err := clienttarget.Open(client, effectiveCfg.files); err != nil {
+				return err
+			}
 		}
 		return focusResidentPane(paths, ctx, rt.tmux)
 	}

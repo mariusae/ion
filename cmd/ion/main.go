@@ -30,6 +30,7 @@ type config struct {
 	autoindent bool
 	paneID     string
 	socketPath string
+	tmuxWindow string
 	files      []string
 }
 
@@ -150,6 +151,7 @@ func parseArgs(args []string) (config, error) {
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
 	fs.BoolVar(&cfg.serve, "serve", false, "internal: serve one resident daemon")
 	fs.StringVar(&cfg.socketPath, "socket", "", "internal: socket path for resident daemon")
+	fs.StringVar(&cfg.tmuxWindow, "tmux-window", "", "internal: tmux window id for resident daemon cleanup")
 	fs.BoolVar(&cfg.rage, "rage", false, "print terminal theme detection diagnostics")
 	fs.IntVar(&cfg.killSignal, "kill", 0, "send one signal to the active resident daemon")
 	if err := fs.Parse(args); err != nil {
@@ -276,6 +278,9 @@ func parseArgs(args []string) (config, error) {
 	}
 	if cfg.serve && cfg.socketPath == "" {
 		return config{}, fmt.Errorf("-serve requires -socket")
+	}
+	if cfg.tmuxWindow != "" && !cfg.serve {
+		return config{}, fmt.Errorf("-tmux-window requires -serve")
 	}
 	if cfg.killSignal < 0 {
 		return config{}, fmt.Errorf("-kill requires a non-negative signal number")

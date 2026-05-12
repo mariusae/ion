@@ -208,6 +208,108 @@ func TestResidentPathsUseSharedPrefix(t *testing.T) {
 	if got, want := paths.panePath, "/tmp/ion/"+hashedPathBase(residentPathVersionPrefix, "tmux-window:@9")+".pane"; got != want {
 		t.Fatalf("panePath = %q, want %q", got, want)
 	}
+	if got, want := paths.tmuxWindowID, "@9"; got != want {
+		t.Fatalf("tmuxWindowID = %q, want %q", got, want)
+	}
+}
+
+func TestEnsureResidentServerPassesTmuxWindowToSpawn(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	var gotWindow string
+	var listener net.Listener
+	rt := residentRuntime{
+		getenv: func(name string) string {
+			if name == "TMUX" {
+				return "/tmp/tmux.sock"
+			}
+			return ""
+		},
+		getwd:      func() (string, error) { return "/tmp/work", nil },
+		tempDir:    func() string { return tempDir },
+		tmux:       (&fakeTmux{sessionID: "$9", windowID: "@9"}).run,
+		executable: func() (string, error) { return "/tmp/bin/ion", nil },
+		spawn: func(cfg config, socketPath string) error {
+			gotWindow = cfg.tmuxWindow
+			if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+				return err
+			}
+			var err error
+			listener, err = net.Listen("unix", socketPath)
+			if err != nil {
+				return err
+			}
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					_ = conn.Close()
+				}
+			}()
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	})
+
+	if _, err := ensureResidentServer(config{}, rt); err != nil {
+		t.Fatalf("ensureResidentServer() error = %v", err)
+	}
+	if got, want := gotWindow, "@9"; got != want {
+		t.Fatalf("spawn cfg.tmuxWindow = %q, want %q", got, want)
+	}
+}
+
+func TestIdleTmuxWindowWatcherCancelsWhenClientReconnects(t *testing.T) {
+	t.Parallel()
+
+	shutdown := make(chan struct{}, 1)
+	watcher := newIdleTmuxWindowWatcher("@7", 5*time.Millisecond, 5*time.Millisecond, func(string) bool {
+		return false
+	}, func() {
+		shutdown <- struct{}{}
+	})
+	defer watcher.Stop()
+
+	watcher.OnIdle()
+	watcher.OnActive()
+
+	select {
+	case <-shutdown:
+		t.Fatal("watcher shut down after reconnect")
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func TestIdleTmuxWindowWatcherPollsUntilWindowDies(t *testing.T) {
+	t.Parallel()
+
+	checks := 0
+	shutdown := make(chan struct{}, 1)
+	watcher := newIdleTmuxWindowWatcher("@7", 5*time.Millisecond, 5*time.Millisecond, func(string) bool {
+		checks++
+		return checks == 1
+	}, func() {
+		shutdown <- struct{}{}
+	})
+	defer watcher.Stop()
+
+	watcher.OnIdle()
+
+	select {
+	case <-shutdown:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("watcher did not shut down after window disappeared")
+	}
+	if checks < 2 {
+		t.Fatalf("window checks = %d, want at least 2", checks)
+	}
 }
 
 func TestRunKillModeWithSignalsActiveResidentServer(t *testing.T) {

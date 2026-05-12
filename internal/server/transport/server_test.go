@@ -84,6 +84,47 @@ func TestServeAcceptsConcurrentConnections(t *testing.T) {
 	}
 }
 
+func TestLifecycleHooksObservePrimaryClientTransitions(t *testing.T) {
+	t.Parallel()
+
+	server := New(workspace.New())
+	active := 0
+	idle := 0
+	server.SetLifecycleHooks(LifecycleHooks{
+		OnActive: func() { active++ },
+		OnIdle:   func() { idle++ },
+	})
+
+	clientID, auxiliary, err := server.connectClient(0)
+	if err != nil {
+		t.Fatalf("connectClient(primary) error = %v", err)
+	}
+	if auxiliary {
+		t.Fatal("connectClient(primary) marked auxiliary")
+	}
+	if active != 1 || idle != 0 {
+		t.Fatalf("hooks after primary connect = active %d idle %d, want 1/0", active, idle)
+	}
+	if _, auxiliary, err = server.connectClient(clientID); err != nil {
+		t.Fatalf("connectClient(auxiliary) error = %v", err)
+	}
+	if !auxiliary {
+		t.Fatal("connectClient(existing) did not mark auxiliary")
+	}
+	if active != 1 || idle != 0 {
+		t.Fatalf("hooks after auxiliary connect = active %d idle %d, want 1/0", active, idle)
+	}
+
+	server.releaseClient(clientID, true)
+	if active != 1 || idle != 0 {
+		t.Fatalf("hooks after auxiliary release = active %d idle %d, want 1/0", active, idle)
+	}
+	server.releaseClient(clientID, false)
+	if active != 1 || idle != 1 {
+		t.Fatalf("hooks after primary release = active %d idle %d, want 1/1", active, idle)
+	}
+}
+
 func TestServerNotifierSkipsCurrentViewButFiresOnStateChanges(t *testing.T) {
 	t.Parallel()
 

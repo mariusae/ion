@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,10 +35,16 @@ type residentRuntime struct {
 }
 
 type residentPaths struct {
-	socketPath string
-	pidPath    string
-	panePath   string
+	socketPath   string
+	pidPath      string
+	panePath     string
+	tmuxWindowID string
 }
+
+const (
+	residentIdleGrace = 500 * time.Millisecond
+	residentIdlePoll  = 5 * time.Second
+)
 
 const residentPathVersionPrefix = "ion-r3"
 
@@ -196,6 +203,24 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 	ws := workspace.NewWithAutoIndent(cfg.autoindent)
 	ws.SetShellEnv([]string{"ION_SOCKET=" + cfg.socketPath})
 	server := transport.New(ws)
+	if cfg.tmuxWindow != "" {
+		watcher := newIdleTmuxWindowWatcher(
+			cfg.tmuxWindow,
+			residentIdleGrace,
+			residentIdlePoll,
+			func(windowID string) bool {
+				return tmuxWindowExists(windowID, runTmuxCommand)
+			},
+			func() {
+				_ = server.Shutdown()
+			},
+		)
+		defer watcher.Stop()
+		server.SetLifecycleHooks(transport.LifecycleHooks{
+			OnActive: watcher.OnActive,
+			OnIdle:   watcher.OnIdle,
+		})
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.socketPath), 0o700); err != nil {
 		return err
 	}
@@ -207,6 +232,7 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	pidPath := residentPIDPath(cfg.socketPath)
+	panePath := residentPanePath(cfg.socketPath)
 	if err := writeTextFile(pidPath, fmt.Sprintf("%d\n", os.Getpid())); err != nil {
 		_ = listener.Close()
 		_ = os.Remove(cfg.socketPath)
@@ -216,6 +242,7 @@ func runServe(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = listener.Close()
 		_ = os.Remove(cfg.socketPath)
 		_ = os.Remove(pidPath)
+		_ = os.Remove(panePath)
 	}()
 	return server.Serve(listener)
 }
@@ -245,11 +272,15 @@ func residentPathsForRuntime(cfg config, rt residentRuntime) (residentPaths, err
 	}
 	base := hashedPathBase(residentPathVersionPrefix, key)
 	dir := filepath.Join(rt.tempDir(), "ion")
-	return residentPaths{
+	paths := residentPaths{
 		socketPath: filepath.Join(dir, base+".sock"),
 		pidPath:    filepath.Join(dir, base+".pid"),
 		panePath:   filepath.Join(dir, base+".pane"),
-	}, nil
+	}
+	if windowID, ok := strings.CutPrefix(key, "tmux-window:"); ok {
+		paths.tmuxWindowID = windowID
+	}
+	return paths, nil
 }
 
 func ensureResidentServer(cfg config, rt residentRuntime) (residentPaths, error) {
@@ -262,7 +293,9 @@ func ensureResidentServer(cfg config, rt residentRuntime) (residentPaths, error)
 	} else if !isRetryableResidentDialError(err) {
 		return residentPaths{}, err
 	}
-	if err := spawnResidentServer(cfg, rt, paths.socketPath); err != nil {
+	serveCfg := cfg
+	serveCfg.tmuxWindow = paths.tmuxWindowID
+	if err := spawnResidentServer(serveCfg, rt, paths.socketPath); err != nil {
 		return residentPaths{}, err
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -304,6 +337,9 @@ func spawnResidentServer(cfg config, rt residentRuntime, socketPath string) erro
 	if !cfg.autoindent {
 		args = append(args, "-no-autoindent")
 	}
+	if cfg.tmuxWindow != "" {
+		args = append(args, "-tmux-window", cfg.tmuxWindow)
+	}
 	cmd := exec.Command(exe, args...)
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
@@ -313,6 +349,128 @@ func spawnResidentServer(cfg config, rt residentRuntime, socketPath string) erro
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+type idleTmuxWindowWatcher struct {
+	windowID     string
+	grace        time.Duration
+	poll         time.Duration
+	windowExists func(string) bool
+	shutdown     func()
+
+	mu      sync.Mutex
+	cancel  chan struct{}
+	stopped bool
+}
+
+func newIdleTmuxWindowWatcher(windowID string, grace, poll time.Duration, windowExists func(string) bool, shutdown func()) *idleTmuxWindowWatcher {
+	return &idleTmuxWindowWatcher{
+		windowID:     windowID,
+		grace:        grace,
+		poll:         poll,
+		windowExists: windowExists,
+		shutdown:     shutdown,
+	}
+}
+
+func (w *idleTmuxWindowWatcher) OnActive() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cancelLocked()
+}
+
+func (w *idleTmuxWindowWatcher) OnIdle() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.stopped || w.cancel != nil {
+		w.mu.Unlock()
+		return
+	}
+	cancel := make(chan struct{})
+	w.cancel = cancel
+	w.mu.Unlock()
+	go w.watch(cancel)
+}
+
+func (w *idleTmuxWindowWatcher) Stop() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.stopped = true
+	w.cancelLocked()
+}
+
+func (w *idleTmuxWindowWatcher) cancelLocked() {
+	if w.cancel == nil {
+		return
+	}
+	close(w.cancel)
+	w.cancel = nil
+}
+
+func (w *idleTmuxWindowWatcher) watch(cancel <-chan struct{}) {
+	if !sleepOrCanceled(w.grace, cancel) {
+		return
+	}
+	for {
+		if !w.isCurrent(cancel) {
+			return
+		}
+		if w.windowExists == nil || !w.windowExists(w.windowID) {
+			if !w.claim(cancel) {
+				return
+			}
+			if w.shutdown != nil {
+				w.shutdown()
+			}
+			return
+		}
+		if !sleepOrCanceled(w.poll, cancel) {
+			return
+		}
+	}
+}
+
+func (w *idleTmuxWindowWatcher) isCurrent(cancel <-chan struct{}) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return !w.stopped && w.cancel == cancel
+}
+
+func (w *idleTmuxWindowWatcher) claim(cancel <-chan struct{}) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || w.cancel != cancel {
+		return false
+	}
+	w.cancel = nil
+	return true
+}
+
+func sleepOrCanceled(d time.Duration, cancel <-chan struct{}) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-cancel:
+		return false
+	}
+}
+
+func tmuxWindowExists(windowID string, tmux func(args ...string) (string, error)) bool {
+	if windowID == "" || tmux == nil {
+		return false
+	}
+	got, err := tmuxDisplay(tmux, windowID, "#{window_id}")
+	return err == nil && got == windowID
 }
 
 func cleanupResidentPaths(paths residentPaths) {
@@ -572,6 +730,14 @@ func residentPIDPath(socketPath string) string {
 		return strings.TrimSuffix(socketPath, ext) + ".pid"
 	}
 	return socketPath + ".pid"
+}
+
+func residentPanePath(socketPath string) string {
+	socketPath = filepath.Clean(socketPath)
+	if ext := filepath.Ext(socketPath); ext != "" {
+		return strings.TrimSuffix(socketPath, ext) + ".pane"
+	}
+	return socketPath + ".pane"
 }
 
 func readResidentPID(path string) (int, error) {

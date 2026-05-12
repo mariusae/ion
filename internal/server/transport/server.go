@@ -23,6 +23,7 @@ import (
 type Server struct {
 	ws           *workspace.Workspace
 	changeNotify func()
+	lifecycle    LifecycleHooks
 
 	mu             sync.Mutex
 	listener       net.Listener
@@ -34,6 +35,12 @@ type Server struct {
 	namespaces     map[string]registeredNamespace
 	invocations    map[uint64]*invocationState
 	menuCommands   []wire.MenuCommand
+}
+
+// LifecycleHooks observes logical client activity on the server.
+type LifecycleHooks struct {
+	OnActive func()
+	OnIdle   func()
 }
 
 type registeredNamespace struct {
@@ -127,6 +134,13 @@ func NewWithNotifier(ws *workspace.Workspace, notify func()) *Server {
 		namespaces:   make(map[string]registeredNamespace),
 		invocations:  make(map[uint64]*invocationState),
 	}
+}
+
+// SetLifecycleHooks installs callbacks for client activity transitions.
+func (s *Server) SetLifecycleHooks(hooks LifecycleHooks) {
+	s.mu.Lock()
+	s.lifecycle = hooks
+	s.mu.Unlock()
 }
 
 // Serve accepts connections until the listener is closed.
@@ -433,20 +447,23 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 
 func (s *Server) connectClient(requested uint64) (uint64, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if requested != 0 {
 		client, ok := s.clients[requested]
 		if !ok {
+			s.mu.Unlock()
 			return 0, false, fmt.Errorf("unknown client %d", requested)
 		}
 		if client.closed || client.primaryRefs == 0 {
+			s.mu.Unlock()
 			return 0, false, fmt.Errorf("unknown client %d", requested)
 		}
 		client.auxRefs++
+		s.mu.Unlock()
 		return client.id, true, nil
 	}
 
+	wasIdle := len(s.clients) == 0
 	s.nextClient++
 	client := &serverClient{
 		id:          s.nextClient,
@@ -455,6 +472,11 @@ func (s *Server) connectClient(requested uint64) (uint64, bool, error) {
 	}
 	client.cond = sync.NewCond(&s.mu)
 	s.clients[client.id] = client
+	onActive := s.lifecycle.OnActive
+	s.mu.Unlock()
+	if wasIdle && onActive != nil {
+		onActive()
+	}
 	return client.id, false, nil
 }
 
@@ -501,7 +523,12 @@ func (s *Server) releaseClient(clientID uint64, auxiliary bool) {
 		}
 		inv.finish("namespace provider disconnected", "", "")
 	}
+	onIdle := s.lifecycle.OnIdle
+	idle := len(s.clients) == 0
 	s.mu.Unlock()
+	if idle && onIdle != nil {
+		onIdle()
+	}
 }
 
 func (s *Server) newSession(clientID uint64) (*managedSession, error) {

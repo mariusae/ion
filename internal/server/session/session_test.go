@@ -558,6 +558,41 @@ func TestOpenTargetOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
 	}
 }
 
+func TestOpenFilesOnCurrentFileDoesNotOpenNamelessBuffer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "README.md")
+	if err := os.WriteFile(file, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+
+	ws := workspace.New()
+	sess := NewTerm(ws, nil, io.Discard)
+	if err := sess.Bootstrap([]string{file}); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	view, err := sess.OpenFiles([]string{file})
+	if err != nil {
+		t.Fatalf("OpenFiles(current-file) error = %v", err)
+	}
+	if view.Name != file {
+		t.Fatalf("current file after OpenFiles = %q, want %q", view.Name, file)
+	}
+
+	menu, err := sess.MenuFiles()
+	if err != nil {
+		t.Fatalf("MenuFiles() error = %v", err)
+	}
+	if got, want := len(menu), 1; got != want {
+		t.Fatalf("menu len = %d, want %d", got, want)
+	}
+	if menu[0].Name != file || !menu[0].Current {
+		t.Fatalf("menu[0] = %#v, want current named file %q", menu[0], file)
+	}
+}
+
 func TestOpenTargetWithCharacterAddressUsesExactPoint(t *testing.T) {
 	t.Parallel()
 

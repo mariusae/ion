@@ -3060,6 +3060,46 @@ func TestExchangeSnarfWithTmuxSwapsBuffers(t *testing.T) {
 	}
 }
 
+func TestCopySamfileToTmuxWritesCurrentBufferPath(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{
+		Name: "display.txt",
+		Path: "/tmp/project/display.txt",
+	})
+	var loaded []byte
+	status, err := copySamfileToTmux(state, func(data []byte) error {
+		loaded = append([]byte(nil), data...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("copySamfileToTmux() error = %v", err)
+	}
+	if got, want := string(loaded), "/tmp/project/display.txt"; got != want {
+		t.Fatalf("tmux loaded buffer = %q, want %q", got, want)
+	}
+	if got, want := status, "samfile copied to tmux"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
+func TestCopySamfileToTmuxFallsBackToBufferName(t *testing.T) {
+	t.Parallel()
+
+	state := newBufferState(wire.BufferView{Name: "relative.txt"})
+	var loaded []byte
+	_, err := copySamfileToTmux(state, func(data []byte) error {
+		loaded = append([]byte(nil), data...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("copySamfileToTmux() error = %v", err)
+	}
+	if got, want := string(loaded), "relative.txt"; got != want {
+		t.Fatalf("tmux loaded buffer = %q, want %q", got, want)
+	}
+}
+
 func TestMiddleClickPasteBufferUsesSnarfOutsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "")
 	called := false

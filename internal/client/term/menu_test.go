@@ -40,6 +40,13 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	if got, want := menu.items[splitIdx-1].kind, menuRegexp; got != want {
 		t.Fatalf("item before split kind = %v, want %v", got, want)
 	}
+	tmuxSamfileIdx := menuItemIndexByKind(menu.items, menuTmuxSamfile)
+	if tmuxSamfileIdx < 0 {
+		t.Fatal("missing tmux samfile menu item")
+	}
+	if got, want := menu.items[tmuxSamfileIdx].label, " <tmux:samfile>"; got != want {
+		t.Fatalf("tmux samfile item label = %q, want %q", got, want)
+	}
 	if !strings.Contains(menu.title, "in.txt") {
 		t.Fatalf("menu.title = %q, want file name", menu.title)
 	}

@@ -207,39 +207,60 @@ func localTermNamespaceDoc() wire.NamespaceProviderDoc {
 	}
 }
 
+func localTmuxNamespaceDoc() wire.NamespaceProviderDoc {
+	return wire.NamespaceProviderDoc{
+		Namespace: "tmux",
+		Summary:   "tmux integration commands",
+		Help:      "Commands implemented locally by the interactive terminal HUD for exchanging data with tmux.",
+		Commands: []wire.NamespaceCommandDoc{
+			{
+				Name:    "samfile",
+				Summary: "copy the current buffer path to tmux",
+				Help:    "Copies the current buffer path, matching the samfile shell variable, into the tmux paste buffer.",
+			},
+		},
+	}
+}
+
 func augmentNamespaceDocs(docs []wire.NamespaceProviderDoc) []wire.NamespaceProviderDoc {
 	out := append([]wire.NamespaceProviderDoc(nil), docs...)
-	local := localTermNamespaceDoc()
-	termIdx := -1
+	for _, local := range []wire.NamespaceProviderDoc{localTermNamespaceDoc(), localTmuxNamespaceDoc()} {
+		out = mergeLocalNamespaceDoc(out, local)
+	}
+	return out
+}
+
+func mergeLocalNamespaceDoc(out []wire.NamespaceProviderDoc, local wire.NamespaceProviderDoc) []wire.NamespaceProviderDoc {
+	namespaceIdx := -1
 	for i := range out {
 		if strings.TrimSpace(out[i].Namespace) == local.Namespace {
-			termIdx = i
+			namespaceIdx = i
 			break
 		}
 	}
-	if termIdx < 0 {
+	if namespaceIdx < 0 {
 		out = append(out, local)
 		return out
 	}
-	existing := make(map[string]int, len(out[termIdx].Commands))
-	for i := range out[termIdx].Commands {
-		existing[strings.TrimSpace(out[termIdx].Commands[i].Name)] = i
+	existing := make(map[string]int, len(out[namespaceIdx].Commands))
+	for i := range out[namespaceIdx].Commands {
+		existing[strings.TrimSpace(out[namespaceIdx].Commands[i].Name)] = i
 	}
 	for _, command := range local.Commands {
 		name := strings.TrimSpace(command.Name)
 		if idx, ok := existing[name]; ok {
-			if strings.TrimSpace(out[termIdx].Commands[idx].Summary) == "" {
-				out[termIdx].Commands[idx].Summary = command.Summary
+			if strings.TrimSpace(out[namespaceIdx].Commands[idx].Summary) == "" {
+				out[namespaceIdx].Commands[idx].Summary = command.Summary
 			}
-			if strings.TrimSpace(out[termIdx].Commands[idx].Help) == "" {
-				out[termIdx].Commands[idx].Help = command.Help
+			if strings.TrimSpace(out[namespaceIdx].Commands[idx].Help) == "" {
+				out[namespaceIdx].Commands[idx].Help = command.Help
 			}
-			if strings.TrimSpace(out[termIdx].Commands[idx].Args) == "" {
-				out[termIdx].Commands[idx].Args = command.Args
+			if strings.TrimSpace(out[namespaceIdx].Commands[idx].Args) == "" {
+				out[namespaceIdx].Commands[idx].Args = command.Args
 			}
 			continue
 		}
-		out[termIdx].Commands = append(out[termIdx].Commands, command)
+		out[namespaceIdx].Commands = append(out[namespaceIdx].Commands, command)
 	}
 	return out
 }

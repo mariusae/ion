@@ -1351,6 +1351,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return ":term:paste"
 		case menuTmux:
 			return ":term:tmux"
+		case menuTmuxSamfile:
+			return ":tmux:samfile"
 		case menuSend:
 			return ":term:send"
 		case menuLook:
@@ -1437,6 +1439,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return true, false, err
 			}
 			snarf = nextSnarf
+			buffer.status = status
+			return true, false, nil
+		case ":tmux:samfile":
+			status, err := copySamfileToTmux(buffer, writeTmuxPasteBuffer)
+			if err != nil {
+				return true, false, err
+			}
 			buffer.status = status
 			return true, false, nil
 		case ":term:send":
@@ -3629,7 +3638,7 @@ func formatTerminalPseudoCommandArg(arg string) string {
 
 func shouldRecordMenuCommandInHUD(line string) bool {
 	line = strings.TrimSpace(normalizeTerminalPseudoAlias(line))
-	return !strings.HasPrefix(line, ":term:")
+	return !strings.HasPrefix(line, ":term:") && !strings.HasPrefix(line, ":tmux:")
 }
 
 func shouldRecordCommandImmediately(recordHistory, revealOnOutput, overlayVisible bool) bool {
@@ -5558,6 +5567,28 @@ func exchangeSnarfWithTmux(snarf []rune, read func() ([]byte, error), write func
 		return append([]rune(nil), snarf...), "", err
 	}
 	return []rune(string(current)), "tmux exchanged", nil
+}
+
+func copySamfileToTmux(buffer *bufferState, write func([]byte) error) (string, error) {
+	path := currentBufferSamfile(buffer)
+	if path == "" {
+		return "", fmt.Errorf("no current buffer path")
+	}
+	if err := write([]byte(path)); err != nil {
+		return "", err
+	}
+	return "samfile copied to tmux", nil
+}
+
+func currentBufferSamfile(buffer *bufferState) string {
+	if buffer == nil {
+		return ""
+	}
+	path := strings.TrimSpace(buffer.path)
+	if path == "" {
+		path = strings.TrimSpace(buffer.name)
+	}
+	return path
 }
 
 func middleClickPasteBuffer(snarf []rune, readTmux func() ([]byte, error)) ([]rune, error) {

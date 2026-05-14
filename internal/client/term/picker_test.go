@@ -28,7 +28,7 @@ func TestCommandCompletionsFromDocsIncludesLocalTermAndMenuCommands(t *testing.T
 	for _, completion := range completions {
 		names[completion.name] = completion.summary
 	}
-	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":term:send", ":term:pick", ":term:regexp", ":term:refine", ":term:split", ":lsp:goto", ":demo:show"} {
+	for _, want := range []string{":help", ":term:snarf", ":term:tmux", ":tmux:samfile", ":term:send", ":term:pick", ":term:regexp", ":term:refine", ":term:split", ":lsp:goto", ":demo:show"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing completion %q in %#v", want, names)
 		}
@@ -542,18 +542,24 @@ func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 			Summary: "quit",
 		}},
 	}})
-	if got, want := len(docs), 2; got != want {
+	if got, want := len(docs), 3; got != want {
 		t.Fatalf("len(docs) = %d, want %d", got, want)
 	}
 	termIdx := -1
+	tmuxIdx := -1
 	for i := range docs {
 		if docs[i].Namespace == "term" {
 			termIdx = i
-			break
+		}
+		if docs[i].Namespace == "tmux" {
+			tmuxIdx = i
 		}
 	}
 	if termIdx < 0 {
 		t.Fatalf("missing term namespace in %#v", docs)
+	}
+	if tmuxIdx < 0 {
+		t.Fatalf("missing tmux namespace in %#v", docs)
 	}
 	var names []string
 	for _, command := range docs[termIdx].Commands {
@@ -570,6 +576,9 @@ func TestAugmentNamespaceDocsAddsLocalTermCommands(t *testing.T) {
 		if !found {
 			t.Fatalf("missing local term command %q in %#v", want, names)
 		}
+	}
+	if got, want := docs[tmuxIdx].Commands[0].Name, "samfile"; got != want {
+		t.Fatalf("tmux command = %q, want %q", got, want)
 	}
 	if !reflect.DeepEqual(docs[0].Commands[0], wire.NamespaceCommandDoc{Name: "Q", Summary: "quit"}) {
 		t.Fatalf("existing command mutated: %#v", docs[0].Commands[0])

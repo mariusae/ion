@@ -2171,7 +2171,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				return nil
 			}
 			overlay.insert(filtered)
-			return fullRedraw(redrawRecover)
+			return overlayInputRedraw(redrawOverlayInput)
 		})
 	}
 

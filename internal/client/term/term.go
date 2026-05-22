@@ -1260,6 +1260,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			}
 			return changed, nil
 		}
+		if overlay.pickerMode() == overlayModeDirectoryPicker && item.dir {
+			return false, nil
+		}
 		if overlay.pickerMode() == overlayModeDirectoryPicker && item.fileID == 0 && strings.TrimSpace(item.path) != "" {
 			ok, err := shouldPreviewDirectoryFile(item.path)
 			if err != nil {
@@ -1774,24 +1777,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
 	}
 
-	openDirectoryPicker := func() error {
-		if overlay.visible && overlay.pickerMode() == overlayModeDirectoryPicker {
-			previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
-			if err != nil {
-				return err
-			}
-			overlay.close()
-			flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
-			if previewChanged {
-				flags |= renderInvalidateBuffer
-			}
-			return redraw(renderRequestForLayers(redrawOverlayClose, flags))
-		}
+	openDirectoryPickerAt := func(dir string, extraInvalidation renderInvalidation) error {
 		snapshot, err := loadMenuSnapshot(svc)
 		if err != nil {
 			return err
 		}
-		items, preferred, err := buildDirectoryPickerItems(buffer, snapshot.Files)
+		items, preferred, err := buildDirectoryPickerItemsForDir(dir, buffer, snapshot.Files)
 		if err != nil {
 			return err
 		}
@@ -1813,11 +1804,60 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if err != nil {
 			return err
 		}
-		flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+		flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput | extraInvalidation
 		if previewChanged {
 			flags |= renderInvalidateBuffer
 		}
 		return redraw(renderRequestForLayers(redrawOverlayOpen, flags))
+	}
+
+	openDirectoryPicker := func() error {
+		if overlay.visible && overlay.pickerMode() == overlayModeDirectoryPicker {
+			previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+			if err != nil {
+				return err
+			}
+			overlay.close()
+			flags := renderInvalidateOverlayHistory | renderInvalidateOverlayInput
+			if previewChanged {
+				flags |= renderInvalidateBuffer
+			}
+			return redraw(renderRequestForLayers(redrawOverlayClose, flags))
+		}
+		dir, ok := currentBufferDirectory(buffer)
+		if !ok {
+			buffer.status = "?no files"
+			return bufferRedraw(redrawBufferStatus)
+		}
+		return openDirectoryPickerAt(dir, 0)
+	}
+
+	enterDirectoryPickerDir := func(path string) error {
+		previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
+		if err != nil {
+			return err
+		}
+		extraInvalidation := renderInvalidateNone
+		if previewChanged {
+			extraInvalidation = renderInvalidateBuffer
+		}
+		return openDirectoryPickerAt(path, extraInvalidation)
+	}
+
+	enterSelectedDirectoryPickerDir := func() (bool, error) {
+		path, ok := selectedDirectoryPickerPath(overlay)
+		if !ok {
+			return false, nil
+		}
+		return true, enterDirectoryPickerDir(path)
+	}
+
+	enterParentDirectoryPickerDir := func() (bool, error) {
+		path, ok := parentDirectoryPickerPath(overlay)
+		if !ok {
+			return false, nil
+		}
+		return true, enterDirectoryPickerDir(path)
 	}
 
 	var showKeyboardMenu func() error
@@ -2717,8 +2757,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						case keyPgDn:
 							overlay.pickerMove(max(1, overlayHistoryRows(overlay)-1))
 						case keyLeft:
+							handled, err := enterParentDirectoryPickerDir()
+							if err != nil {
+								return err
+							}
+							if handled {
+								continue
+							}
 							overlay.moveLeft()
 						case keyRight:
+							handled, err := enterSelectedDirectoryPickerDir()
+							if err != nil {
+								return err
+							}
+							if handled {
+								continue
+							}
 							overlay.moveRight()
 						case keyAltLeft:
 							overlay.moveWordLeft()
@@ -2829,6 +2883,12 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							}
 						case overlayModeDirectoryPicker:
 							item, ok := overlay.pickerSelected()
+							if ok && item.dir {
+								if err := enterDirectoryPickerDir(item.path); err != nil {
+									return err
+								}
+								continue
+							}
 							overlay.close()
 							previewChanged := false
 							if ok {
@@ -3034,8 +3094,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						}
 						continue
 					case keyLeft:
+						handled, err := enterParentDirectoryPickerDir()
+						if err != nil {
+							return err
+						}
+						if handled {
+							continue
+						}
 						overlay.moveLeft()
 					case keyRight:
+						handled, err := enterSelectedDirectoryPickerDir()
+						if err != nil {
+							return err
+						}
+						if handled {
+							continue
+						}
 						overlay.moveRight()
 					case keyAltLeft:
 						overlay.moveWordLeft()

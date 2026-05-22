@@ -32,6 +32,7 @@ type overlayPickerItem struct {
 	search  string
 	fileID  int
 	path    string
+	dir     bool
 	current bool
 	start   int
 	end     int
@@ -416,13 +417,24 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 	if !ok {
 		return nil, "", nil
 	}
+	return buildDirectoryPickerItemsForDir(dir, buffer, files)
+}
+
+func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wire.MenuFile) ([]overlayPickerItem, string, error) {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" {
+		return nil, "", nil
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, "", err
 	}
-	items := make([]overlayPickerItem, 0, len(entries))
+	items := make([]overlayPickerItem, 0, len(entries)+1)
 	preferred := ""
-	currentPath := strings.TrimSpace(buffer.path)
+	currentPath := ""
+	if buffer != nil {
+		currentPath = strings.TrimSpace(buffer.path)
+	}
 	loadedByPath := make(map[string]wire.MenuFile, len(files))
 	for _, file := range files {
 		path := strings.TrimSpace(file.Path)
@@ -431,12 +443,31 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 		}
 		loadedByPath[filepath.Clean(path)] = file
 	}
+	parent := filepath.Clean(filepath.Join(dir, ".."))
+	items = append(items, overlayPickerItem{
+		key:    "dir:" + parent,
+		label:  "    ../",
+		value:  "../",
+		search: "../",
+		path:   parent,
+		dir:    true,
+	})
+	var fileItems []overlayPickerItem
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		name := entry.Name()
 		path := filepath.Join(dir, name)
+		if entry.IsDir() {
+			label := "    " + name + "/"
+			items = append(items, overlayPickerItem{
+				key:    "dir:" + path,
+				label:  label,
+				value:  name + "/",
+				search: strings.ToLower(label),
+				path:   path,
+				dir:    true,
+			})
+			continue
+		}
 		current := sameMenuPath(path, currentPath)
 		item := overlayPickerItem{
 			key:     "path:" + path,
@@ -452,14 +483,18 @@ func buildDirectoryPickerItems(buffer *bufferState, files []wire.MenuFile) ([]ov
 			item.label = "    " + name
 		}
 		item.search = strings.ToLower(item.label)
-		items = append(items, item)
+		fileItems = append(fileItems, item)
 		if current {
 			preferred = "path:" + path
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].value < items[j].value
+	sort.Slice(items[1:], func(i, j int) bool {
+		return items[1+i].value < items[1+j].value
 	})
+	sort.Slice(fileItems, func(i, j int) bool {
+		return fileItems[i].value < fileItems[j].value
+	})
+	items = append(items, fileItems...)
 	return items, preferred, nil
 }
 
@@ -691,6 +726,31 @@ func (o *overlayState) pickerSelected() (overlayPickerItem, bool) {
 		return overlayPickerItem{}, false
 	}
 	return o.picker.items[o.picker.filtered[o.picker.selected]], true
+}
+
+func selectedDirectoryPickerPath(o *overlayState) (string, bool) {
+	if o == nil || o.pickerMode() != overlayModeDirectoryPicker {
+		return "", false
+	}
+	item, ok := o.pickerSelected()
+	if !ok || !item.dir {
+		return "", false
+	}
+	path := strings.TrimSpace(item.path)
+	return path, path != ""
+}
+
+func parentDirectoryPickerPath(o *overlayState) (string, bool) {
+	if o == nil || o.pickerMode() != overlayModeDirectoryPicker || o.picker == nil {
+		return "", false
+	}
+	for _, item := range o.picker.items {
+		if item.dir && item.value == "../" {
+			path := strings.TrimSpace(item.path)
+			return path, path != ""
+		}
+	}
+	return "", false
 }
 
 func (o *overlayState) refreshPicker() {

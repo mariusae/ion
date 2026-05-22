@@ -163,29 +163,108 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	if got, want := preferred, "path:"+currentPath; got != want {
 		t.Fatalf("preferred = %q, want %q", got, want)
 	}
+	if got, want := len(items), 4; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].label, "    ../"; got != want {
+		t.Fatalf("first label = %q, want %q", got, want)
+	}
+	if got, want := items[1].label, "    subdir/"; got != want {
+		t.Fatalf("second label = %q, want %q", got, want)
+	}
+	if !items[0].dir {
+		t.Fatal("first item dir = false, want true")
+	}
+	if got, want := items[0].path, filepath.Dir(root); got != want {
+		t.Fatalf("first path = %q, want %q", got, want)
+	}
+	if !items[1].dir {
+		t.Fatal("second item dir = false, want true")
+	}
+	if got, want := items[1].path, filepath.Join(root, "subdir"); got != want {
+		t.Fatalf("second path = %q, want %q", got, want)
+	}
+	if got, want := items[2].label, "'-. current.go"; got != want {
+		t.Fatalf("third label = %q, want %q", got, want)
+	}
+	if got, want := items[3].label, "\"-  other.go"; got != want {
+		t.Fatalf("fourth label = %q, want %q", got, want)
+	}
+	if got, want := items[2].path, currentPath; got != want {
+		t.Fatalf("third path = %q, want %q", got, want)
+	}
+	if !items[2].current {
+		t.Fatal("third item current = false, want true")
+	}
+	if got, want := items[3].path, filepath.Join(root, "other.go"); got != want {
+		t.Fatalf("fourth path = %q, want %q", got, want)
+	}
+	if got, want := items[3].fileID, 2; got != want {
+		t.Fatalf("fourth fileID = %d, want %d", got, want)
+	}
+	if strings.Contains(items[3].search, root) {
+		t.Fatalf("fourth item search = %q, want rendered text only", items[3].search)
+	}
+}
+
+func TestBuildDirectoryPickerItemsForDirListsNavigatedDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatalf("Mkdir(child) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "nested.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+
+	items, preferred, err := buildDirectoryPickerItemsForDir(child, nil, nil)
+	if err != nil {
+		t.Fatalf("buildDirectoryPickerItemsForDir() error = %v", err)
+	}
+	if preferred != "" {
+		t.Fatalf("preferred = %q, want empty", preferred)
+	}
 	if got, want := len(items), 2; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	if got, want := items[0].label, "'-. current.go"; got != want {
-		t.Fatalf("first label = %q, want %q", got, want)
+	if got, want := items[0].label, "    ../"; got != want {
+		t.Fatalf("parent label = %q, want %q", got, want)
 	}
-	if got, want := items[1].label, "\"-  other.go"; got != want {
-		t.Fatalf("second label = %q, want %q", got, want)
+	if got, want := items[0].path, root; got != want {
+		t.Fatalf("parent path = %q, want %q", got, want)
 	}
-	if got, want := items[0].path, currentPath; got != want {
-		t.Fatalf("first path = %q, want %q", got, want)
+	if !items[0].dir {
+		t.Fatal("parent dir = false, want true")
 	}
-	if !items[0].current {
-		t.Fatal("first item current = false, want true")
+	if got, want := items[1].label, "    nested.txt"; got != want {
+		t.Fatalf("file label = %q, want %q", got, want)
 	}
-	if got, want := items[1].path, filepath.Join(root, "other.go"); got != want {
-		t.Fatalf("second path = %q, want %q", got, want)
+}
+
+func TestDirectoryPickerNavigationPaths(t *testing.T) {
+	t.Parallel()
+
+	parent := filepath.Clean("/tmp")
+	child := filepath.Clean("/tmp/child")
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeDirectoryPicker, []overlayPickerItem{
+		{key: "dir:" + parent, label: "    ../", value: "../", path: parent, dir: true},
+		{key: "dir:" + child, label: "    child/", value: "child/", path: child, dir: true},
+		{key: "path:/tmp/file.txt", label: "    file.txt", value: "file.txt", path: "/tmp/file.txt"},
+	}, "")
+
+	if got, ok := parentDirectoryPickerPath(overlay); !ok || got != parent {
+		t.Fatalf("parentDirectoryPickerPath() = %q, %v; want %q, true", got, ok, parent)
 	}
-	if got, want := items[1].fileID, 2; got != want {
-		t.Fatalf("second fileID = %d, want %d", got, want)
+	overlay.pickerMove(1)
+	if got, ok := selectedDirectoryPickerPath(overlay); !ok || got != child {
+		t.Fatalf("selectedDirectoryPickerPath(dir) = %q, %v; want %q, true", got, ok, child)
 	}
-	if strings.Contains(items[1].search, root) {
-		t.Fatalf("second item search = %q, want rendered text only", items[1].search)
+	overlay.pickerMove(1)
+	if got, ok := selectedDirectoryPickerPath(overlay); ok || got != "" {
+		t.Fatalf("selectedDirectoryPickerPath(file) = %q, %v; want empty, false", got, ok)
 	}
 }
 
@@ -211,7 +290,7 @@ func TestBuildDirectoryPickerItemsLeavesUnloadedFilesAligned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDirectoryPickerItems() error = %v", err)
 	}
-	if got, want := items[1].label, "    plain.txt"; got != want {
+	if got, want := items[2].label, "    plain.txt"; got != want {
 		t.Fatalf("unloaded label = %q, want %q", got, want)
 	}
 }

@@ -34,7 +34,7 @@ var lspMenuCommands = []wire.MenuCommand{
 	{Command: ":lsp:show", Label: "hover"},
 	{Command: ":lsp:gototype", Label: "type"},
 	{Command: ":lsp:usage", Label: "usage"},
-	{Command: ":lsp:fmt", Label: "format", Shortcut: "f"},
+	{Command: ":lsp:fmt", Label: "format"},
 }
 
 func providerDoc() wire.NamespaceProviderDoc {

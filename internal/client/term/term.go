@@ -2422,6 +2422,13 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			return false, showKeyboardMenu()
 		case metaKey('p'):
 			return false, openFilePicker()
+		case metaKey('P'):
+			done, err := runOverlayCommand(":ion:pop", shouldRecordMenuCommandInHUD(":ion:pop"), true)
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, bufferRedraw(redrawBufferStatus)
+			}
+			return done, nil
 		case metaKey('i'):
 			return false, openDirectoryPicker()
 		case metaKey('r'):

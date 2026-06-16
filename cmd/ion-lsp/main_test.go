@@ -279,6 +279,63 @@ func TestFormatUsageResult(t *testing.T) {
 	}
 }
 
+func TestFormatUsageResultUsesEditorCWD(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	editorCWD := filepath.Join(root, "users", "me", "project")
+	path := filepath.Join(editorCWD, "server", "src", "gateway.rs")
+	text := "fn main() {\n    target();\n}\n"
+	manager := &lspManager{root: root}
+	server := &lspServer{
+		docs: map[string]documentState{
+			pathToURI(path): {version: 1, text: text},
+		},
+	}
+	view := wire.BufferView{
+		Name: "server/src/gateway.rs",
+		Path: path,
+		Text: text,
+	}
+
+	got := formatUsageResult(manager, view, server, []locationTarget{{
+		Path:   path,
+		Line:   2,
+		Column: 5,
+	}})
+	if want := "server/src/gateway.rs:2:5: target();\n"; got != want {
+		t.Fatalf("formatUsageResult() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatUsageResultUsesAbsolutePathOutsideEditorCWD(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	editorCWD := filepath.Join(root, "users", "me", "project")
+	currentPath := filepath.Join(editorCWD, "server", "src", "gateway.rs")
+	targetPath := filepath.Join(root, "shared", "lib.rs")
+	manager := &lspManager{root: root}
+	server := &lspServer{
+		docs: map[string]documentState{
+			pathToURI(targetPath): {version: 1, text: "fn target() {}\n"},
+		},
+	}
+	view := wire.BufferView{
+		Name: "server/src/gateway.rs",
+		Path: currentPath,
+	}
+
+	got := formatUsageResult(manager, view, server, []locationTarget{{
+		Path:   targetPath,
+		Line:   1,
+		Column: 4,
+	}})
+	if want := targetPath + ":1:4: fn target() {}\n"; got != want {
+		t.Fatalf("formatUsageResult() = %q, want %q", got, want)
+	}
+}
+
 func TestDecodeWorkspaceSymbolTargetsSymbolInformation(t *testing.T) {
 	t.Parallel()
 
@@ -333,7 +390,7 @@ func TestFormatWorkspaceSymbolResult(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	got := formatWorkspaceSymbolResult(root, []workspaceSymbolTarget{
+	got := formatWorkspaceSymbolResult(root, wire.BufferView{}, []workspaceSymbolTarget{
 		{
 			Name:          "Demo",
 			ContainerName: "pkg",

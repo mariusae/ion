@@ -831,7 +831,7 @@ func finishWorkspaceSymbol(ctx context.Context, client *clientsession.Client, ma
 	if err != nil || len(symbols) == 0 {
 		return client.FinishInvocation(invocationID, "no symbols found", "", "")
 	}
-	text := formatWorkspaceSymbolResult(manager.root, symbols)
+	text := formatWorkspaceSymbolResult(manager.root, view, symbols)
 	if strings.TrimSpace(text) == "" {
 		return client.FinishInvocation(invocationID, "no symbols found", "", "")
 	}
@@ -1568,14 +1568,46 @@ type workspaceSymbolTarget struct {
 }
 
 func (t locationTarget) DisplayPath(root string) string {
-	rel, err := filepath.Rel(root, t.Path)
+	return displayPath(root, t.Path)
+}
+
+func displayPath(base, path string) string {
+	rel, err := filepath.Rel(base, path)
 	if err != nil {
-		return t.Path
+		return path
 	}
-	if strings.HasPrefix(rel, "..") {
-		return t.Path
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return path
 	}
 	return rel
+}
+
+func displayPathForView(root string, view wire.BufferView, path string) string {
+	if cwd, ok := viewCWD(view); ok {
+		return displayPath(cwd, path)
+	}
+	return displayPath(root, path)
+}
+
+func viewCWD(view wire.BufferView) (string, bool) {
+	path := strings.TrimSpace(view.Path)
+	name := strings.TrimSpace(view.Name)
+	if path == "" || name == "" || filepath.IsAbs(name) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	name = filepath.Clean(name)
+	if path == "." || name == "." || !filepath.IsAbs(path) {
+		return "", false
+	}
+	cwd := filepath.Dir(path)
+	for nameDir := filepath.Dir(name); nameDir != "." && nameDir != string(filepath.Separator); nameDir = filepath.Dir(nameDir) {
+		cwd = filepath.Dir(cwd)
+	}
+	if filepath.Clean(filepath.Join(cwd, name)) != path {
+		return "", false
+	}
+	return cwd, true
 }
 
 func decodeLocationTarget(raw json.RawMessage) (locationTarget, error) {
@@ -1935,15 +1967,15 @@ func formatUsageResult(manager *lspManager, view wire.BufferView, server *lspSer
 		seen[key] = struct{}{}
 		line := targetLineText(manager, view, server, target)
 		if line != "" {
-			fmt.Fprintf(&b, "%s:%d:%d: %s\n", target.DisplayPath(manager.root), target.Line, target.Column, line)
+			fmt.Fprintf(&b, "%s:%d:%d: %s\n", displayPathForView(manager.root, view, target.Path), target.Line, target.Column, line)
 			continue
 		}
-		fmt.Fprintf(&b, "%s:%d:%d\n", target.DisplayPath(manager.root), target.Line, target.Column)
+		fmt.Fprintf(&b, "%s:%d:%d\n", displayPathForView(manager.root, view, target.Path), target.Line, target.Column)
 	}
 	return b.String()
 }
 
-func formatWorkspaceSymbolResult(root string, symbols []workspaceSymbolTarget) string {
+func formatWorkspaceSymbolResult(root string, view wire.BufferView, symbols []workspaceSymbolTarget) string {
 	if len(symbols) == 0 {
 		return ""
 	}
@@ -1961,14 +1993,14 @@ func formatWorkspaceSymbolResult(root string, symbols []workspaceSymbolTarget) s
 				continue
 			}
 			seen[key] = struct{}{}
-			fmt.Fprintf(&b, "%s:%d:%d: %s\n", symbol.Target.DisplayPath(root), symbol.Target.Line, symbol.Target.Column, name)
+			fmt.Fprintf(&b, "%s:%d:%d: %s\n", displayPathForView(root, view, symbol.Target.Path), symbol.Target.Line, symbol.Target.Column, name)
 		case symbol.HasLocation && symbol.Target.Path != "":
 			key := fmt.Sprintf("%s:%s", symbol.Target.Path, name)
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
-			fmt.Fprintf(&b, "%s: %s\n", symbol.Target.DisplayPath(root), name)
+			fmt.Fprintf(&b, "%s: %s\n", displayPathForView(root, view, symbol.Target.Path), name)
 		default:
 			if _, ok := seen[name]; ok {
 				continue

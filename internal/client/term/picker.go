@@ -21,6 +21,7 @@ const (
 	overlayModeCommandPicker
 	overlayModeFilePicker
 	overlayModeDirectoryPicker
+	overlayModeRecursiveFilePicker
 	overlayModePickPicker
 	overlayModeRefinePicker
 )
@@ -44,6 +45,9 @@ type overlayPicker struct {
 	filtered  []int
 	selected  int
 	preferred string
+	scanning  bool
+	scanRoot  string
+	scanErr   string
 }
 
 type overlayPickerSnapshot struct {
@@ -498,6 +502,74 @@ func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wi
 	return items, preferred, nil
 }
 
+func buildRecursiveFilePickerItems(root string, paths []string, buffer *bufferState, files []wire.MenuFile) ([]overlayPickerItem, string) {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "" {
+		root = "."
+	}
+	currentPath := ""
+	if buffer != nil {
+		currentPath = strings.TrimSpace(buffer.path)
+	}
+	if currentPath != "" && !filepath.IsAbs(currentPath) {
+		if abs, err := filepath.Abs(currentPath); err == nil {
+			currentPath = abs
+		}
+	}
+	currentPath = filepath.Clean(currentPath)
+	loadedByPath := make(map[string]wire.MenuFile, len(files))
+	for _, file := range files {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+		}
+		loadedByPath[filepath.Clean(path)] = file
+	}
+	items := make([]overlayPickerItem, 0, len(paths))
+	preferred := ""
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+		}
+		path = filepath.Clean(path)
+		rel, err := filepath.Rel(root, path)
+		if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+			rel = path
+		}
+		current := sameMenuPath(path, currentPath)
+		item := overlayPickerItem{
+			key:     "path:" + path,
+			value:   rel,
+			path:    path,
+			current: current,
+		}
+		if loaded, ok := loadedByPath[path]; ok {
+			item.fileID = loaded.ID
+			item.current = loaded.Current
+			item.label = fmt.Sprintf("%c-%c %s", dirtyMark(loaded.Dirty, loaded.Changed), currentMark(loaded.Current), rel)
+		} else {
+			item.label = "    " + rel
+		}
+		item.search = strings.ToLower(item.label)
+		items = append(items, item)
+		if current {
+			preferred = "path:" + path
+		}
+	}
+	return items, preferred
+}
+
 func buildPickPickerItems(lines []string) ([]overlayPickerItem, string) {
 	items := make([]overlayPickerItem, 0, len(lines))
 	preferred := ""
@@ -678,6 +750,17 @@ func (o *overlayState) openPicker(mode overlayMode, items []overlayPickerItem, p
 	o.refreshPicker()
 }
 
+func (o *overlayState) setPickerItems(items []overlayPickerItem, preferred string) {
+	if o == nil || o.picker == nil {
+		return
+	}
+	o.picker.items = append([]overlayPickerItem(nil), items...)
+	if strings.TrimSpace(preferred) != "" {
+		o.picker.preferred = strings.TrimSpace(preferred)
+	}
+	o.refreshPicker()
+}
+
 func (o *overlayState) closePicker() {
 	if o == nil {
 		return
@@ -781,6 +864,12 @@ func (o *overlayState) refreshPicker() {
 			}
 			continue
 		}
+		if o.picker.mode == overlayModeRecursiveFilePicker {
+			if query == "" || fuzzyPickerMatch(query, item.search) {
+				filtered = append(filtered, i)
+			}
+			continue
+		}
 		if query == "" || strings.Contains(item.search, query) {
 			filtered = append(filtered, i)
 		}
@@ -803,4 +892,22 @@ func (o *overlayState) refreshPicker() {
 		}
 	}
 	o.picker.selected = 0
+}
+
+func fuzzyPickerMatch(query, candidate string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	candidate = strings.ToLower(candidate)
+	if query == "" {
+		return true
+	}
+	next := 0
+	for _, r := range candidate {
+		if next >= len(query) {
+			return true
+		}
+		if r == rune(query[next]) {
+			next++
+		}
+	}
+	return next >= len(query)
 }

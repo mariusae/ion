@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	clienttarget "ion/internal/client/target"
@@ -458,7 +459,18 @@ func wrapOverlayRunes(content []rune, prefix string) []overlayRenderLine {
 
 func (o *overlayState) renderAllLines() []overlayRenderLine {
 	if o != nil && o.picker != nil {
-		lines := make([]overlayRenderLine, 0, len(o.picker.filtered))
+		lines := make([]overlayRenderLine, 0, len(o.picker.filtered)+1)
+		if o.picker.scanning || strings.TrimSpace(o.picker.scanErr) != "" {
+			label := strings.TrimSpace(o.picker.scanErr)
+			if label == "" {
+				label = pickerScanSpinner() + " scanning " + strings.TrimSpace(o.picker.scanRoot)
+			}
+			wrapped := wrapOverlayRunes([]rune(label), "  ")
+			for i := range wrapped {
+				wrapped[i].history = -1
+			}
+			lines = append(lines, wrapped...)
+		}
 		for order, idx := range o.picker.filtered {
 			item := o.picker.items[idx]
 			prefix := "  "
@@ -499,6 +511,15 @@ func (o *overlayState) renderAllLines() []overlayRenderLine {
 		lines = append(lines, wrapped...)
 	}
 	return lines
+}
+
+func pickerScanSpinner() string {
+	frames := [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	idx := int(time.Since(shimmerStart)/(90*time.Millisecond)) % len(frames)
+	if idx < 0 {
+		idx = 0
+	}
+	return frames[idx]
 }
 
 func (o *overlayState) renderPromptLines() []overlayRenderLine {

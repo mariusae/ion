@@ -94,6 +94,45 @@ func TestOverlayCommandPickerDefaultsToPreferredAndFilters(t *testing.T) {
 	}
 }
 
+func TestOverlayRecursiveFilePickerUsesFuzzyMatching(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{key: "path:terminal.go", label: "    terminal.go", value: "terminal.go", search: "terminal.go"},
+		{key: "path:theme.go", label: "    theme.go", value: "theme.go", search: "theme.go"},
+	}, "")
+	overlay.insert([]rune("term.go"))
+
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() = false, want fuzzy match")
+	}
+	if got, want := selected.value, "terminal.go"; got != want {
+		t.Fatalf("selected value = %q, want %q", got, want)
+	}
+	if got, want := len(overlay.picker.filtered), 1; got != want {
+		t.Fatalf("filtered len = %d, want %d", got, want)
+	}
+}
+
+func TestOverlayCommandPickerDoesNotUseFuzzyMatching(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeCommandPicker, []overlayPickerItem{{
+		key:    "catalog::term:terminal",
+		label:  ":term:terminal",
+		value:  ":term:terminal",
+		search: ":term:terminal",
+	}}, "")
+	overlay.insert([]rune("termal"))
+
+	if got, want := len(overlay.picker.filtered), 0; got != want {
+		t.Fatalf("filtered len = %d, want %d", got, want)
+	}
+}
+
 func TestBuildFilePickerItemsPrefersCurrentFile(t *testing.T) {
 	t.Parallel()
 
@@ -292,6 +331,74 @@ func TestBuildDirectoryPickerItemsLeavesUnloadedFilesAligned(t *testing.T) {
 	}
 	if got, want := items[2].label, "    plain.txt"; got != want {
 		t.Fatalf("unloaded label = %q, want %q", got, want)
+	}
+}
+
+func TestBuildRecursiveFilePickerItemsUsesRelativePathsAndLoadedMarks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	currentPath := filepath.Join(root, "current.go")
+	nestedPath := filepath.Join(root, "pkg", "nested.go")
+	if err := os.Mkdir(filepath.Dir(nestedPath), 0o755); err != nil {
+		t.Fatalf("Mkdir(pkg) error = %v", err)
+	}
+	if err := os.WriteFile(currentPath, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current) error = %v", err)
+	}
+	if err := os.WriteFile(nestedPath, []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+
+	items, preferred := buildRecursiveFilePickerItems(root, []string{nestedPath, currentPath}, newBufferState(wire.BufferView{
+		Name: "current.go",
+		Path: currentPath,
+	}), []wire.MenuFile{
+		{ID: 1, Name: "current.go", Path: currentPath, Dirty: true, Current: true},
+	})
+	if got, want := preferred, "path:"+currentPath; got != want {
+		t.Fatalf("preferred = %q, want %q", got, want)
+	}
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].label, "    "+filepath.Join("pkg", "nested.go"); got != want {
+		t.Fatalf("nested label = %q, want %q", got, want)
+	}
+	if got, want := items[1].label, "'-. current.go"; got != want {
+		t.Fatalf("current label = %q, want %q", got, want)
+	}
+	if !strings.Contains(items[0].search, filepath.Join("pkg", "nested.go")) {
+		t.Fatalf("nested search = %q, want relative path", items[0].search)
+	}
+}
+
+func TestRecursivePickerRenderShowsScanningIndicatorWithoutSelection(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{{
+		key:    "path:/tmp/a.go",
+		label:  "    a.go",
+		value:  "a.go",
+		search: "a.go",
+		path:   "/tmp/a.go",
+	}}, "")
+	overlay.picker.scanning = true
+	overlay.picker.scanRoot = "/tmp"
+
+	lines := overlay.renderAllLines()
+	if len(lines) < 2 {
+		t.Fatalf("len(lines) = %d, want scanning line and item", len(lines))
+	}
+	if !strings.Contains(lines[0].text, "scanning /tmp") {
+		t.Fatalf("first line = %q, want scanning indicator", lines[0].text)
+	}
+	if lines[0].pickerActive {
+		t.Fatal("scanning line pickerActive = true, want false")
+	}
+	if !lines[1].pickerActive {
+		t.Fatal("first item pickerActive = false, want true")
 	}
 }
 

@@ -874,6 +874,10 @@ func (o *overlayState) refreshPicker() {
 			filtered = append(filtered, i)
 		}
 	}
+	if o.picker.mode == overlayModeRecursiveFilePicker && query != "" {
+		sortRecursivePickerMatches(o.picker.items, filtered, query)
+		previousKey = ""
+	}
 	o.picker.filtered = filtered
 	o.picker.selected = -1
 	if len(filtered) == 0 {
@@ -895,19 +899,125 @@ func (o *overlayState) refreshPicker() {
 }
 
 func fuzzyPickerMatch(query, candidate string) bool {
+	_, ok := fuzzyPickerPositions(query, candidate)
+	return ok
+}
+
+func fuzzyPickerPositions(query, candidate string) ([]int, bool) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	candidate = strings.ToLower(candidate)
 	if query == "" {
-		return true
+		return nil, true
 	}
+	queryRunes := []rune(query)
+	candidateRunes := []rune(candidate)
 	next := 0
-	for _, r := range candidate {
-		if next >= len(query) {
-			return true
+	positions := make([]int, 0, len(queryRunes))
+	for i, r := range candidateRunes {
+		if next >= len(queryRunes) {
+			return positions, true
 		}
-		if r == rune(query[next]) {
+		if r == queryRunes[next] {
+			positions = append(positions, i)
 			next++
 		}
 	}
-	return next >= len(query)
+	return positions, next >= len(queryRunes)
+}
+
+type recursivePickerMatchScore struct {
+	score int
+	value string
+}
+
+func sortRecursivePickerMatches(items []overlayPickerItem, filtered []int, query string) {
+	scores := make(map[int]recursivePickerMatchScore, len(filtered))
+	for _, idx := range filtered {
+		scores[idx] = scoreRecursivePickerMatch(query, items[idx])
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left := filtered[i]
+		right := filtered[j]
+		leftScore := scores[left]
+		rightScore := scores[right]
+		if leftScore.score != rightScore.score {
+			return leftScore.score > rightScore.score
+		}
+		if leftScore.value != rightScore.value {
+			return leftScore.value < rightScore.value
+		}
+		return left < right
+	})
+}
+
+func scoreRecursivePickerMatch(query string, item overlayPickerItem) recursivePickerMatchScore {
+	candidate := strings.TrimSpace(item.value)
+	if candidate == "" {
+		candidate = strings.TrimSpace(item.search)
+	}
+	positions, ok := fuzzyPickerPositions(query, candidate)
+	queryRunes := []rune(strings.ToLower(strings.TrimSpace(query)))
+	candidateRunes := []rune(strings.ToLower(candidate))
+	if !ok || len(queryRunes) == 0 || len(candidateRunes) == 0 {
+		return recursivePickerMatchScore{value: candidate}
+	}
+	exactChars := 0
+	longestRun := 0
+	boundaryBonus := 0
+	basenameBonus := 0
+	basenameStart := recursivePickerBasenameStart(candidateRunes)
+	for start := 0; start < len(positions); {
+		end := start + 1
+		for end < len(positions) && positions[end] == positions[end-1]+1 {
+			end++
+		}
+		runLen := end - start
+		if runLen > longestRun {
+			longestRun = runLen
+		}
+		if runLen >= 2 || len(queryRunes) == 1 {
+			exactChars += runLen
+		}
+		runStart := positions[start]
+		if recursivePickerBoundary(candidateRunes, runStart) {
+			boundaryBonus += 80
+		}
+		if runStart >= basenameStart {
+			basenameBonus += 40
+		}
+		start = end
+	}
+	gapPenalty := 0
+	if len(positions) > 1 {
+		span := positions[len(positions)-1] - positions[0] + 1
+		gapPenalty = span - len(positions)
+	}
+	queryLen := len(queryRunes)
+	score := 1000*exactChars/queryLen +
+		200*longestRun/queryLen +
+		boundaryBonus +
+		basenameBonus -
+		20*gapPenalty -
+		len(candidateRunes)
+	return recursivePickerMatchScore{
+		score: score,
+		value: candidate,
+	}
+}
+
+func recursivePickerBasenameStart(candidate []rune) int {
+	for i := len(candidate) - 1; i >= 0; i-- {
+		if candidate[i] == '/' || candidate[i] == '\\' {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func recursivePickerBoundary(candidate []rune, idx int) bool {
+	if idx <= 0 || idx >= len(candidate) {
+		return idx == 0
+	}
+	prev := candidate[idx-1]
+	return prev == '/' || prev == '\\' || prev == '_' || prev == '-' || prev == '.'
 }

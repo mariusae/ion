@@ -116,6 +116,61 @@ func TestOverlayRecursiveFilePickerUsesFuzzyMatching(t *testing.T) {
 	}
 }
 
+func TestOverlayRecursiveFilePickerRanksExactAboveFuzzy(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{key: "path:src/process.rs", label: "    src/process.rs", value: "src/process.rs", search: "src/process.rs"},
+		{key: "path:proc.rs", label: "    proc.rs", value: "proc.rs", search: "proc.rs"},
+		{key: "path:tools/p/r/o/c/r/s.rs", label: "    tools/p/r/o/c/r/s.rs", value: "tools/p/r/o/c/r/s.rs", search: "tools/p/r/o/c/r/s.rs"},
+	}, "")
+	overlay.insert([]rune("proc.rs"))
+
+	if got, want := recursivePickerFilteredValues(overlay), []string{"proc.rs", "src/process.rs", "tools/p/r/o/c/r/s.rs"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("filtered values = %#v, want %#v", got, want)
+	}
+	selected, ok := overlay.pickerSelected()
+	if !ok {
+		t.Fatal("pickerSelected() = false, want selected best match")
+	}
+	if got, want := selected.value, "proc.rs"; got != want {
+		t.Fatalf("selected value = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayRecursiveFilePickerRanksSegmentedExactRuns(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{key: "path:h/y/p/e/r/proc.rs", label: "    h/y/p/e/r/proc.rs", value: "h/y/p/e/r/proc.rs", search: "h/y/p/e/r/proc.rs"},
+		{key: "path:hyperactor/proc.rs", label: "    hyperactor/proc.rs", value: "hyperactor/proc.rs", search: "hyperactor/proc.rs"},
+		{key: "path:hyperdrive/process.rs", label: "    hyperdrive/process.rs", value: "hyperdrive/process.rs", search: "hyperdrive/process.rs"},
+	}, "")
+	overlay.insert([]rune("hyper/proc"))
+
+	got := recursivePickerFilteredValues(overlay)
+	if len(got) == 0 || got[0] != "hyperactor/proc.rs" {
+		t.Fatalf("filtered values = %#v, want hyperactor/proc.rs first", got)
+	}
+}
+
+func TestOverlayRecursiveFilePickerTiesLexicographically(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{key: "path:b/proc.rs", label: "    b/proc.rs", value: "b/proc.rs", search: "b/proc.rs"},
+		{key: "path:a/proc.rs", label: "    a/proc.rs", value: "a/proc.rs", search: "a/proc.rs"},
+	}, "")
+	overlay.insert([]rune("proc.rs"))
+
+	if got, want := recursivePickerFilteredValues(overlay), []string{"a/proc.rs", "b/proc.rs"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("filtered values = %#v, want %#v", got, want)
+	}
+}
+
 func TestOverlayCommandPickerDoesNotUseFuzzyMatching(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +186,17 @@ func TestOverlayCommandPickerDoesNotUseFuzzyMatching(t *testing.T) {
 	if got, want := len(overlay.picker.filtered), 0; got != want {
 		t.Fatalf("filtered len = %d, want %d", got, want)
 	}
+}
+
+func recursivePickerFilteredValues(overlay *overlayState) []string {
+	if overlay == nil || overlay.picker == nil {
+		return nil
+	}
+	values := make([]string, 0, len(overlay.picker.filtered))
+	for _, idx := range overlay.picker.filtered {
+		values = append(values, overlay.picker.items[idx].value)
+	}
+	return values
 }
 
 func TestBuildFilePickerItemsPrefersCurrentFile(t *testing.T) {

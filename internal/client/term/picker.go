@@ -961,6 +961,9 @@ func scoreRecursivePickerMatch(query string, item overlayPickerItem) recursivePi
 	if !ok || len(queryRunes) == 0 || len(candidateRunes) == 0 {
 		return recursivePickerMatchScore{value: candidate}
 	}
+	if exactPositions, ok := recursivePickerExactRunPositions(queryRunes, candidateRunes); ok {
+		positions = exactPositions
+	}
 	exactChars := 0
 	longestRun := 0
 	boundaryBonus := 0
@@ -1005,6 +1008,95 @@ func scoreRecursivePickerMatch(query string, item overlayPickerItem) recursivePi
 	}
 }
 
+func recursivePickerExactRunPositions(query, candidate []rune) ([]int, bool) {
+	if len(query) == 0 || len(candidate) == 0 {
+		return nil, false
+	}
+	if start, ok := recursivePickerBestSubstringStart(query, candidate, 0); ok {
+		return recursivePickerRangePositions(start, len(query)), true
+	}
+	segments := recursivePickerQuerySegments(query)
+	if len(segments) == 0 {
+		return nil, false
+	}
+	positions := make([]int, 0, len(query))
+	searchStart := 0
+	matched := 0
+	for _, segment := range segments {
+		start, ok := recursivePickerBestSubstringStart(segment, candidate, searchStart)
+		if !ok {
+			return nil, false
+		}
+		positions = append(positions, recursivePickerRangePositions(start, len(segment))...)
+		searchStart = start + len(segment)
+		matched += len(segment)
+	}
+	if matched == 0 {
+		return nil, false
+	}
+	return positions, true
+}
+
+func recursivePickerQuerySegments(query []rune) [][]rune {
+	var segments [][]rune
+	for start := 0; start < len(query); {
+		for start < len(query) && recursivePickerSeparator(query[start]) {
+			start++
+		}
+		end := start
+		for end < len(query) && !recursivePickerSeparator(query[end]) {
+			end++
+		}
+		if end > start {
+			segments = append(segments, query[start:end])
+		}
+		start = end
+	}
+	return segments
+}
+
+func recursivePickerBestSubstringStart(needle, haystack []rune, from int) (int, bool) {
+	best := -1
+	bestScore := 0
+	for i := from; i+len(needle) <= len(haystack); i++ {
+		if !recursivePickerRunesEqual(haystack[i:i+len(needle)], needle) {
+			continue
+		}
+		score := 0
+		if recursivePickerBoundary(haystack, i) {
+			score += 2
+		}
+		if i >= recursivePickerBasenameStart(haystack) {
+			score++
+		}
+		if best < 0 || score > bestScore || (score == bestScore && i < best) {
+			best = i
+			bestScore = score
+		}
+	}
+	return best, best >= 0
+}
+
+func recursivePickerRunesEqual(left, right []rune) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func recursivePickerRangePositions(start, length int) []int {
+	positions := make([]int, length)
+	for i := range positions {
+		positions[i] = start + i
+	}
+	return positions
+}
+
 func recursivePickerBasenameStart(candidate []rune) int {
 	for i := len(candidate) - 1; i >= 0; i-- {
 		if candidate[i] == '/' || candidate[i] == '\\' {
@@ -1020,4 +1112,8 @@ func recursivePickerBoundary(candidate []rune, idx int) bool {
 	}
 	prev := candidate[idx-1]
 	return prev == '/' || prev == '\\' || prev == '_' || prev == '-' || prev == '.'
+}
+
+func recursivePickerSeparator(r rune) bool {
+	return r == '/' || r == '\\' || r == '_' || r == '-' || r == '.'
 }

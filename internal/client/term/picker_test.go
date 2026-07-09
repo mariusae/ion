@@ -156,6 +156,41 @@ func TestOverlayRecursiveFilePickerRanksSegmentedExactRuns(t *testing.T) {
 	}
 }
 
+func TestOverlayRecursiveFilePickerRanksBasenameExactRunAboveEarlierFuzzyPathRun(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{
+			key:    "path:hyperactor/benches/main.rs",
+			label:  "    hyperactor/benches/main.rs",
+			value:  "hyperactor/benches/main.rs",
+			search: "hyperactor/benches/main.rs",
+		},
+		{
+			key:    "path:hyperactor/src/proc.rs",
+			label:  "    hyperactor/src/proc.rs",
+			value:  "hyperactor/src/proc.rs",
+			search: "hyperactor/src/proc.rs",
+		},
+		{
+			key:    "path:monarch_hyperactor/src/proc.rs",
+			label:  "    monarch_hyperactor/src/proc.rs",
+			value:  "monarch_hyperactor/src/proc.rs",
+			search: "monarch_hyperactor/src/proc.rs",
+		},
+	}, "")
+	overlay.insert([]rune("proc.rs"))
+
+	if got, want := recursivePickerFilteredValues(overlay), []string{
+		"hyperactor/src/proc.rs",
+		"monarch_hyperactor/src/proc.rs",
+		"hyperactor/benches/main.rs",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("filtered values = %#v, want %#v", got, want)
+	}
+}
+
 func TestOverlayRecursiveFilePickerTiesLexicographically(t *testing.T) {
 	t.Parallel()
 

@@ -100,3 +100,6 @@ Then in ion:
 `ion-lsp` is generic. It speaks normal LSP JSON-RPC over stdin/stdout with
 `Content-Length` framing. There is nothing Go-specific or Rust-specific in the
 transport layer beyond the configured server command and file-path match rules.
+
+
+ command completion

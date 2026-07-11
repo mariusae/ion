@@ -93,11 +93,13 @@ func main() {
 }
 
 type config struct {
-	socketPath string
-	foreground bool
-	readyFD    int
-	servers    map[string]string
-	matches    []matchRule
+	socketPath  string
+	foreground  bool
+	readyFD     int
+	useDefaults bool
+	servers     map[string]string
+	initOptions map[string]json.RawMessage
+	matches     []matchRule
 }
 
 type matchRule struct {
@@ -149,15 +151,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func parseArgs(args []string) (config, error) {
-	cfg, err := defaultConfig()
-	if err != nil {
-		return config{}, err
-	}
+	cfg := config{}
+	useDefaults := true
+	userServers := make(map[string]string)
+	userInitOptions := make(map[string]json.RawMessage)
+	var userMatches []matchRule
 	fs := flag.NewFlagSet("ion-lsp", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	cfg.useDefaults = useDefaults
 	fs.StringVar(&cfg.socketPath, "socket", "", "ion server socket path")
 	fs.BoolVar(&cfg.foreground, "foreground", false, "run in the foreground")
 	fs.IntVar(&cfg.readyFD, "ready-fd", -1, "internal: daemon startup pipe fd")
+	fs.BoolVar(&useDefaults, "defaults", true, "include default LSP servers and match rules")
 	fs.Func("server", "name:command", func(value string) error {
 		name, command, ok := splitNamedValue(value)
 		if !ok {
@@ -167,7 +172,23 @@ func parseArgs(args []string) (config, error) {
 		if name == "" {
 			return fmt.Errorf("bad -server %q", value)
 		}
-		cfg.servers[name] = strings.TrimSpace(command)
+		userServers[name] = strings.TrimSpace(command)
+		return nil
+	})
+	fs.Func("init-options", "name:json", func(value string) error {
+		name, options, ok := splitNamedPrefixValue(value)
+		if !ok {
+			return fmt.Errorf("bad -init-options %q, want name:json", value)
+		}
+		name = normalizeServerName(name)
+		if name == "" {
+			return fmt.Errorf("bad -init-options %q", value)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(options), &parsed); err != nil {
+			return fmt.Errorf("bad -init-options json for %q: %w", name, err)
+		}
+		userInitOptions[name] = json.RawMessage(options)
 		return nil
 	})
 	fs.Func("match", "regexp:name", func(value string) error {
@@ -183,7 +204,7 @@ func parseArgs(args []string) (config, error) {
 		if err != nil {
 			return fmt.Errorf("bad -match regexp %q: %w", pattern, err)
 		}
-		cfg.matches = append(cfg.matches, matchRule{
+		userMatches = append(userMatches, matchRule{
 			pattern: pattern,
 			re:      re,
 			server:  server,
@@ -196,12 +217,35 @@ func parseArgs(args []string) (config, error) {
 	if len(fs.Args()) != 0 {
 		return config{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	cfg.useDefaults = useDefaults
 	if cfg.socketPath == "" {
 		cfg.socketPath = strings.TrimSpace(os.Getenv("ION_SOCKET"))
 	}
 	if cfg.socketPath == "" {
 		return config{}, fmt.Errorf("missing ion socket; run from ion or pass -socket")
 	}
+	cfg.servers = make(map[string]string)
+	cfg.initOptions = make(map[string]json.RawMessage)
+	if useDefaults {
+		defaults, err := defaultConfig()
+		if err != nil {
+			return config{}, err
+		}
+		for name, command := range defaults.servers {
+			cfg.servers[name] = command
+		}
+		for name, options := range defaults.initOptions {
+			cfg.initOptions[name] = options
+		}
+		cfg.matches = append(cfg.matches, defaults.matches...)
+	}
+	for name, command := range userServers {
+		cfg.servers[name] = command
+	}
+	for name, options := range userInitOptions {
+		cfg.initOptions[name] = options
+	}
+	cfg.matches = append(cfg.matches, userMatches...)
 	for _, rule := range cfg.matches {
 		if _, ok := cfg.servers[rule.server]; !ok {
 			return config{}, fmt.Errorf("-match %q references unknown server %q", rule.pattern, rule.server)
@@ -212,8 +256,10 @@ func parseArgs(args []string) (config, error) {
 
 func defaultConfig() (config, error) {
 	cfg := config{
-		servers: make(map[string]string, len(defaultLSPServers)),
-		matches: make([]matchRule, 0, len(defaultLSPMatchRules)),
+		useDefaults: true,
+		servers:     make(map[string]string, len(defaultLSPServers)),
+		initOptions: make(map[string]json.RawMessage),
+		matches:     make([]matchRule, 0, len(defaultLSPMatchRules)),
 	}
 	for name, command := range defaultLSPServers {
 		cfg.servers[name] = command
@@ -235,6 +281,15 @@ func defaultConfig() (config, error) {
 func splitNamedValue(value string) (string, string, bool) {
 	value = strings.TrimSpace(value)
 	i := strings.LastIndexByte(value, ':')
+	if i <= 0 || i == len(value)-1 {
+		return "", "", false
+	}
+	return strings.TrimSpace(value[:i]), strings.TrimSpace(value[i+1:]), true
+}
+
+func splitNamedPrefixValue(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	i := strings.IndexByte(value, ':')
 	if i <= 0 || i == len(value)-1 {
 		return "", "", false
 	}
@@ -270,8 +325,14 @@ func daemonize(cfg config, stderr io.Writer) error {
 	defer devNull.Close()
 
 	cmdArgs := []string{"-foreground", "-socket", cfg.socketPath, "-ready-fd", "3"}
+	if !cfg.useDefaults {
+		cmdArgs = append(cmdArgs, "-defaults=false")
+	}
 	for name, command := range cfg.servers {
 		cmdArgs = append(cmdArgs, "-server", name+":"+command)
+	}
+	for name, options := range cfg.initOptions {
+		cmdArgs = append(cmdArgs, "-init-options", name+":"+string(options))
 	}
 	for _, rule := range cfg.matches {
 		cmdArgs = append(cmdArgs, "-match", rule.pattern+":"+rule.server)
@@ -465,11 +526,12 @@ func newLSPManager(root string, cfg config, statusFn func(string)) *lspManager {
 	for name, command := range cfg.servers {
 		serverName := name
 		servers[name] = &lspServer{
-			name:       serverName,
-			languageID: serverName,
-			command:    command,
-			root:       root,
-			rootURI:    pathToURI(root),
+			name:        serverName,
+			languageID:  serverName,
+			command:     command,
+			initOptions: cfg.initOptions[name],
+			root:        root,
+			rootURI:     pathToURI(root),
 			statusFn: func(message string) {
 				if statusFn == nil {
 					return
@@ -544,6 +606,7 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 		return "", nil, false
 	}
 	var matched *lspServer
+	bestSpecificity := -1
 	for _, rule := range m.matches {
 		if !rule.re.MatchString(path) {
 			continue
@@ -552,12 +615,38 @@ func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) 
 		if server == nil {
 			return "", nil, false
 		}
+		specificity := matchRuleSpecificity(rule.pattern)
+		if specificity < bestSpecificity {
+			continue
+		}
+		bestSpecificity = specificity
 		matched = server
 	}
 	if matched == nil {
 		return "", nil, false
 	}
 	return path, matched, true
+}
+
+func matchRuleSpecificity(pattern string) int {
+	specificity := 0
+	escaped := false
+	for _, r := range pattern {
+		if escaped {
+			specificity++
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if strings.ContainsRune(`.^$*+?()[]{}|`, r) {
+			continue
+		}
+		specificity++
+	}
+	return specificity
 }
 
 func (m *lspManager) currentTarget(view wire.BufferView) (*lspServer, lspPosition, string, error) {
@@ -932,12 +1021,13 @@ func finishLog(client *clientsession.Client, manager *lspManager, invocationID u
 }
 
 type lspServer struct {
-	name       string
-	languageID string
-	command    string
-	root       string
-	rootURI    string
-	statusFn   func(string)
+	name        string
+	languageID  string
+	command     string
+	initOptions json.RawMessage
+	root        string
+	rootURI     string
+	statusFn    func(string)
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
@@ -1102,7 +1192,7 @@ func (s *lspServer) ensureStarted() error {
 	go s.readLoop(stdout)
 	go s.stderrLoop(stderr)
 
-	_, err = s.Request("initialize", map[string]any{
+	params := map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   s.rootURI,
 		"capabilities": map[string]any{
@@ -1126,7 +1216,16 @@ func (s *lspServer) ensureStarted() error {
 		"workspaceFolders": []map[string]any{
 			{"uri": s.rootURI, "name": filepath.Base(s.root)},
 		},
-	}, 60*time.Second)
+	}
+	if len(s.initOptions) > 0 {
+		var options any
+		if err := json.Unmarshal(s.initOptions, &options); err != nil {
+			s.Close()
+			return err
+		}
+		params["initializationOptions"] = options
+	}
+	_, err = s.Request("initialize", params, 60*time.Second)
 	if err != nil {
 		s.Close()
 		return err

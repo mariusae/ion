@@ -437,3 +437,5 @@ Ion should adopt Neovim's renderer architecture in substance:
 
 We should not continue investing in the current whole-frame diff model beyond
 what is needed to keep the editor usable during the rewrite.
+
+Okay, testing editing now.

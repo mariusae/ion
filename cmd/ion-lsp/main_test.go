@@ -76,6 +76,53 @@ func TestParseArgsIncludesDefaultServersAndMatches(t *testing.T) {
 	}
 }
 
+func TestParseArgsCanDisableDefaultServersAndMatches(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{
+		"-socket", "/tmp/ion.sock",
+		"-defaults=false",
+		"-server=rust:rust-analyzer",
+		"-match=\\.rs$:rust",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if got, want := len(cfg.servers), 1; got != want {
+		t.Fatalf("len(servers) = %d, want %d: %#v", got, want, cfg.servers)
+	}
+	if cfg.useDefaults {
+		t.Fatal("useDefaults = true, want false")
+	}
+	if got, want := cfg.servers["rust"], "rust-analyzer"; got != want {
+		t.Fatalf("rust server = %q, want %q", got, want)
+	}
+	if got, want := len(cfg.matches), 1; got != want {
+		t.Fatalf("len(matches) = %d, want %d", got, want)
+	}
+	if got, want := cfg.matches[0].server, "rust"; got != want {
+		t.Fatalf("match server = %q, want %q", got, want)
+	}
+}
+
+func TestParseArgsParsesInitOptions(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{
+		"-socket", "/tmp/ion.sock",
+		"-server=rust:rust-analyzer",
+		`-init-options=rust:{"linkedProjects":["/repo/Cargo.toml"]}`,
+	})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	got := string(cfg.initOptions["rust"])
+	want := `{"linkedProjects":["/repo/Cargo.toml"]}`
+	if got != want {
+		t.Fatalf("rust init options = %q, want %q", got, want)
+	}
+}
+
 func TestParseArgsUserServerOverridesDefault(t *testing.T) {
 	t.Parallel()
 
@@ -91,7 +138,7 @@ func TestParseArgsUserServerOverridesDefault(t *testing.T) {
 	}
 }
 
-func TestMatchViewUsesLastMatchingRule(t *testing.T) {
+func TestMatchViewUsesMostSpecificMatchingRule(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -116,6 +163,58 @@ func TestMatchViewUsesLastMatchingRule(t *testing.T) {
 		t.Fatalf("path = %q, want %q", got, want)
 	}
 	if got, want := gotServer.name, "go"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+}
+
+func TestMatchViewKeepsRustAboveBroadClangRule(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manager := &lspManager{
+		root: root,
+		matches: []matchRule{
+			{pattern: `\.rs$`, re: regexp.MustCompile(`\.rs$`), server: "rust"},
+			{pattern: `.*`, re: regexp.MustCompile(`.*`), server: "clang"},
+		},
+		servers: map[string]*lspServer{
+			"rust":  {name: "rust"},
+			"clang": {name: "clang"},
+		},
+	}
+
+	path := filepath.Join(root, "pkg", "lib.rs")
+	_, gotServer, ok := manager.matchView(wire.BufferView{Name: path})
+	if !ok {
+		t.Fatal("matchView() ok = false, want true")
+	}
+	if got, want := gotServer.name, "rust"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+}
+
+func TestMatchViewUsesLaterRuleWhenSpecificityTies(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manager := &lspManager{
+		root: root,
+		matches: []matchRule{
+			{pattern: `\.rs$`, re: regexp.MustCompile(`\.rs$`), server: "rust"},
+			{pattern: `.*\.rs$`, re: regexp.MustCompile(`.*\.rs$`), server: "clang"},
+		},
+		servers: map[string]*lspServer{
+			"rust":  {name: "rust"},
+			"clang": {name: "clang"},
+		},
+	}
+
+	path := filepath.Join(root, "pkg", "lib.rs")
+	_, gotServer, ok := manager.matchView(wire.BufferView{Name: path})
+	if !ok {
+		t.Fatal("matchView() ok = false, want true")
+	}
+	if got, want := gotServer.name, "clang"; got != want {
 		t.Fatalf("server = %q, want %q", got, want)
 	}
 }

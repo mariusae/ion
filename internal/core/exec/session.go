@@ -2505,9 +2505,32 @@ func shellEnv(f *text.File, extra []string) []string {
 	}
 	env := []string{
 		"samfile=" + name,
+		"samfilewithlineno=" + samFileWithLineNo(f),
 		"%=" + name,
 	}
 	return append(env, extra...)
+}
+
+func samFileWithLineNo(f *text.File) string {
+	if f == nil {
+		return ""
+	}
+	name := trimToken(f.Name.UTF8())
+	if name == "" {
+		return ""
+	}
+	l1, err := lineNumberAt(f, f.Dot.P1)
+	if err != nil {
+		return name
+	}
+	l2, err := lineNumberEnd(f, f.Dot)
+	if err != nil {
+		return name
+	}
+	if l1 == l2 {
+		return fmt.Sprintf("%s:%d", name, l1)
+	}
+	return fmt.Sprintf("%s:%d,%d", name, l1, l2)
 }
 
 func (s *Session) writeShellWarnings(res shellResult, warnOnExit bool) error {

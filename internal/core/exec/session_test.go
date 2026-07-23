@@ -424,6 +424,63 @@ func TestSetCurrentAddressMovesDotWithoutPrinting(t *testing.T) {
 	}
 }
 
+func TestShellEnvIncludesSamFileWithLineNo(t *testing.T) {
+	t.Parallel()
+
+	d, err := text.NewDisk()
+	if err != nil {
+		t.Fatalf("new disk: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+
+	f := text.NewFile(d)
+	if _, _, err := f.LoadInitial(strings.NewReader("one\ntwo\nthree\n")); err != nil {
+		t.Fatalf("load initial: %v", err)
+	}
+	name := text.NewStringFromUTF8("path/to/file")
+	if err := f.Name.DupString(&name); err != nil {
+		t.Fatalf("set name: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		dot  text.Range
+		want string
+	}{
+		{name: "single line", dot: text.Range{P1: 4, P2: 7}, want: "path/to/file:2"},
+		{name: "multiple lines", dot: text.Range{P1: 1, P2: 10}, want: "path/to/file:1,3"},
+		{name: "empty dot", dot: text.Range{P1: 8, P2: 8}, want: "path/to/file:3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.Dot = tt.dot
+			env := shellEnv(f, nil)
+			var got string
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "samfilewithlineno=") {
+					got = strings.TrimPrefix(entry, "samfilewithlineno=")
+					break
+				}
+			}
+			if got != tt.want {
+				t.Fatalf("samfilewithlineno = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShellEnvLeavesSamFileWithLineNoEmptyForUnnamedFile(t *testing.T) {
+	env := shellEnv(nil, nil)
+	for _, entry := range env {
+		if entry == "samfilewithlineno=" {
+			return
+		}
+	}
+	t.Fatalf("shell env = %q, want empty samfilewithlineno", env)
+}
+
 func TestOpenFilesPathsTreatsColonSuffixAsLiteralPath(t *testing.T) {
 	t.Parallel()
 

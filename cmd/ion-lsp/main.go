@@ -597,6 +597,37 @@ func (m *lspManager) syncBuffers(client *clientsession.Client) error {
 	return nil
 }
 
+func (m *lspManager) syncBuffersForView(client *clientsession.Client, targetView wire.BufferView) error {
+	if m == nil || client == nil {
+		return nil
+	}
+	buffers, err := client.BufferSnapshots()
+	if err != nil {
+		return err
+	}
+	return m.syncBufferViewsForView(buffers, targetView)
+}
+
+func (m *lspManager) syncBufferViewsForView(buffers []wire.BufferView, targetView wire.BufferView) error {
+	if m == nil {
+		return nil
+	}
+	_, targetServer, ok := m.matchView(targetView)
+	if !ok {
+		return nil
+	}
+	grouped := make([]wire.BufferView, 0, len(buffers))
+	for _, view := range buffers {
+		path, server, ok := m.matchView(view)
+		if !ok || server.name != targetServer.name {
+			continue
+		}
+		view.Path = path
+		grouped = append(grouped, view)
+	}
+	return targetServer.Sync(grouped)
+}
+
 func (m *lspManager) matchView(view wire.BufferView) (string, *lspServer, bool) {
 	if m == nil {
 		return "", nil, false
@@ -684,10 +715,6 @@ func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *
 	if cancelClient != nil {
 		ctx = canceledInvocationContext(cancelClient, inv.ID)
 	}
-	if err := manager.syncBuffers(aux); err != nil {
-		_ = client.FinishInvocation(inv.ID, err.Error(), "", "")
-		return nil
-	}
 	if err := client.Take(inv.SessionID); err != nil {
 		return client.FinishInvocation(inv.ID, err.Error(), "", "")
 	}
@@ -696,6 +723,10 @@ func handleInvocation(client, aux, cancelClient *clientsession.Client, manager *
 	}()
 	view, err := session.CurrentView()
 	if err != nil {
+		_ = client.FinishInvocation(inv.ID, err.Error(), "", "")
+		return nil
+	}
+	if err := manager.syncBuffersForView(aux, view); err != nil {
 		_ = client.FinishInvocation(inv.ID, err.Error(), "", "")
 		return nil
 	}

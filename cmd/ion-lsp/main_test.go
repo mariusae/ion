@@ -219,6 +219,49 @@ func TestMatchViewUsesLaterRuleWhenSpecificityTies(t *testing.T) {
 	}
 }
 
+func TestSyncBufferViewsForViewIgnoresUnrelatedClosedServer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rustPath := filepath.Join(root, "src", "lib.rs")
+	pythonPath := filepath.Join(root, "tools", "helper.py")
+	rustText := "fn target() {}\n"
+	manager := &lspManager{
+		root: root,
+		matches: []matchRule{
+			{pattern: `\.rs$`, re: regexp.MustCompile(`\.rs$`), server: "rust"},
+			{pattern: `\.py$`, re: regexp.MustCompile(`\.py$`), server: "python"},
+		},
+		servers: map[string]*lspServer{
+			"rust": {
+				name:        "rust",
+				initialized: true,
+				docs: map[string]documentState{
+					pathToURI(rustPath): {version: 1, text: rustText},
+				},
+			},
+			"python": {
+				name:   "python",
+				closed: true,
+			},
+		},
+	}
+	buffers := []wire.BufferView{
+		{Name: rustPath, Text: rustText},
+		{Name: pythonPath, Text: "def helper():\n    pass\n"},
+	}
+
+	if err := manager.syncBufferViewsForView(buffers, buffers[0]); err != nil {
+		t.Fatalf("syncBufferViewsForView(rust) error = %v", err)
+	}
+	if err := manager.syncBuffersForView(nil, buffers[0]); err != nil {
+		t.Fatalf("syncBuffersForView(nil client) error = %v", err)
+	}
+	if err := manager.servers["python"].Sync([]wire.BufferView{buffers[1]}); err == nil || !strings.Contains(err.Error(), "python server closed") {
+		t.Fatalf("python Sync() error = %v, want python server closed", err)
+	}
+}
+
 func TestDecodeLocationTargetLocationList(t *testing.T) {
 	t.Parallel()
 

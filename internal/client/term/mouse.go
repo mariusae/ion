@@ -580,6 +580,9 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 	if state == nil {
 		return false
 	}
+	if handleScrollbarMouseEvent(state, overlay, event) {
+		return true
+	}
 	viewRows := bufferViewRows(overlay)
 	if overlay != nil && overlay.visible && event.y >= viewRows {
 		overlay.close()
@@ -645,6 +648,43 @@ func handleMouseEvent(state *bufferState, overlay *overlayState, event mouseEven
 	return true
 }
 
+func handleScrollbarMouseEvent(state *bufferState, overlay *overlayState, event mouseEvent) bool {
+	if state == nil || !event.pressed || event.isMotion() || !isScrollbarColumn(event.x) {
+		return false
+	}
+	rows := scrollbarClickRows(state, overlay, event.y)
+	switch event.baseButton() {
+	case 0:
+		_ = scrollBufferRows(state, -1, rows)
+		return true
+	case 2:
+		_ = scrollBufferRows(state, 1, rows)
+		return true
+	default:
+		return false
+	}
+}
+
+func scrollbarClickRows(state *bufferState, overlay *overlayState, row int) int {
+	if row < 0 {
+		row = 0
+	}
+	start, end := scrollbarThumbRows(state, overlay, termRows)
+	thumbRows := end - start
+	if thumbRows < 1 {
+		thumbRows = 1
+	}
+	viewRows := bufferViewRows(overlay)
+	if viewRows < 1 {
+		viewRows = 1
+	}
+	rows := (row*viewRows + thumbRows/2) / thumbRows
+	if row > 0 && rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
 func updateMouseSelection(state *bufferState, start, end int) {
 	if start <= end {
 		state.dotStart = start
@@ -664,6 +704,9 @@ func screenToPos(state *bufferState, overlay *overlayState, row, col int) (int, 
 	}
 	if col < 0 {
 		col = 0
+	}
+	if isScrollbarColumn(col) {
+		return 0, false
 	}
 	layout := state.visibleLayout(overlay)
 	if layout == nil || len(layout.rows) == 0 {

@@ -817,7 +817,7 @@ func TestMovePageDownContinuesFromWrappedBoundary(t *testing.T) {
 	})
 
 	text := []rune("abcdef\nghij\n")
-	if got, want := movePageDown(text, 3, 1), 7; got != want {
+	if got, want := movePageDown(text, 3, 1), 4; got != want {
 		t.Fatalf("movePageDown(wrap boundary) = %d, want %d", got, want)
 	}
 }
@@ -1216,8 +1216,8 @@ func TestTerminalCursorPositionTracksWrappedRows(t *testing.T) {
 	state.origin = 0
 
 	row, col := terminalCursorPosition(state, nil)
-	if row != 1 || col != 1 {
-		t.Fatalf("terminalCursorPosition() = (%d, %d), want (1, 1)", row, col)
+	if row != 2 || col != 0 {
+		t.Fatalf("terminalCursorPosition() = (%d, %d), want (2, 0)", row, col)
 	}
 }
 
@@ -1236,8 +1236,8 @@ func TestTerminalCursorPositionTreatsWrapBoundaryAsNextRow(t *testing.T) {
 	state.origin = 0
 
 	row, col := terminalCursorPosition(state, nil)
-	if row != 1 || col != 0 {
-		t.Fatalf("terminalCursorPosition(wrap boundary) = (%d, %d), want (1, 0)", row, col)
+	if row != 1 || col != 1 {
+		t.Fatalf("terminalCursorPosition(wrap boundary) = (%d, %d), want (1, 1)", row, col)
 	}
 }
 
@@ -1286,8 +1286,8 @@ func TestNextVisualRowStartStopsAtWrappedEOFBoundary(t *testing.T) {
 		termCols = prevCols
 	})
 
-	text := []rune(strings.Repeat("a", 160))
-	if got, want := nextVisualRowStart(text, 80), 80; got != want {
+	text := []rune(strings.Repeat("a", 158))
+	if got, want := nextVisualRowStart(text, 79), 79; got != want {
 		t.Fatalf("nextVisualRowStart(last wrapped row) = %d, want %d", got, want)
 	}
 }
@@ -2195,10 +2195,10 @@ func TestDrawBufferModeWrapsLongLines(t *testing.T) {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[1;1H") || !strings.Contains(got, "abc") {
+	if !strings.Contains(got, "\x1b[1;1H") || !strings.Contains(got, "ab") {
 		t.Fatalf("drawBufferMode() = %q, want first wrapped row", got)
 	}
-	if !strings.Contains(got, "\x1b[2;1H") || !strings.Contains(got, "def") {
+	if !strings.Contains(got, "\x1b[2;1H") || !strings.Contains(got, "cd") {
 		t.Fatalf("drawBufferMode() = %q, want second wrapped row", got)
 	}
 }
@@ -2399,10 +2399,10 @@ func TestMoveLineDownUsesWrappedRows(t *testing.T) {
 	})
 
 	text := []rune("abcdef\ngh\n")
-	if got, want := moveLineDown(text, 1), 4; got != want {
+	if got, want := moveLineDown(text, 1), 3; got != want {
 		t.Fatalf("moveLineDown(wrapped) = %d, want %d", got, want)
 	}
-	if got, want := moveLineDown(text, 4), 8; got != want {
+	if got, want := moveLineDown(text, 4), 7; got != want {
 		t.Fatalf("moveLineDown(next line) = %d, want %d", got, want)
 	}
 }
@@ -2415,7 +2415,7 @@ func TestMoveLineDownFromWrappedBoundaryTreatsCursorAsNextRow(t *testing.T) {
 	})
 
 	text := []rune("abcdef\ngh\n")
-	if got, want := moveLineDown(text, 3), 7; got != want {
+	if got, want := moveLineDown(text, 3), 5; got != want {
 		t.Fatalf("moveLineDown(wrap boundary) = %d, want %d", got, want)
 	}
 }

@@ -122,6 +122,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	rootBuilder := newGridLineBuilder(r.root.cols)
 	composeSpans := r.rootComposeSpans(forceFull, prevRects, nextRects)
 	composeRootGrid(r.root, rootBuilder, composeSpans, r.buffer, r.hudHistory, r.hudInput, r.menu)
+	renderScrollbarGrid(r.root, rootBuilder, state, overlay, theme, r.palette)
 	dirtyRows := dirtyRowCount(r.root, nil)
 
 	counted := &countingWriter{w: stdout}
@@ -545,6 +546,68 @@ func renderInlineStatusGridRow(builder *GridLineBuilder, grid *ScreenGrid, state
 	builder.Flush()
 }
 
+func renderScrollbarGrid(grid *ScreenGrid, builder *GridLineBuilder, state *bufferState, overlay *overlayState, theme *uiTheme, palette *gridStylePalette) {
+	if grid == nil || builder == nil || grid.rows == 0 || grid.cols == 0 || state == nil || theme == nil {
+		return
+	}
+	col := grid.cols - 1
+	thumbStart, thumbEnd := scrollbarThumbRows(state, overlay, grid.rows)
+	gutterStyle := gridStyleID(0)
+	thumbStyle := gridStyleID(0)
+	if palette != nil {
+		gutterStyle = palette.ID(scrollbarPrefix(theme, false))
+		thumbStyle = palette.ID(scrollbarPrefix(theme, true))
+	}
+	for row := 0; row < grid.rows; row++ {
+		style := gutterStyle
+		glyph := ' '
+		if row >= thumbStart && row < thumbEnd {
+			style = thumbStyle
+			glyph = '█'
+		}
+		builder.StartFromGrid(grid, row)
+		builder.PutCell(col, gridCell{r: glyph, style: style})
+		builder.Flush()
+	}
+}
+
+func scrollbarThumbRows(state *bufferState, overlay *overlayState, rows int) (int, int) {
+	if state == nil || rows < 1 {
+		return 0, 0
+	}
+	totalRows := visualRowCount(state.text)
+	if totalRows < 1 {
+		totalRows = 1
+	}
+	viewRows := bufferViewRows(overlay)
+	if viewRows >= totalRows {
+		return 0, rows
+	}
+	if viewRows < 1 {
+		viewRows = 1
+	}
+	originRow := visualRowIndexForPos(state.text, state.origin)
+	if originRow > totalRows-viewRows {
+		originRow = totalRows - viewRows
+	}
+	if originRow < 0 {
+		originRow = 0
+	}
+	thumbHeight := viewRows * rows / totalRows
+	if thumbHeight < 1 {
+		thumbHeight = 1
+	}
+	if thumbHeight > rows {
+		thumbHeight = rows
+	}
+	maxStart := rows - thumbHeight
+	start := 0
+	if totalRows > viewRows && maxStart > 0 {
+		start = originRow * maxStart / (totalRows - viewRows)
+	}
+	return start, start + thumbHeight
+}
+
 func renderGridText(builder *GridLineBuilder, col int, text, style string, tabWidth int, palette *gridStylePalette) int {
 	return renderGridRunes(builder, col, []rune(text), style, tabWidth, palette)
 }
@@ -631,6 +694,16 @@ func menuOverlapsRegion(menu *menuState, top, bottom int) bool {
 		return false
 	}
 	return menu.y < bottom && menu.y+menu.height > top
+}
+
+func scrollbarPrefix(theme *uiTheme, thumb bool) string {
+	if theme == nil {
+		return ""
+	}
+	if thumb {
+		return sgr(theme.bgCode(theme.hudBG), theme.fgCode(theme.outputBG))
+	}
+	return theme.hudPrefix()
 }
 
 func dirtyRowCount(grid *ScreenGrid, scrollOps []gridScrollOp) int {

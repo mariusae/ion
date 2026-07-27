@@ -2419,6 +2419,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if menu.visible {
 				return false, nil
 			}
+			if handleScrollbarMouseEvent(buffer, overlay, *mouse) {
+				clearLastBufferMouseSelection()
+				return false, bufferRedraw(redrawBufferViewport)
+			}
 			if mouse.button == 1 && mouse.pressed {
 				if lastBufferMouseSelection.containsScreenPos(buffer, mouse.y, mouse.x) {
 					previous := snapshotBufferState(buffer)
@@ -5455,10 +5459,74 @@ func moveLineDown(text []rune, pos int) int {
 }
 
 func bufferWrapCols() int {
-	if termCols < 1 {
+	cols := termCols - 1
+	if cols < 1 {
 		return 1
 	}
-	return termCols
+	return cols
+}
+
+func scrollbarColumn() int {
+	if termCols < 1 {
+		return 0
+	}
+	return termCols - 1
+}
+
+func isScrollbarColumn(col int) bool {
+	return termCols > 1 && col == scrollbarColumn()
+}
+
+func visualRowCount(text []rune) int {
+	rows := 1
+	for p := 0; p < len(text); {
+		next := nextVisualRowStart(text, p)
+		if next == p {
+			break
+		}
+		rows++
+		p = next
+	}
+	return rows
+}
+
+func visualRowIndexForPos(text []rune, pos int) int {
+	target := visualRowStartForPos(text, pos)
+	index := 0
+	for p := 0; p < target; {
+		next := nextVisualRowStart(text, p)
+		if next == p {
+			break
+		}
+		index++
+		p = next
+	}
+	return index
+}
+
+func scrollBufferRows(state *bufferState, direction, rows int) bool {
+	if state == nil || direction == 0 || rows <= 0 {
+		return false
+	}
+	prevOrigin := state.origin
+	if direction < 0 {
+		for i := 0; i < rows; i++ {
+			next := prevVisualRowStart(state.text, state.origin)
+			if next == state.origin {
+				break
+			}
+			state.origin = next
+		}
+	} else {
+		for i := 0; i < rows; i++ {
+			next := nextVisualRowStart(state.text, state.origin)
+			if next == state.origin {
+				break
+			}
+			state.origin = next
+		}
+	}
+	return state.origin != prevOrigin
 }
 
 func visualRowEnd(text []rune, start int) int {

@@ -2,6 +2,7 @@ package term
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -267,6 +268,104 @@ func TestHandleMouseEventNoButtonMotionEndsSelection(t *testing.T) {
 	}
 	if got, want := state.dotEnd, 2; got != want {
 		t.Fatalf("dotEnd = %d, want %d", got, want)
+	}
+}
+
+func TestHandleMouseEventScrollbarClicksPageViewport(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 3, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text: strings.Join([]string{
+			"one",
+			"two",
+			"three",
+			"four",
+			"five",
+			"six",
+		}, "\n"),
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	selecting := false
+	selectStart := 0
+
+	if ok := handleMouseEvent(state, nil, mouseEvent{button: 2, x: scrollbarColumn(), y: 1, pressed: true}, &selecting, &selectStart); !ok {
+		t.Fatal("right scrollbar click handled = false, want true")
+	}
+	if got, want := string(state.text[state.origin:lineEnd(state.text, state.origin)]), "four"; got != want {
+		t.Fatalf("origin line after right click = %q, want %q", got, want)
+	}
+	if got, want := state.cursor, 0; got != want {
+		t.Fatalf("cursor after right click = %d, want %d", got, want)
+	}
+
+	if ok := handleMouseEvent(state, nil, mouseEvent{button: 0, x: scrollbarColumn(), y: 1, pressed: true}, &selecting, &selectStart); !ok {
+		t.Fatal("left scrollbar click handled = false, want true")
+	}
+	if got, want := state.origin, 0; got != want {
+		t.Fatalf("origin after left click = %d, want %d", got, want)
+	}
+}
+
+func TestHandleMouseEventScrollbarClickDistanceScalesScrollRows(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 20, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
+	}
+	state := newBufferState(wire.BufferView{
+		Text:     strings.Join(lines, "\n"),
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	selecting := false
+	selectStart := 0
+
+	if got, want := scrollbarClickRows(state, nil, 0), 0; got != want {
+		t.Fatalf("scrollbarClickRows(top) = %d, want %d", got, want)
+	}
+	if got, want := scrollbarClickRows(state, nil, 2), 4; got != want {
+		t.Fatalf("scrollbarClickRows(0.2x thumb) = %d, want %d", got, want)
+	}
+	if got, want := scrollbarClickRows(state, nil, 10), 20; got != want {
+		t.Fatalf("scrollbarClickRows(1.0x thumb) = %d, want %d", got, want)
+	}
+	if got, want := scrollbarClickRows(state, nil, 14), 28; got != want {
+		t.Fatalf("scrollbarClickRows(1.4x thumb) = %d, want %d", got, want)
+	}
+	if ok := handleMouseEvent(state, nil, mouseEvent{button: 2, x: scrollbarColumn(), y: 14, pressed: true}, &selecting, &selectStart); !ok {
+		t.Fatal("right scrollbar click handled = false, want true")
+	}
+	if got, want := string(state.text[state.origin:lineEnd(state.text, state.origin)]), "line29"; got != want {
+		t.Fatalf("origin line after scaled right click = %q, want %q", got, want)
+	}
+}
+
+func TestScreenToPosRejectsScrollbarColumn(t *testing.T) {
+	t.Parallel()
+
+	prevCols := termCols
+	termCols = 12
+	t.Cleanup(func() {
+		termCols = prevCols
+	})
+
+	state := newBufferState(wire.BufferView{Text: "alpha\n"})
+	if _, ok := screenToPos(state, nil, 0, scrollbarColumn()); ok {
+		t.Fatal("screenToPos(scrollbar column) ok = true, want false")
 	}
 }
 
@@ -947,7 +1046,7 @@ func TestScreenToPosUsesWrappedRows(t *testing.T) {
 	if !ok {
 		t.Fatalf("screenToPos() ok = false, want true")
 	}
-	if got, want := pos, 4; got != want {
+	if got, want := pos, 3; got != want {
 		t.Fatalf("screenToPos() = %d, want %d", got, want)
 	}
 }

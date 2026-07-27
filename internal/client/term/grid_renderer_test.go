@@ -52,6 +52,70 @@ func TestGridRendererViewportScrollUsesScrollOperation(t *testing.T) {
 	}
 }
 
+func TestGridRendererPaintsScrollbarInRightColumn(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/alpha.txt",
+		Text:     "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	for i := 0; i < 2; i++ {
+		state.origin = nextVisualRowStart(state.text, state.origin)
+	}
+
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, nil, newMenuState(), theme, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	gutterStyle := renderer.palette.ID(scrollbarPrefix(theme, false))
+	thumbStyle := renderer.palette.ID(scrollbarPrefix(theme, true))
+	start, end := scrollbarThumbRows(state, nil, termRows)
+	for row := 0; row < termRows; row++ {
+		cell := renderer.root.rowCells(row)[scrollbarColumn()]
+		wantRune := ' '
+		wantStyle := gutterStyle
+		if row >= start && row < end {
+			wantRune = '█'
+			wantStyle = thumbStyle
+		}
+		if cell.r != wantRune {
+			t.Fatalf("scrollbar cell row %d rune = %q, want %q", row, cell.r, wantRune)
+		}
+		if cell.style != wantStyle {
+			t.Fatalf("scrollbar cell row %d style = %d, want %d", row, cell.style, wantStyle)
+		}
+	}
+	if start == 0 || end <= start {
+		t.Fatalf("scrollbarThumbRows() = %d,%d, want non-empty thumb below top", start, end)
+	}
+}
+
+func TestScrollbarPrefixMatchesHUDTints(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
+	if got, want := scrollbarPrefix(theme, false), theme.hudPrefix(); got != want {
+		t.Fatalf("scrollbar gutter prefix = %q, want HUD prefix %q", got, want)
+	}
+	thumb := scrollbarPrefix(theme, true)
+	for _, want := range []string{theme.bgCode(theme.hudBG), theme.fgCode(theme.outputBG)} {
+		if !strings.Contains(thumb, want) {
+			t.Fatalf("scrollbar thumb prefix = %q, want component %q", thumb, want)
+		}
+	}
+}
+
 func TestGridRendererOverlayInputRedrawTouchesPromptRowOnly(t *testing.T) {
 	t.Parallel()
 

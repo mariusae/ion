@@ -101,6 +101,47 @@ func TestGridRendererPaintsScrollbarInRightColumn(t *testing.T) {
 	}
 }
 
+func TestGridRendererPaintsFullHeightScrollbarForShortBuffer(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
+	for _, text := range []string{"", "one\ntwo\n"} {
+		renderer := newGridRenderer()
+		state := newBufferState(wire.BufferView{
+			Name:     "/tmp/short.txt",
+			Text:     text,
+			DotStart: 0,
+			DotEnd:   0,
+		})
+
+		var out bytes.Buffer
+		if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, nil, newMenuState(), theme, true, nil); err != nil {
+			t.Fatalf("Draw(%q) error = %v", text, err)
+		}
+
+		thumbStyle := renderer.palette.ID(scrollbarFullThumbPrefix(theme, false))
+		start, end := scrollbarThumbRows(state, nil, termRows)
+		if start != 0 || end != termRows {
+			t.Fatalf("scrollbarThumbRows(%q) = %d,%d, want 0,%d", text, start, end, termRows)
+		}
+		for row := 0; row < termRows; row++ {
+			cell := renderer.root.rowCells(row)[scrollbarColumn()]
+			if cell.r != ' ' {
+				t.Fatalf("scrollbar cell row %d for %q rune = %q, want background thumb fill", row, text, cell.r)
+			}
+			if cell.style != thumbStyle {
+				t.Fatalf("scrollbar cell row %d for %q style = %d, want thumb style %d", row, text, cell.style, thumbStyle)
+			}
+		}
+	}
+}
+
 func TestScrollbarPrefixMatchesHUDTints(t *testing.T) {
 	t.Parallel()
 
@@ -113,6 +154,19 @@ func TestScrollbarPrefixMatchesHUDTints(t *testing.T) {
 		if !strings.Contains(thumb, want) {
 			t.Fatalf("scrollbar thumb prefix = %q, want component %q", thumb, want)
 		}
+	}
+}
+
+func TestScrollbarFullThumbPrefixUsesThumbBackground(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
+	full := scrollbarFullThumbPrefix(theme, false)
+	if !strings.Contains(full, theme.bgCode(theme.outputBG)) {
+		t.Fatalf("scrollbar full thumb prefix = %q, want output background %q", full, theme.bgCode(theme.outputBG))
+	}
+	if strings.Contains(full, theme.bgCode(theme.hudBG)) {
+		t.Fatalf("scrollbar full thumb prefix = %q, want thumb background instead of gutter background", full)
 	}
 }
 

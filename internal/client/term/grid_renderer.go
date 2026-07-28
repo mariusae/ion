@@ -552,16 +552,21 @@ func renderScrollbarGrid(grid *ScreenGrid, builder *GridLineBuilder, state *buff
 	}
 	col := grid.cols - 1
 	thumbStart, thumbEnd := scrollbarThumbRows(state, overlay, grid.rows)
+	fullThumb := thumbStart == 0 && thumbEnd >= grid.rows
 	gutterStyle := gridStyleID(0)
 	thumbStyle := gridStyleID(0)
+	fullThumbStyle := gridStyleID(0)
 	if palette != nil {
 		gutterStyle = palette.ID(scrollbarPrefix(theme, false, inactive))
 		thumbStyle = palette.ID(scrollbarPrefix(theme, true, inactive))
+		fullThumbStyle = palette.ID(scrollbarFullThumbPrefix(theme, inactive))
 	}
 	for row := 0; row < grid.rows; row++ {
 		style := gutterStyle
 		glyph := ' '
-		if row >= thumbStart && row < thumbEnd {
+		if fullThumb {
+			style = fullThumbStyle
+		} else if row >= thumbStart && row < thumbEnd {
 			style = thumbStyle
 			glyph = '█'
 		}
@@ -717,6 +722,17 @@ func scaleScrollbarTint(theme *uiTheme, color rgbColor) rgbColor {
 		return color
 	}
 	return blendColors(color, theme.bg, 0.55)
+}
+
+func scrollbarFullThumbPrefix(theme *uiTheme, inactive bool) string {
+	if theme == nil {
+		return ""
+	}
+	bg := theme.outputBG
+	if inactive {
+		bg = scaleScrollbarTint(theme, bg)
+	}
+	return sgr(theme.bgCode(bg))
 }
 
 func dirtyRowCount(grid *ScreenGrid, scrollOps []gridScrollOp) int {

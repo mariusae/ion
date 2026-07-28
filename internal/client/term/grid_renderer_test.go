@@ -78,8 +78,8 @@ func TestGridRendererPaintsScrollbarInRightColumn(t *testing.T) {
 		t.Fatalf("Draw(initial) error = %v", err)
 	}
 
-	gutterStyle := renderer.palette.ID(scrollbarPrefix(theme, false))
-	thumbStyle := renderer.palette.ID(scrollbarPrefix(theme, true))
+	gutterStyle := renderer.palette.ID(scrollbarPrefix(theme, false, false))
+	thumbStyle := renderer.palette.ID(scrollbarPrefix(theme, true, false))
 	start, end := scrollbarThumbRows(state, nil, termRows)
 	for row := 0; row < termRows; row++ {
 		cell := renderer.root.rowCells(row)[scrollbarColumn()]
@@ -105,14 +105,47 @@ func TestScrollbarPrefixMatchesHUDTints(t *testing.T) {
 	t.Parallel()
 
 	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
-	if got, want := scrollbarPrefix(theme, false), theme.hudPrefix(); got != want {
+	if got, want := scrollbarPrefix(theme, false, false), theme.hudPrefix(); got != want {
 		t.Fatalf("scrollbar gutter prefix = %q, want HUD prefix %q", got, want)
 	}
-	thumb := scrollbarPrefix(theme, true)
+	thumb := scrollbarPrefix(theme, true, false)
 	for _, want := range []string{theme.bgCode(theme.hudBG), theme.fgCode(theme.outputBG)} {
 		if !strings.Contains(thumb, want) {
 			t.Fatalf("scrollbar thumb prefix = %q, want component %q", thumb, want)
 		}
+	}
+}
+
+func TestScrollbarPrefixScalesInactiveTints(t *testing.T) {
+	t.Parallel()
+
+	theme := buildTheme(rgbColor{r: 20, g: 20, b: 20}, colorModeTrueColor)
+	active := scrollbarPrefix(theme, true, false)
+	inactive := scrollbarPrefix(theme, true, true)
+	if active == inactive {
+		t.Fatalf("inactive scrollbar thumb prefix = active prefix %q, want scaled style", active)
+	}
+	inactiveBG := scaleScrollbarTint(theme, theme.hudBG)
+	inactiveFG := scaleScrollbarTint(theme, theme.outputBG)
+	for _, want := range []string{theme.bgCode(inactiveBG), theme.fgCode(inactiveFG)} {
+		if !strings.Contains(inactive, want) {
+			t.Fatalf("inactive scrollbar thumb prefix = %q, want component %q", inactive, want)
+		}
+	}
+	if strings.Contains(inactive, theme.bgCode(theme.hudBG)) || strings.Contains(inactive, theme.fgCode(theme.outputBG)) {
+		t.Fatalf("inactive scrollbar thumb prefix = %q, want scaled colors instead of active colors", inactive)
+	}
+
+	activeGutter := scrollbarPrefix(theme, false, false)
+	inactiveGutter := scrollbarPrefix(theme, false, true)
+	if activeGutter == inactiveGutter {
+		t.Fatalf("inactive scrollbar gutter prefix = active prefix %q, want scaled style", activeGutter)
+	}
+	if !strings.Contains(inactiveGutter, theme.bgCode(inactiveBG)) {
+		t.Fatalf("inactive scrollbar gutter prefix = %q, want scaled HUD background", inactiveGutter)
+	}
+	if strings.Contains(inactiveGutter, theme.bgCode(theme.hudBG)) {
+		t.Fatalf("inactive scrollbar gutter prefix = %q, want scaled color instead of active color", inactiveGutter)
 	}
 }
 

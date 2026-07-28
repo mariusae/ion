@@ -29,6 +29,7 @@ type rgbColor struct {
 
 type uiTheme struct {
 	mode        colorMode
+	bg          rgbColor
 	subtleBG    rgbColor
 	hudBG       rgbColor
 	outputBG    rgbColor
@@ -106,6 +107,7 @@ func buildTheme(bg rgbColor, mode colorMode) *uiTheme {
 	light := luminance(bg) > 128
 	return &uiTheme{
 		mode:        mode,
+		bg:          bg,
 		subtleBG:    blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
 		hudBG:       blendTint(bg, light, alphaFor(light, 0.04, 0.12)),
 		outputBG:    blendTint(bg, light, alphaFor(light, 0.12, 0.24)),

@@ -122,7 +122,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	rootBuilder := newGridLineBuilder(r.root.cols)
 	composeSpans := r.rootComposeSpans(forceFull, prevRects, nextRects)
 	composeRootGrid(r.root, rootBuilder, composeSpans, r.buffer, r.hudHistory, r.hudInput, r.menu)
-	renderScrollbarGrid(r.root, rootBuilder, state, overlay, theme, r.palette)
+	renderScrollbarGrid(r.root, rootBuilder, state, overlay, theme, r.palette, !focused)
 	dirtyRows := dirtyRowCount(r.root, nil)
 
 	counted := &countingWriter{w: stdout}
@@ -546,7 +546,7 @@ func renderInlineStatusGridRow(builder *GridLineBuilder, grid *ScreenGrid, state
 	builder.Flush()
 }
 
-func renderScrollbarGrid(grid *ScreenGrid, builder *GridLineBuilder, state *bufferState, overlay *overlayState, theme *uiTheme, palette *gridStylePalette) {
+func renderScrollbarGrid(grid *ScreenGrid, builder *GridLineBuilder, state *bufferState, overlay *overlayState, theme *uiTheme, palette *gridStylePalette, inactive bool) {
 	if grid == nil || builder == nil || grid.rows == 0 || grid.cols == 0 || state == nil || theme == nil {
 		return
 	}
@@ -555,8 +555,8 @@ func renderScrollbarGrid(grid *ScreenGrid, builder *GridLineBuilder, state *buff
 	gutterStyle := gridStyleID(0)
 	thumbStyle := gridStyleID(0)
 	if palette != nil {
-		gutterStyle = palette.ID(scrollbarPrefix(theme, false))
-		thumbStyle = palette.ID(scrollbarPrefix(theme, true))
+		gutterStyle = palette.ID(scrollbarPrefix(theme, false, inactive))
+		thumbStyle = palette.ID(scrollbarPrefix(theme, true, inactive))
 	}
 	for row := 0; row < grid.rows; row++ {
 		style := gutterStyle
@@ -696,14 +696,27 @@ func menuOverlapsRegion(menu *menuState, top, bottom int) bool {
 	return menu.y < bottom && menu.y+menu.height > top
 }
 
-func scrollbarPrefix(theme *uiTheme, thumb bool) string {
+func scrollbarPrefix(theme *uiTheme, thumb, inactive bool) string {
 	if theme == nil {
 		return ""
 	}
-	if thumb {
-		return sgr(theme.bgCode(theme.hudBG), theme.fgCode(theme.outputBG))
+	bg := theme.hudBG
+	fg := theme.outputBG
+	if inactive {
+		bg = scaleScrollbarTint(theme, bg)
+		fg = scaleScrollbarTint(theme, fg)
 	}
-	return theme.hudPrefix()
+	if thumb {
+		return sgr(theme.bgCode(bg), theme.fgCode(fg))
+	}
+	return sgr(theme.bgCode(bg))
+}
+
+func scaleScrollbarTint(theme *uiTheme, color rgbColor) rgbColor {
+	if theme == nil {
+		return color
+	}
+	return blendColors(color, theme.bg, 0.55)
 }
 
 func dirtyRowCount(grid *ScreenGrid, scrollOps []gridScrollOp) int {

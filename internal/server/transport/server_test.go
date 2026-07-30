@@ -1210,6 +1210,168 @@ func TestServerCloseSessionRemovesOwnedSession(t *testing.T) {
 	}
 }
 
+func TestPaneQuitWithOtherPrimaryClientClosesDirtyOwnedSession(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	var stderr bytes.Buffer
+	owner, err := clientsession.DialUnix(socketPath, io.Discard, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix(owner) error = %v", err)
+	}
+	defer owner.Close()
+	if err := owner.Bootstrap(nil); err != nil {
+		t.Fatalf("owner.Bootstrap() error = %v", err)
+	}
+	if _, err := owner.Replace(0, 0, "dirty"); err != nil {
+		t.Fatalf("owner.Replace() error = %v", err)
+	}
+	session := owner.CurrentSession()
+	if session == nil {
+		t.Fatal("owner.CurrentSession() = nil")
+	}
+
+	other, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("DialUnix(other) error = %v", err)
+	}
+	defer other.Close()
+	if err := other.Bootstrap(nil); err != nil {
+		t.Fatalf("other.Bootstrap() error = %v", err)
+	}
+
+	cont, err := owner.Execute("q\n")
+	if err != nil {
+		t.Fatalf("owner.Execute(q) error = %v", err)
+	}
+	if cont {
+		t.Fatal("owner.Execute(q) = continue, want stop")
+	}
+	if got := stderr.String(); strings.Contains(got, "?changed files") {
+		t.Fatalf("stderr = %q, want no dirty-file prompt", got)
+	}
+	summaries, err := owner.ListSessions()
+	if err != nil {
+		t.Fatalf("owner.ListSessions() error = %v", err)
+	}
+	for _, summary := range summaries {
+		if summary.ID == session.ID() {
+			t.Fatalf("closed session %d still listed: %#v", session.ID(), summaries)
+		}
+	}
+	if _, err := other.CurrentView(); err != nil {
+		t.Fatalf("other.CurrentView() error = %v", err)
+	}
+}
+
+func TestPaneQuitWithSinglePrimaryServerClientClosesDirtyOwnedSession(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp("", "ion-transport-*.sock")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	socketPath := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer os.Remove(socketPath)
+
+	server := New(workspace.New())
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(listener)
+	}()
+	defer func() {
+		_ = listener.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Serve() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve() did not return")
+		}
+	}()
+
+	var stderr bytes.Buffer
+	client, err := clientsession.DialUnix(socketPath, io.Discard, &stderr)
+	if err != nil {
+		t.Fatalf("DialUnix() error = %v", err)
+	}
+	defer client.Close()
+	if err := client.Bootstrap(nil); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := client.Replace(0, 0, "dirty"); err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	session := client.CurrentSession()
+	if session == nil {
+		t.Fatal("CurrentSession() = nil")
+	}
+
+	cont, err := client.Execute("q\n")
+	if err != nil {
+		t.Fatalf("Execute(q) error = %v", err)
+	}
+	if cont {
+		t.Fatal("Execute(q) = continue, want stop")
+	}
+	if got := stderr.String(); strings.Contains(got, "?changed files") {
+		t.Fatalf("stderr = %q, want no dirty-file prompt", got)
+	}
+	summaries, err := client.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	for _, summary := range summaries {
+		if summary.ID == session.ID() {
+			t.Fatalf("closed session %d still listed: %#v", session.ID(), summaries)
+		}
+	}
+}
+
 func errorText(err error) string {
 	if err == nil {
 		return ""

@@ -368,6 +368,14 @@ func (s *Server) handleFrame(conn io.Writer, state *connState, stdout, stderr *e
 		}
 		return wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.OKResponse{})
 	}
+	if cmd, ok := msg.(*wire.CommandRequest); ok &&
+		isPaneQuitCommand(cmd.Script) &&
+		managed.ownerClientID == clientID {
+		if err := wire.WriteFrame(conn, frame.RequestID, managed.id, &wire.CommandResponse{Continue: false}); err != nil {
+			return err
+		}
+		return s.closeSession(managed.id, clientID)
+	}
 	stdout.sessionID = managed.id
 	stderr.sessionID = managed.id
 
@@ -2330,4 +2338,8 @@ func isServerQuitCommand(script string) bool {
 	default:
 		return false
 	}
+}
+
+func isPaneQuitCommand(script string) bool {
+	return strings.TrimSpace(script) == "q"
 }

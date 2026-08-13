@@ -22,6 +22,7 @@ type config struct {
 	attach     bool
 	nmode      bool
 	bmode      bool
+	pmode      bool
 	cmode      bool
 	bserve     bool
 	serve      bool
@@ -58,6 +59,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			return 0
 		}
 		if err := runCommandMode(cfg, stdin, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "ion: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if cfg.pmode {
+		if err := runPaneCommandMode(cfg, stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "ion: %v\n", err)
 			return 1
 		}
@@ -147,7 +156,7 @@ func parseArgs(args []string) (config, error) {
 	fs.BoolVar(&cfg.cmode, "C", false, "connect to a resident server and execute one command")
 	fs.BoolVar(&disableAutoIndent, "no-autoindent", false, "turn off autoindent mode")
 	fs.BoolVar(&cfg.bmode, "B", false, "reuse one ion terminal pane per tmux window")
-	fs.StringVar(&cfg.paneID, "p", "", "override the tmux pane id used for -B lookup")
+	fs.StringVar(&cfg.paneID, "p", "", "execute in a tmux pane or target -B/-N")
 	fs.BoolVar(&cfg.bserve, "b-serve", false, "internal: serve one tmux-window bmode pane")
 	fs.BoolVar(&cfg.serve, "serve", false, "internal: serve one resident daemon")
 	fs.StringVar(&cfg.socketPath, "socket", "", "internal: socket path for resident daemon")
@@ -159,7 +168,8 @@ func parseArgs(args []string) (config, error) {
 	}
 	cfg.autoindent = !disableAutoIndent
 	cfg.files = fs.Args()
-	if !cfg.attach && !cfg.nmode && !cfg.bmode && !cfg.cmode && !cfg.bserve && !cfg.serve && !cfg.rage && len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
+	cfg.pmode = cfg.paneID != "" && !cfg.bmode && !cfg.nmode
+	if !cfg.attach && !cfg.nmode && !cfg.bmode && !cfg.pmode && !cfg.cmode && !cfg.bserve && !cfg.serve && !cfg.rage && len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
 		cfg.cmode = true
 	}
 	if len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
@@ -204,6 +214,9 @@ func parseArgs(args []string) (config, error) {
 	if cfg.rage && cfg.bserve {
 		return config{}, fmt.Errorf("-b-serve and -rage cannot be combined")
 	}
+	if cfg.rage && cfg.pmode {
+		return config{}, fmt.Errorf("-p and -rage cannot be combined")
+	}
 	if cfg.attach && cfg.bmode {
 		return config{}, fmt.Errorf("-A and -B cannot be combined")
 	}
@@ -222,8 +235,8 @@ func parseArgs(args []string) (config, error) {
 	if cfg.attach && cfg.killSignal != 0 {
 		return config{}, fmt.Errorf("-A and -kill cannot be combined")
 	}
-	if cfg.attach && cfg.paneID != "" {
-		return config{}, fmt.Errorf("-p requires -B or -N")
+	if cfg.attach && cfg.pmode {
+		return config{}, fmt.Errorf("-A and -p cannot be combined")
 	}
 	if cfg.nmode && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -N cannot be combined")
@@ -246,14 +259,17 @@ func parseArgs(args []string) (config, error) {
 	if cfg.cmode && cfg.bserve {
 		return config{}, fmt.Errorf("-C and -b-serve cannot be combined")
 	}
+	if cfg.pmode && cfg.bserve {
+		return config{}, fmt.Errorf("-b-serve and -p cannot be combined")
+	}
 	if cfg.cmode && cfg.serve {
 		return config{}, fmt.Errorf("-C and -serve cannot be combined")
 	}
 	if cfg.cmode && cfg.killSignal != 0 {
 		return config{}, fmt.Errorf("-C and -kill cannot be combined")
 	}
-	if cfg.cmode && cfg.paneID != "" {
-		return config{}, fmt.Errorf("-p requires -B or -N")
+	if cfg.cmode && cfg.pmode {
+		return config{}, fmt.Errorf("-C and -p cannot be combined")
 	}
 	if cfg.serve && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -serve cannot be combined")
@@ -270,11 +286,11 @@ func parseArgs(args []string) (config, error) {
 	if cfg.killSignal != 0 && cfg.serve {
 		return config{}, fmt.Errorf("-kill and -serve cannot be combined")
 	}
-	if cfg.serve && cfg.paneID != "" {
-		return config{}, fmt.Errorf("-p requires -B or -N")
+	if cfg.serve && cfg.pmode {
+		return config{}, fmt.Errorf("-serve and -p cannot be combined")
 	}
-	if cfg.killSignal != 0 && cfg.paneID != "" {
-		return config{}, fmt.Errorf("-p requires -B or -N")
+	if cfg.killSignal != 0 && cfg.pmode {
+		return config{}, fmt.Errorf("-kill and -p cannot be combined")
 	}
 	if cfg.serve && cfg.socketPath == "" {
 		return config{}, fmt.Errorf("-serve requires -socket")
@@ -293,6 +309,12 @@ func parseArgs(args []string) (config, error) {
 	}
 	if cfg.cmode && !cfg.download && len(cfg.files) == 0 {
 		return config{}, fmt.Errorf("-C requires a command")
+	}
+	if cfg.pmode && cfg.download {
+		return config{}, fmt.Errorf("-d and -p cannot be combined")
+	}
+	if cfg.pmode && len(cfg.files) == 0 {
+		return config{}, fmt.Errorf("-p requires a command")
 	}
 	if cfg.serve && len(cfg.files) > 0 {
 		return config{}, fmt.Errorf("-serve does not take file arguments")
@@ -320,12 +342,14 @@ func helpText() string {
 	return "" +
 		"usage: ion [options] [files]\n" +
 		"       ion <fully-qualified-command>\n" +
+		"       ion -p <pane> <command>\n" +
 		"\n" +
 		"modes:\n" +
 		"  -d        command-line download mode\n" +
 		"  -A        attach to resident server\n" +
 		"  -N        open a new tmux pane attached to resident server\n" +
 		"  -B        reuse the last active session in the resident server\n" +
+		"  -p PANE   execute a command in an ion tmux pane; also targets -B/-N\n" +
 		"  -C        resident command mode; with -d, run resident download mode\n" +
 		"  -kill N   send signal N to active resident server; use 9 to force kill\n" +
 		"  -rage     print terminal theme diagnostics\n" +

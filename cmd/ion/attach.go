@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -48,6 +49,11 @@ const (
 
 const residentPathVersionPrefix = "ion-r3"
 
+const (
+	tmuxIonSocketOption  = "@ion_socket"
+	tmuxIonSessionOption = "@ion_session"
+)
+
 func defaultResidentRuntime() residentRuntime {
 	return residentRuntime{
 		getenv:     os.Getenv,
@@ -83,6 +89,11 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 	}
 	defer stopRefresh()
 	defer client.Close()
+	clearPaneSession, err := publishPaneSession(rt, paths.socketPath, client)
+	if err != nil {
+		return err
+	}
+	defer clearPaneSession()
 
 	service := wrapInteractiveClient(cfg, rt, paths, client)
 	if err := bootstrapAttachTargets(&wireBModeClient{client: client}, targets); err != nil {
@@ -140,6 +151,130 @@ func runCommandModeWith(cfg config, stdout, stderr io.Writer, rt residentRuntime
 	}
 	_, err = client.Execute(script)
 	return err
+}
+
+func runPaneCommandMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error {
+	_ = stdin
+	return runPaneCommandModeWith(cfg, stdout, stderr, defaultResidentRuntime())
+}
+
+func runPaneCommandModeWith(cfg config, stdout, stderr io.Writer, rt residentRuntime) (retErr error) {
+	if rt.tmux == nil {
+		return fmt.Errorf("tmux is unavailable")
+	}
+	paneID, err := resolveTmuxPane(rt.tmux, cfg.paneID)
+	if err != nil {
+		return fmt.Errorf("resolve pane %q: %w", cfg.paneID, err)
+	}
+	if paneID == "" {
+		return fmt.Errorf("pane %q does not exist", cfg.paneID)
+	}
+	socketPath, err := readTmuxPaneOption(rt.tmux, paneID, tmuxIonSocketOption)
+	if err != nil || strings.TrimSpace(socketPath) == "" {
+		return fmt.Errorf("pane %s has no active ion session", paneID)
+	}
+	sessionText, err := readTmuxPaneOption(rt.tmux, paneID, tmuxIonSessionOption)
+	if err != nil || strings.TrimSpace(sessionText) == "" {
+		return fmt.Errorf("pane %s has no active ion session", paneID)
+	}
+	sessionID, err := strconv.ParseUint(strings.TrimSpace(sessionText), 10, 64)
+	if err != nil || sessionID == 0 {
+		return fmt.Errorf("pane %s has invalid ion session %q", paneID, strings.TrimSpace(sessionText))
+	}
+
+	client, err := clientsession.DialUnix(strings.TrimSpace(socketPath), stdout, stderr)
+	if err != nil {
+		return fmt.Errorf("pane %s has no active ion session: %w", paneID, err)
+	}
+	defer client.Close()
+	if err := client.Take(sessionID); err != nil {
+		return fmt.Errorf("take session for pane %s: %w", paneID, err)
+	}
+	defer func() {
+		if err := client.Return(sessionID); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("return session for pane %s: %w", paneID, err))
+		}
+	}()
+
+	interruptClient, err := clientsession.DialUnixAs(strings.TrimSpace(socketPath), client.ID(), io.Discard, io.Discard)
+	if err != nil {
+		return err
+	}
+	defer interruptClient.Close()
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	defer signal.Stop(interrupt)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-interrupt:
+			_ = interruptClient.Session(sessionID).Cancel()
+		case <-done:
+		}
+	}()
+
+	script := normalizeIonNamespaceAlias(strings.Join(cfg.files, " "))
+	if !strings.HasSuffix(script, "\n") {
+		script += "\n"
+	}
+	_, err = client.Session(sessionID).Execute(script)
+	return err
+}
+
+func resolveTmuxPane(tmux func(args ...string) (string, error), target string) (string, error) {
+	paneID, err := tmuxDisplay(tmux, target, "#{pane_id}")
+	if err == nil && paneID != "" {
+		return paneID, nil
+	}
+	firstErr := err
+	if index, ok := strings.CutPrefix(target, "%"); ok {
+		if _, parseErr := strconv.ParseUint(index, 10, 64); parseErr == nil {
+			if indexedPaneID, indexedErr := tmuxDisplay(tmux, index, "#{pane_id}"); indexedErr == nil && indexedPaneID != "" {
+				return indexedPaneID, nil
+			}
+		}
+	}
+	if firstErr != nil {
+		return "", firstErr
+	}
+	return "", nil
+}
+
+func publishPaneSession(rt residentRuntime, socketPath string, client *clientsession.Client) (func(), error) {
+	noop := func() {}
+	if rt.getenv == nil || rt.tmux == nil || strings.TrimSpace(rt.getenv("TMUX")) == "" {
+		return noop, nil
+	}
+	paneID := strings.TrimSpace(rt.getenv("TMUX_PANE"))
+	session := client.CurrentSession()
+	if paneID == "" || session == nil {
+		return noop, nil
+	}
+	if _, err := rt.tmux("set-option", "-p", "-t", paneID, tmuxIonSocketOption, socketPath); err != nil {
+		return nil, fmt.Errorf("publish ion socket for pane %s: %w", paneID, err)
+	}
+	sessionText := strconv.FormatUint(session.ID(), 10)
+	if _, err := rt.tmux("set-option", "-p", "-t", paneID, tmuxIonSessionOption, sessionText); err != nil {
+		_, _ = rt.tmux("set-option", "-p", "-u", "-t", paneID, tmuxIonSocketOption)
+		return nil, fmt.Errorf("publish ion session for pane %s: %w", paneID, err)
+	}
+	return func() {
+		current, err := readTmuxPaneOption(rt.tmux, paneID, tmuxIonSessionOption)
+		if err != nil || current != sessionText {
+			return
+		}
+		_, _ = rt.tmux("set-option", "-p", "-u", "-t", paneID, tmuxIonSessionOption)
+		_, _ = rt.tmux("set-option", "-p", "-u", "-t", paneID, tmuxIonSocketOption)
+	}, nil
+}
+
+func readTmuxPaneOption(tmux func(args ...string) (string, error), paneID, option string) (string, error) {
+	out, err := tmux("show-options", "-p", "-v", "-t", paneID, option)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func runResidentDownloadModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt residentRuntime) error {

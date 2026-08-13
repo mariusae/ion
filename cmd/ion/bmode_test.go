@@ -861,6 +861,29 @@ func TestParseArgsRecognizesPaneOverrideForNewPaneMode(t *testing.T) {
 	}
 }
 
+func TestParseArgsRecognizesPaneCommandMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-p", "%54", ".=#"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.pmode {
+		t.Fatal("config.pmode = false, want true")
+	}
+	if got, want := cfg.files, []string{".=#"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("config.files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsPaneCommandRequiresCommand(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseArgs([]string{"-p", "%54"}); err == nil || !strings.Contains(err.Error(), "-p requires a command") {
+		t.Fatalf("parseArgs() error = %v, want missing-command error", err)
+	}
+}
+
 func testResidentSpawn(t *testing.T) func(config, string) error {
 	t.Helper()
 

@@ -1261,6 +1261,44 @@ func TestTerminalCursorPositionAccountsForTabWidth(t *testing.T) {
 	}
 }
 
+func TestTerminalCursorPositionAccountsForWideRune(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 16
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "a🦋b\n",
+		DotStart: 2,
+		DotEnd:   2,
+	})
+
+	row, col := terminalCursorPosition(state, nil)
+	if row != 0 || col != 3 {
+		t.Fatalf("terminalCursorPosition() = (%d, %d), want (0, 3)", row, col)
+	}
+}
+
+func TestWideRuneWrapsBeforeLastCell(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 4
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "ab🦋c\n",
+		DotStart: 3,
+		DotEnd:   3,
+	})
+
+	row, col := terminalCursorPosition(state, nil)
+	if row != 1 || col != 2 {
+		t.Fatalf("terminalCursorPosition() = (%d, %d), want (1, 2)", row, col)
+	}
+}
+
 func TestVisualRowStartForPosUsesLastDrawableRowAtTrailingEOF(t *testing.T) {
 	t.Parallel()
 

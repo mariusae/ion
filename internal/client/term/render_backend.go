@@ -134,6 +134,9 @@ func (b *ttyRenderBackend) writeCellRange(cells []gridCell) {
 	b.buf.WriteString(styleReset())
 	currentStyle := gridStyleID(0)
 	for _, cell := range cells {
+		if cell.continuation {
+			continue
+		}
 		if cell.style != currentStyle {
 			seq := b.palette.Seq(cell.style)
 			if seq == "" {

@@ -3,8 +3,9 @@ package term
 type gridStyleID uint32
 
 type gridCell struct {
-	r     rune
-	style gridStyleID
+	r            rune
+	style        gridStyleID
+	continuation bool
 }
 
 type gridDirtySpan struct {
@@ -202,7 +203,7 @@ func (b *GridLineBuilder) PutCell(col int, cell gridCell) {
 	if col < 0 || col >= len(b.cells) {
 		return
 	}
-	if cell.r == 0 {
+	if cell.r == 0 && !cell.continuation {
 		cell.r = ' '
 	}
 	b.cells[col] = cell
@@ -223,7 +224,10 @@ func (b *GridLineBuilder) PutRune(col int, r rune, style gridStyleID, tabWidth i
 		return col + advance
 	}
 	b.cells[col] = gridCell{r: r, style: style}
-	return col + 1
+	for i := 1; i < advance; i++ {
+		b.cells[col+i] = gridCell{style: style, continuation: true}
+	}
+	return col + advance
 }
 
 func (b *GridLineBuilder) Fill(start, end int, cell gridCell) {

@@ -19,6 +19,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/mattn/go-runewidth"
+
 	clientdiag "ion/internal/client/commanddiag"
 	clienttarget "ion/internal/client/target"
 	"ion/internal/core/cmdlang"
@@ -4988,7 +4990,7 @@ func writeDisplayRune(stdout io.Writer, r rune, col, maxCols, tabWidth int) (int
 	if _, err := io.WriteString(stdout, string(displayRune(r))); err != nil {
 		return col, err
 	}
-	return col + 1, nil
+	return col + advance, nil
 }
 
 func displayRune(r rune) rune {
@@ -5014,7 +5016,16 @@ func runeDisplayAdvance(r rune, col, maxCols, tabWidth int) int {
 		}
 		return advance
 	}
-	return 1
+	advance := runewidth.RuneWidth(displayRune(r))
+	// Ion's editing model is rune-based. Keep zero-width and non-printing
+	// runes addressable until grapheme-aware editing is introduced.
+	if advance < 1 {
+		advance = 1
+	}
+	if col+advance > maxCols {
+		return 0
+	}
+	return advance
 }
 
 func shimmerPrefix(theme *uiTheme, index, length int) string {

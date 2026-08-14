@@ -1,6 +1,10 @@
 package term
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
 
 func TestGridLineBuilderFlushTracksDirtySpan(t *testing.T) {
 	t.Parallel()
@@ -27,6 +31,34 @@ func TestGridLineBuilderFlushTracksDirtySpan(t *testing.T) {
 	}
 	if got, want := grid.dirty[0], span; got != want {
 		t.Fatalf("dirty span = %+v, want %+v", got, want)
+	}
+}
+
+func TestGridLineBuilderStoresWideRuneContinuation(t *testing.T) {
+	t.Parallel()
+
+	grid := newScreenGrid(1, 5)
+	builder := newGridLineBuilder(grid.cols)
+	builder.Start(grid, 0)
+	col := builder.PutRune(0, 'a', 0, bufferTabWidth)
+	col = builder.PutRune(col, '🦋', 0, bufferTabWidth)
+	col = builder.PutRune(col, 'b', 0, bufferTabWidth)
+	if got, want := col, 4; got != want {
+		t.Fatalf("column after wide rune = %d, want %d", got, want)
+	}
+	if !builder.cells[2].continuation {
+		t.Fatal("second butterfly cell is not marked as a continuation")
+	}
+	builder.Flush()
+
+	var out bytes.Buffer
+	backend := newTTYRenderBackend(&out, newGridStylePalette())
+	backend.WriteCells(0, 0, grid.rowCells(0))
+	if err := backend.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "a🦋b ") {
+		t.Fatalf("rendered cells = %q, want one butterfly followed by b", got)
 	}
 }
 

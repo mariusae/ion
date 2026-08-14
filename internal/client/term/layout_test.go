@@ -29,6 +29,32 @@ func TestVisibleLayoutMapsTabColumns(t *testing.T) {
 	}
 }
 
+func TestVisibleLayoutMapsWideRuneColumns(t *testing.T) {
+	t.Parallel()
+
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 16
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	state := newBufferState(wire.BufferView{
+		Text:     "a🦋b\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+	row := state.visibleLayout(nil).rows[0]
+	if got, want := row.columnForPos(2), 3; got != want {
+		t.Fatalf("columnForPos(after butterfly) = %d, want %d", got, want)
+	}
+	if got, want := row.posAtColumn(1), 1; got != want {
+		t.Fatalf("posAtColumn(butterfly lead) = %d, want %d", got, want)
+	}
+	if got, want := row.posAtColumn(2), 2; got != want {
+		t.Fatalf("posAtColumn(butterfly continuation) = %d, want %d", got, want)
+	}
+}
+
 func TestNewBufferStateWithPreviousReusesTextAndLayout(t *testing.T) {
 	t.Parallel()
 

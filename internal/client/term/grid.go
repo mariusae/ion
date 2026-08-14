@@ -13,6 +13,21 @@ type gridDirtySpan struct {
 	end   int
 }
 
+func expandGridDirtySpan(cells []gridCell, span gridDirtySpan) gridDirtySpan {
+	span.start = max(span.start, 0)
+	span.end = min(span.end, len(cells))
+	if span.start >= span.end {
+		return gridDirtySpan{start: len(cells)}
+	}
+	for span.start > 0 && cells[span.start].continuation {
+		span.start--
+	}
+	for span.end < len(cells) && cells[span.end].continuation {
+		span.end++
+	}
+	return span
+}
+
 type ScreenGrid struct {
 	rows       int
 	cols       int

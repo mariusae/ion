@@ -17,15 +17,96 @@ func composeRootGrid(root *ScreenGrid, builder *GridLineBuilder, spans []gridDir
 		if span.start >= span.end {
 			continue
 		}
+		span = expandRootSpanForWideCells(root, row, span, layers)
 		root.clearRowDirty(row)
 		builder.StartFromGrid(root, row)
 		builder.Fill(span.start, span.end, gridCell{r: ' '})
 		for _, layer := range layers {
 			composeGridSpan(builder, row, span.start, span.end, layer)
 		}
+		repairWideCells(builder.cells)
 		builder.Flush()
 	}
 	root.valid = true
+}
+
+func expandRootSpanForWideCells(root *ScreenGrid, rootRow int, span gridDirtySpan, layers []*ScreenGrid) gridDirtySpan {
+	for {
+		previous := span
+		span = expandGridDirtySpan(root.rowCells(rootRow), span)
+		for _, layer := range layers {
+			if layer == nil || !layer.visible {
+				continue
+			}
+			localRow := rootRow - layer.originRow
+			if localRow < 0 || localRow >= layer.rows {
+				continue
+			}
+			cells := layer.rowCells(localRow)
+			left := layer.originCol
+			right := left + len(cells)
+			if span.start >= left && span.start < right {
+				for span.start > left && cells[span.start-left].continuation {
+					span.start--
+				}
+			}
+			if span.end > left && span.end < right {
+				for span.end < right && cells[span.end-left].continuation {
+					span.end++
+				}
+			}
+		}
+		span.start = max(span.start, 0)
+		span.end = min(span.end, root.cols)
+		if span.start >= span.end {
+			return gridDirtySpan{start: root.cols}
+		}
+		if span == previous {
+			return span
+		}
+	}
+}
+
+func repairWideCells(cells []gridCell) {
+	expectedContinuation := 0
+	wideLead := -1
+	for col := range cells {
+		cell := cells[col]
+		if cell.continuation {
+			if expectedContinuation == 0 || cell.style != cells[wideLead].style {
+				if expectedContinuation > 0 {
+					cells[wideLead] = gridCell{r: ' ', style: cells[wideLead].style}
+				}
+				cells[col] = gridCell{r: ' ', style: cell.style}
+				expectedContinuation = 0
+				wideLead = -1
+				continue
+			}
+			expectedContinuation--
+			if expectedContinuation == 0 {
+				wideLead = -1
+			}
+			continue
+		}
+		if expectedContinuation > 0 {
+			cells[wideLead] = gridCell{r: ' ', style: cells[wideLead].style}
+			expectedContinuation = 0
+			wideLead = -1
+		}
+		width := runeDisplayWidth(cell.r)
+		if width <= 1 {
+			continue
+		}
+		if col+width > len(cells) {
+			cells[col] = gridCell{r: ' ', style: cell.style}
+			continue
+		}
+		wideLead = col
+		expectedContinuation = width - 1
+	}
+	if expectedContinuation > 0 {
+		cells[wideLead] = gridCell{r: ' ', style: cells[wideLead].style}
+	}
 }
 
 func composeGridSpan(builder *GridLineBuilder, rootRow, startCol, endCol int, layer *ScreenGrid) {

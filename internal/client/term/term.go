@@ -5016,14 +5016,19 @@ func runeDisplayAdvance(r rune, col, maxCols, tabWidth int) int {
 		}
 		return advance
 	}
+	advance := runeDisplayWidth(r)
+	if col+advance > maxCols {
+		return 0
+	}
+	return advance
+}
+
+func runeDisplayWidth(r rune) int {
 	advance := runewidth.RuneWidth(displayRune(r))
 	// Ion's editing model is rune-based. Keep zero-width and non-printing
 	// runes addressable until grapheme-aware editing is introduced.
 	if advance < 1 {
 		advance = 1
-	}
-	if col+advance > maxCols {
-		return 0
 	}
 	return advance
 }

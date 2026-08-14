@@ -62,6 +62,28 @@ func TestGridLineBuilderStoresWideRuneContinuation(t *testing.T) {
 	}
 }
 
+func TestExpandGridDirtySpanIncludesWholeWideRune(t *testing.T) {
+	cells := []gridCell{
+		{r: 'a'},
+		{r: '🦋'},
+		{continuation: true},
+		{r: 'b'},
+	}
+	for _, test := range []struct {
+		name string
+		span gridDirtySpan
+	}{
+		{name: "lead", span: gridDirtySpan{start: 1, end: 2}},
+		{name: "continuation", span: gridDirtySpan{start: 2, end: 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got, want := expandGridDirtySpan(cells, test.span), (gridDirtySpan{start: 1, end: 3}); got != want {
+				t.Fatalf("expandGridDirtySpan(%+v) = %+v, want %+v", test.span, got, want)
+			}
+		})
+	}
+}
+
 func TestGridLineBuilderClearEndErasesTrailingCells(t *testing.T) {
 	t.Parallel()
 

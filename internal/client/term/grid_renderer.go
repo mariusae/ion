@@ -409,6 +409,7 @@ func (r *gridRenderer) emitDirtyRows(backend renderBackend, grid *ScreenGrid) {
 			continue
 		}
 		cells := grid.rowCells(row)
+		span = expandGridDirtySpan(cells, span)
 		backend.WriteCells(row, span.start, cells[span.start:span.end])
 	}
 }

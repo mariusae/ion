@@ -52,6 +52,51 @@ func TestGridRendererViewportScrollUsesScrollOperation(t *testing.T) {
 	}
 }
 
+func TestGridRendererIncrementallyReplacesWideRune(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 4, 12
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	renderer := newGridRenderer()
+	state := newBufferState(wire.BufferView{
+		Name:     "/tmp/monarch.md",
+		Text:     "a🦋b\n",
+		DotStart: 2,
+		DotEnd:   2,
+	})
+	var out bytes.Buffer
+	if err := renderer.Draw(&out, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(initial) error = %v", err)
+	}
+
+	next := newBufferStateWithPrevious(wire.BufferView{
+		Name:     "/tmp/monarch.md",
+		Text:     "axb\n",
+		DotStart: 2,
+		DotEnd:   2,
+	}, state)
+	out.Reset()
+	request := bufferRenderRequest(redrawBufferContent, nil, newMenuState(), true)
+	if err := renderer.Draw(&out, request, next, nil, newMenuState(), nil, true, nil); err != nil {
+		t.Fatalf("Draw(replace) error = %v", err)
+	}
+
+	cells := renderer.root.rowCells(0)
+	if got := string([]rune{cells[0].r, cells[1].r, cells[2].r}); got != "axb" {
+		t.Fatalf("root row after replacement = %q, want axb", got)
+	}
+	for col, cell := range cells {
+		if cell.continuation {
+			t.Fatalf("root cell %d remains a wide-rune continuation", col)
+		}
+	}
+	if strings.ContainsRune(out.String(), '\x00') {
+		t.Fatalf("incremental output contains NUL: %q", out.String())
+	}
+}
+
 func TestGridRendererPaintsScrollbarInRightColumn(t *testing.T) {
 	t.Parallel()
 

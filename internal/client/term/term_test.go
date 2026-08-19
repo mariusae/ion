@@ -3121,6 +3121,43 @@ func TestCopySamfileToTmuxWritesCurrentBufferPath(t *testing.T) {
 	}
 }
 
+func TestCopySamfileToTmuxIncludesSelectionLines(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		dotStart int
+		dotEnd   int
+		want     string
+	}{
+		{name: "single line", dotStart: 6, dotEnd: 10, want: "/tmp/project/display.txt:2"},
+		{name: "multiple lines", dotStart: 2, dotEnd: 13, want: "/tmp/project/display.txt:1-3"},
+		{name: "selection ends at next line start", dotStart: 0, dotEnd: 6, want: "/tmp/project/display.txt:1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := newBufferState(wire.BufferView{
+				Name:     "display.txt",
+				Path:     "/tmp/project/display.txt",
+				Text:     "alpha\nbeta\ngamma\n",
+				DotStart: tt.dotStart,
+				DotEnd:   tt.dotEnd,
+			})
+			var loaded []byte
+			_, err := copySamfileToTmux(state, func(data []byte) error {
+				loaded = append([]byte(nil), data...)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("copySamfileToTmux() error = %v", err)
+			}
+			if got := string(loaded); got != tt.want {
+				t.Fatalf("tmux loaded buffer = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCopySamfileToTmuxFallsBackToBufferName(t *testing.T) {
 	t.Parallel()
 

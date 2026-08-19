@@ -5969,10 +5969,34 @@ func copySamfileToTmux(buffer *bufferState, write func([]byte) error) (string, e
 	if path == "" {
 		return "", fmt.Errorf("no current buffer path")
 	}
+	path += bufferSelectionLineSuffix(buffer)
 	if err := write([]byte(path)); err != nil {
 		return "", err
 	}
 	return "samfile copied to tmux", nil
+}
+
+func bufferSelectionLineSuffix(buffer *bufferState) string {
+	if buffer == nil || buffer.dotEnd <= buffer.dotStart {
+		return ""
+	}
+	start := lineNumberAtRune(buffer.text, buffer.dotStart)
+	end := lineNumberAtRune(buffer.text, buffer.dotEnd-1)
+	if start == end {
+		return fmt.Sprintf(":%d", start)
+	}
+	return fmt.Sprintf(":%d-%d", start, end)
+}
+
+func lineNumberAtRune(text []rune, pos int) int {
+	pos = clampIndex(pos, len(text))
+	line := 1
+	for _, r := range text[:pos] {
+		if r == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 func currentBufferSamfile(buffer *bufferState) string {

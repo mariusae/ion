@@ -306,8 +306,12 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	if got, want := len(items), 4; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	if got, want := items[0].label, "    ../"; got != want {
+	parentLabel := filepath.Dir(root) + string(filepath.Separator)
+	if got, want := items[0].label, "    "+parentLabel; got != want {
 		t.Fatalf("first label = %q, want %q", got, want)
+	}
+	if got, want := items[0].value, parentLabel; got != want {
+		t.Fatalf("first value = %q, want %q", got, want)
 	}
 	if got, want := items[1].label, "    subdir/"; got != want {
 		t.Fatalf("second label = %q, want %q", got, want)
@@ -369,8 +373,12 @@ func TestBuildDirectoryPickerItemsForDirListsNavigatedDirectory(t *testing.T) {
 	if got, want := len(items), 2; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	if got, want := items[0].label, "    ../"; got != want {
+	parentLabel := root + string(filepath.Separator)
+	if got, want := items[0].label, "    "+parentLabel; got != want {
 		t.Fatalf("parent label = %q, want %q", got, want)
+	}
+	if got, want := items[0].search, strings.ToLower(parentLabel); got != want {
+		t.Fatalf("parent search = %q, want %q", got, want)
 	}
 	if got, want := items[0].path, root; got != want {
 		t.Fatalf("parent path = %q, want %q", got, want)
@@ -380,6 +388,32 @@ func TestBuildDirectoryPickerItemsForDirListsNavigatedDirectory(t *testing.T) {
 	}
 	if got, want := items[1].label, "    nested.txt"; got != want {
 		t.Fatalf("file label = %q, want %q", got, want)
+	}
+}
+
+func TestDirectoryPickerPathLabelUsesRelativePathsInsideWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(cwd, "path", "to", "parent", "dir")
+	if got, want := directoryPickerPathLabel(path), filepath.Join("path", "to", "parent", "dir")+string(filepath.Separator); got != want {
+		t.Fatalf("directoryPickerPathLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestDirectoryPickerPathLabelKeepsAbsolutePathsOutsideWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(filepath.Dir(cwd), "elsewhere")
+	if got, want := directoryPickerPathLabel(path), path+string(filepath.Separator); got != want {
+		t.Fatalf("directoryPickerPathLabel() = %q, want %q", got, want)
 	}
 }
 

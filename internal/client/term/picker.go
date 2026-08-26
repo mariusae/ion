@@ -448,11 +448,12 @@ func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wi
 		loadedByPath[filepath.Clean(path)] = file
 	}
 	parent := filepath.Clean(filepath.Join(dir, ".."))
+	parentLabel := directoryPickerPathLabel(parent)
 	items = append(items, overlayPickerItem{
 		key:    "dir:" + parent,
-		label:  "    ../",
-		value:  "../",
-		search: "../",
+		label:  "    " + parentLabel,
+		value:  parentLabel,
+		search: strings.ToLower(parentLabel),
 		path:   parent,
 		dir:    true,
 	})
@@ -500,6 +501,23 @@ func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wi
 	})
 	items = append(items, fileItems...)
 	return items, preferred, nil
+}
+
+func directoryPickerPathLabel(path string) string {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if cwd, err := os.Getwd(); err == nil {
+		cwd = filepath.Clean(cwd)
+		if rel, relErr := filepath.Rel(cwd, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			path = rel
+		}
+	}
+	if path == "." {
+		return "." + string(filepath.Separator)
+	}
+	if strings.HasSuffix(path, string(filepath.Separator)) {
+		return path
+	}
+	return path + string(filepath.Separator)
 }
 
 func buildRecursiveFilePickerItems(root string, paths []string, buffer *bufferState, files []wire.MenuFile) ([]overlayPickerItem, string) {

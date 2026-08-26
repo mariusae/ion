@@ -306,11 +306,11 @@ func TestBuildDirectoryPickerItemsListsCurrentDirectoryFiles(t *testing.T) {
 	if got, want := len(items), 4; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	parentLabel := filepath.Dir(root) + string(filepath.Separator)
-	if got, want := items[0].label, "..  "+parentLabel; got != want {
+	dirLabel := root + string(filepath.Separator)
+	if got, want := items[0].label, "..  "+dirLabel; got != want {
 		t.Fatalf("first label = %q, want %q", got, want)
 	}
-	if got, want := items[0].value, parentLabel; got != want {
+	if got, want := items[0].value, dirLabel; got != want {
 		t.Fatalf("first value = %q, want %q", got, want)
 	}
 	if got, want := items[1].label, "    subdir/"; got != want {
@@ -373,11 +373,11 @@ func TestBuildDirectoryPickerItemsForDirListsNavigatedDirectory(t *testing.T) {
 	if got, want := len(items), 2; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	parentLabel := root + string(filepath.Separator)
-	if got, want := items[0].label, "..  "+parentLabel; got != want {
+	dirLabel := child + string(filepath.Separator)
+	if got, want := items[0].label, "..  "+dirLabel; got != want {
 		t.Fatalf("parent label = %q, want %q", got, want)
 	}
-	if got, want := items[0].search, strings.ToLower(parentLabel); got != want {
+	if got, want := items[0].search, strings.ToLower(dirLabel); got != want {
 		t.Fatalf("parent search = %q, want %q", got, want)
 	}
 	if got, want := items[0].path, root; got != want {

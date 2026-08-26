@@ -448,12 +448,12 @@ func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wi
 		loadedByPath[filepath.Clean(path)] = file
 	}
 	parent := filepath.Clean(filepath.Join(dir, ".."))
-	parentLabel := directoryPickerPathLabel(parent)
+	dirLabel := directoryPickerPathLabel(dir)
 	items = append(items, overlayPickerItem{
 		key:    "dir:" + parent,
-		label:  "..  " + parentLabel,
-		value:  parentLabel,
-		search: strings.ToLower(parentLabel),
+		label:  "..  " + dirLabel,
+		value:  dirLabel,
+		search: strings.ToLower(dirLabel),
 		path:   parent,
 		dir:    true,
 	})

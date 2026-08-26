@@ -404,6 +404,18 @@ func TestDirectoryPickerPathLabelUsesRelativePathsInsideWorkingDirectory(t *test
 	}
 }
 
+func TestDirectoryPickerPathLabelUsesAbsolutePathForWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if got, want := directoryPickerPathLabel(cwd), cwd+string(filepath.Separator); got != want {
+		t.Fatalf("directoryPickerPathLabel() = %q, want %q", got, want)
+	}
+}
+
 func TestDirectoryPickerPathLabelKeepsAbsolutePathsOutsideWorkingDirectory(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,7 @@ package term
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -231,11 +232,60 @@ func menuTitleForBuffer(buffer *bufferState) string {
 	if len(buffer.text) > 0 {
 		pct = buffer.origin * 100 / len(buffer.text)
 	}
-	titleName := buffer.name
+	titleName := bufferDisplayPath(buffer)
 	if titleName == "" {
 		titleName = "(unnamed)"
 	}
 	return fmt.Sprintf(" %s (%d%%) ", titleName, pct)
+}
+
+func bufferDisplayPath(buffer *bufferState) string {
+	if buffer == nil {
+		return ""
+	}
+	if path := cwdRelativePathLabel(buffer.path); path != "" {
+		return path
+	}
+	return cwdRelativePathLabel(buffer.name)
+}
+
+func cwdRelativePathLabel(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return path
+		}
+		path = abs
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+	cwd = filepath.Clean(cwd)
+	if rel, relErr := filepath.Rel(comparableMenuPath(cwd), comparableMenuPath(path)); relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel
+	}
+	return path
+}
+
+func comparableMenuPath(path string) string {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != "" {
+		return filepath.Clean(resolved)
+	}
+	dir := filepath.Dir(clean)
+	if dir == "" || dir == "." || dir == clean {
+		return clean
+	}
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil && resolvedDir != "" {
+		return filepath.Join(filepath.Clean(resolvedDir), filepath.Base(clean))
+	}
+	return clean
 }
 
 func currentBufferDirectory(buffer *bufferState) (string, bool) {
@@ -450,7 +500,7 @@ func menuShimmerPrefix(theme *uiTheme, current, hover bool, index, length int) s
 func formatMenuBorder(title string, inner int, leftBorder, rightBorder, fill rune) string {
 	runes := []rune(title)
 	if len(runes) > inner {
-		runes = runes[:inner]
+		runes = runes[len(runes)-inner:]
 	}
 	text := string(runes)
 	if pad := inner - len(runes); pad > 0 {

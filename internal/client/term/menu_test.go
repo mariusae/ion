@@ -2,6 +2,7 @@ package term
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,6 +56,34 @@ func TestBuildContextMenuIncludesCoreItemsAndFiles(t *testing.T) {
 	}
 	if got, want := menu.items[len(menu.items)-2].label, " '. in.txt"; got != want {
 		t.Fatalf("current file label = %q, want %q", got, want)
+	}
+}
+
+func TestMenuTitleForBufferUsesRelativePathInsideWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(cwd, "path", "to", "file.1")
+	buffer := newBufferState(wire.BufferView{Name: "file.1", Path: path})
+	if got, want := menuTitleForBuffer(buffer), " "+filepath.Join("path", "to", "file.1")+" (0%) "; got != want {
+		t.Fatalf("menuTitleForBuffer() = %q, want %q", got, want)
+	}
+}
+
+func TestMenuTitleForBufferUsesAbsolutePathOutsideWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(filepath.Dir(cwd), "elsewhere", "file.1")
+	buffer := newBufferState(wire.BufferView{Name: "file.1", Path: path})
+	if got, want := menuTitleForBuffer(buffer), " "+path+" (0%) "; got != want {
+		t.Fatalf("menuTitleForBuffer() = %q, want %q", got, want)
 	}
 }
 
@@ -208,6 +237,9 @@ func TestFormatMenuBorderUsesContiguousUnicodeBorders(t *testing.T) {
 	}
 	if got, want := formatMenuBorder("", 6, '├', '┤', '─'), "├──────┤"; got != want {
 		t.Fatalf("separator border = %q, want %q", got, want)
+	}
+	if got, want := formatMenuBorder(" abcdefghijkl ", 8, '╭', '╮', '─'), "╭fghijkl ╮"; got != want {
+		t.Fatalf("cropped title border = %q, want left side cropped to %q", got, want)
 	}
 }
 

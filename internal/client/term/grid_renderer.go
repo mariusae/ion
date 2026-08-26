@@ -72,7 +72,7 @@ func (r *gridRenderer) Draw(stdout io.Writer, req renderRequest, state *bufferSt
 	rootChanged := r.ensureGrids(overlay, menu)
 	forceFull := req.forceFull || !r.initialized || rootChanged
 
-	nextTitle := state.name
+	nextTitle := bufferDisplayPath(state)
 	nextTitleDirty := state.dirty
 	nextTitleChanged := state.diskChanged
 	nextTerminal := defaultFrameTerminalState()

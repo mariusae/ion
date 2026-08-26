@@ -1025,15 +1025,21 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	}
 }
 
-func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
+func TestDrawBufferModeSetsWindowTitleToAbsolutePathOutsideWorkingDirectory(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20
 	t.Cleanup(func() {
 		termRows, termCols = prevRows, prevCols
 	})
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(filepath.Dir(cwd), "elsewhere", "alpha.txt")
 	state := newBufferState(wire.BufferView{
-		Name:     "/tmp/work/alpha.txt",
+		Name:     "alpha.txt",
+		Path:     path,
 		Text:     "alpha\n",
 		DotStart: 0,
 		DotEnd:   0,
@@ -1043,8 +1049,39 @@ func TestDrawBufferModeSetsWindowTitleToBasename(t *testing.T) {
 	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\x07") {
-		t.Fatalf("drawBufferMode() = %q, want basename-only window title", got)
+	wantTitle := "\x1b]2;" + path + "\x07"
+	if got := out.String(); !strings.Contains(got, wantTitle) {
+		t.Fatalf("drawBufferMode() = %q, want absolute-path window title", got)
+	}
+}
+
+func TestDrawBufferModeSetsWindowTitleToRelativePathInsideWorkingDirectory(t *testing.T) {
+	prevRows, prevCols := termRows, termCols
+	termRows, termCols = 6, 20
+	t.Cleanup(func() {
+		termRows, termCols = prevRows, prevCols
+	})
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(cwd, "path", "to", "alpha.txt")
+	state := newBufferState(wire.BufferView{
+		Name:     "alpha.txt",
+		Path:     path,
+		Text:     "alpha\n",
+		DotStart: 0,
+		DotEnd:   0,
+	})
+
+	var out bytes.Buffer
+	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
+		t.Fatalf("drawBufferMode() error = %v", err)
+	}
+	wantTitle := "\x1b]2;" + filepath.Join("path", "to", "alpha.txt") + "\x07"
+	if got := out.String(); !strings.Contains(got, wantTitle) {
+		t.Fatalf("drawBufferMode() = %q, want cwd-relative window title %q", got, wantTitle)
 	}
 }
 
@@ -1055,8 +1092,14 @@ func TestDrawBufferModeMarksDirtyWindowTitle(t *testing.T) {
 		termRows, termCols = prevRows, prevCols
 	})
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(filepath.Dir(cwd), "elsewhere", "alpha.txt")
 	state := newBufferState(wire.BufferView{
-		Name:     "/tmp/work/alpha.txt",
+		Name:     "alpha.txt",
+		Path:     path,
 		Text:     "alpha\n",
 		DotStart: 0,
 		DotEnd:   0,
@@ -1067,7 +1110,7 @@ func TestDrawBufferModeMarksDirtyWindowTitle(t *testing.T) {
 	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt'\x07") {
+	if got := out.String(); !strings.Contains(got, "\x1b]2;"+path+"'\x07") {
 		t.Fatalf("drawBufferMode() = %q, want dirty window title marker", got)
 	}
 }
@@ -1079,8 +1122,14 @@ func TestDrawBufferModeMarksDirtyChangedWindowTitle(t *testing.T) {
 		termRows, termCols = prevRows, prevCols
 	})
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	path := filepath.Join(filepath.Dir(cwd), "elsewhere", "alpha.txt")
 	state := newBufferState(wire.BufferView{
-		Name:     "/tmp/work/alpha.txt",
+		Name:     "alpha.txt",
+		Path:     path,
 		Text:     "alpha\n",
 		DotStart: 0,
 		DotEnd:   0,
@@ -1092,7 +1141,7 @@ func TestDrawBufferModeMarksDirtyChangedWindowTitle(t *testing.T) {
 	if err := drawBufferModeRequest(&out, nil, nil, fullRenderRequest(redrawInitial), state, nil, newMenuState(), nil, true); err != nil {
 		t.Fatalf("drawBufferMode() error = %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b]2;alpha.txt\"\x07") {
+	if got := out.String(); !strings.Contains(got, "\x1b]2;"+path+"\"\x07") {
 		t.Fatalf("drawBufferMode() = %q, want dirty+changed window title marker", got)
 	}
 }

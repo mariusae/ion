@@ -504,13 +504,7 @@ func buildDirectoryPickerItemsForDir(dir string, buffer *bufferState, files []wi
 }
 
 func directoryPickerPathLabel(path string) string {
-	path = filepath.Clean(strings.TrimSpace(path))
-	if cwd, err := os.Getwd(); err == nil {
-		cwd = filepath.Clean(cwd)
-		if rel, relErr := filepath.Rel(cwd, path); relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			path = rel
-		}
-	}
+	path = cwdRelativePathLabel(path)
 	if strings.HasSuffix(path, string(filepath.Separator)) {
 		return path
 	}

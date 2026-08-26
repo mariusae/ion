@@ -5752,7 +5752,7 @@ func nextMenuFileAfterDelete(files []wire.MenuFile, deletedFileID int) (int, boo
 }
 
 func bufferWindowTitleSequence(name string, dirty, changed bool) string {
-	title := filepath.Base(strings.TrimSpace(name))
+	title := strings.TrimSpace(name)
 	if title == "." || title == string(filepath.Separator) {
 		title = ""
 	}

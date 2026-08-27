@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -513,9 +514,21 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	if options.Refresh != nil {
 		go forwardWakeRequests(signalDone, wakeW, options.Refresh, wakeRefresh)
 	}
+	recursivePickerWakeRequests := make(chan struct{}, 1)
+	go forwardWakeRequests(signalDone, wakeW, recursivePickerWakeRequests, wakePicker)
 	recursivePickerUpdates := make(chan recursivePickerUpdate, 16)
 	recursivePickerGeneration := 0
 	var recursivePickerCancel context.CancelFunc
+	var recursivePickerWakePending atomic.Bool
+	recursivePickerNotify := func() {
+		if !recursivePickerWakePending.CompareAndSwap(false, true) {
+			return
+		}
+		select {
+		case recursivePickerWakeRequests <- struct{}{}:
+		default:
+		}
+	}
 
 	parser := cmdlang.NewParserRunes(nil)
 	theme, prefetched := detectTerminalTheme(stdin, stdout)
@@ -1876,7 +1889,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 
 	recursivePickerRoot := ""
 	var recursivePickerFiles []wire.MenuFile
-	var recursivePickerPaths []string
 
 	cancelRecursivePicker := func() {
 		if recursivePickerCancel != nil {
@@ -1912,7 +1924,6 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		root = filepath.Clean(root)
 		recursivePickerRoot = root
 		recursivePickerFiles = append(recursivePickerFiles[:0], snapshot.Files...)
-		recursivePickerPaths = recursivePickerPaths[:0]
 		startFileID := 0
 		startDotStart := 0
 		startDotEnd := 0
@@ -1932,7 +1943,7 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		overlay.picker.scanning = true
 		overlay.picker.scanRoot = root
 		filePickerPreview.begin(startFileID, startDotStart, startDotEnd)
-		go scanRecursiveFilePicker(ctx, recursivePickerGeneration, root, recursivePickerUpdates, wakeW)
+		go scanRecursiveFilePicker(ctx, recursivePickerGeneration, root, recursivePickerUpdates, recursivePickerNotify)
 		return redraw(renderRequestForLayers(redrawOverlayOpen, renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
 	}
 
@@ -1944,14 +1955,22 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		changed := false
 		done := false
 		var scanErr error
+		var newPaths []string
+		const maxPathsPerUpdate = 2048
+		deadline := time.Now().Add(5 * time.Millisecond)
+	drainUpdates:
 		for {
+			if len(newPaths) >= maxPathsPerUpdate || time.Now().After(deadline) {
+				recursivePickerNotify()
+				break drainUpdates
+			}
 			select {
 			case update := <-recursivePickerUpdates:
 				if update.generation != recursivePickerGeneration {
 					continue
 				}
 				if len(update.paths) > 0 {
-					recursivePickerPaths = append(recursivePickerPaths, update.paths...)
+					newPaths = append(newPaths, update.paths...)
 					changed = true
 				}
 				if update.done {
@@ -1960,19 +1979,20 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					changed = true
 				}
 			default:
-				if !changed {
-					return overlayHistoryRedraw(redrawOverlayHistory)
-				}
-				items, preferred := buildRecursiveFilePickerItems(recursivePickerRoot, recursivePickerPaths, buffer, recursivePickerFiles)
-				overlay.setPickerItems(items, preferred)
-				overlay.picker.scanning = !done
-				overlay.picker.scanRoot = recursivePickerRoot
-				if scanErr != nil {
-					overlay.picker.scanErr = "?scan: " + diagnosticText(scanErr)
-				}
-				return redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
+				break drainUpdates
 			}
 		}
+		if !changed {
+			return nil
+		}
+		items, preferred := buildRecursiveFilePickerItems(recursivePickerRoot, newPaths, buffer, recursivePickerFiles)
+		overlay.appendPickerItems(items, preferred, done)
+		overlay.picker.scanning = !done
+		overlay.picker.scanRoot = recursivePickerRoot
+		if scanErr != nil {
+			overlay.picker.scanErr = "?scan: " + diagnosticText(scanErr)
+		}
+		return redraw(renderRequestForLayers(redrawOverlayHistory, renderInvalidateOverlayHistory|renderInvalidateOverlayInput))
 	}
 
 	var showKeyboardMenu func() error
@@ -2328,7 +2348,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 	}
 
 	handleOverlayMouse := func(event mouseEvent) (bool, error) {
-		return handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection, func() error {
+		wasRecursivePicker := overlay.pickerMode() == overlayModeRecursiveFilePicker
+		handled, err := handleOverlayMouseEvent(stdout, overlay, event, openTargetToken, flashOverlaySelection, func() error {
 			paste, err := middleClickPasteBuffer(snarf, readTmuxPasteBuffer)
 			if err != nil {
 				return err
@@ -2346,6 +2367,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			overlay.insert(filtered)
 			return overlayInputRedraw(redrawOverlayInput)
 		})
+		if wasRecursivePicker && (!overlay.visible || overlay.pickerMode() != overlayModeRecursiveFilePicker) {
+			cancelRecursivePicker()
+		}
+		return handled, err
 	}
 
 	handleBufferSpecial := func(key int, mouse *mouseEvent) (bool, error) {
@@ -2748,11 +2773,11 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 						return err
 					}
 				}
-				wake, err := waitForTTYReady(stdin, wakeR)
+				stdinReady, wakeReady, err := waitForTTYReady(stdin, wakeR)
 				if err != nil {
 					return err
 				}
-				if wake {
+				if wakeReady && !stdinReady {
 					tags, err := readWakeTags(wakeR)
 					if err != nil {
 						return err
@@ -2796,12 +2821,16 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							}
 						case wakePicker:
 							if inBufferMode {
+								recursivePickerWakePending.Store(false)
 								if err := applyRecursivePickerUpdates(); err != nil {
 									return err
 								}
 							}
 						}
 					}
+					continue
+				}
+				if !stdinReady {
 					continue
 				}
 				if renderer != nil && renderer.trace != nil {
@@ -2850,6 +2879,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							if overlay.pickerMode() == overlayModeRefinePicker {
 								refinePreviewChanged = closeRefinePicker(false)
 							} else {
+								if overlay.pickerMode() == overlayModeRecursiveFilePicker {
+									cancelRecursivePicker()
+								}
 								overlay.close()
 							}
 							previewChanged, err := finishFilePickerPreview(false, overlayPickerItem{})
@@ -2968,6 +3000,9 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 							if overlay.pickerMode() == overlayModeRefinePicker {
 								closeRefinePicker(false)
 							} else {
+								if overlay.pickerMode() == overlayModeRecursiveFilePicker {
+									cancelRecursivePicker()
+								}
 								overlay.close()
 							}
 							_, err := finishFilePickerPreview(false, overlayPickerItem{})
@@ -3948,8 +3983,9 @@ func forwardWakeRequests(done <-chan struct{}, wake io.Writer, ch <-chan struct{
 	}
 }
 
-func scanRecursiveFilePicker(ctx context.Context, generation int, root string, updates chan<- recursivePickerUpdate, wake io.Writer) {
-	const batchSize = 64
+func scanRecursiveFilePicker(ctx context.Context, generation int, root string, updates chan<- recursivePickerUpdate, notify func()) {
+	const batchSize = 256
+	const batchInterval = 100 * time.Millisecond
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "" {
 		root = "."
@@ -3970,7 +4006,9 @@ func scanRecursiveFilePicker(ctx context.Context, generation int, root string, u
 			return false
 		case updates <- update:
 			lastSend = time.Now()
-			_, _ = wake.Write([]byte{wakePicker})
+			if notify != nil {
+				notify()
+			}
 			return true
 		}
 	}
@@ -3999,12 +4037,11 @@ func scanRecursiveFilePicker(ctx context.Context, generation int, root string, u
 		if ignores.ignored(path, false) {
 			return nil
 		}
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
+		if entry.Type()&os.ModeType != 0 {
 			return nil
 		}
 		batch = append(batch, path)
-		if (len(batch) >= batchSize || time.Since(lastSend) >= 50*time.Millisecond) && !send(false, nil) {
+		if (len(batch) >= batchSize || time.Since(lastSend) >= batchInterval) && !send(false, nil) {
 			return ctx.Err()
 		}
 		return nil
@@ -4015,23 +4052,25 @@ func scanRecursiveFilePicker(ctx context.Context, generation int, root string, u
 	_ = send(true, err)
 }
 
-func waitForTTYReady(stdin, wake *os.File) (bool, error) {
+func waitForTTYReady(stdin, wake *os.File) (bool, bool, error) {
 	stdinFD := int(stdin.Fd())
 	wakeFD := int(wake.Fd())
 	maxFD := stdinFD
 	if wakeFD > maxFD {
 		maxFD = wakeFD
 	}
-	var readfds syscall.FdSet
-	fdSetAdd(&readfds, stdinFD)
-	fdSetAdd(&readfds, wakeFD)
-	if err := selectRead(maxFD+1, &readfds, nil); err != nil {
-		if errors.Is(err, syscall.EINTR) {
-			return true, nil
+	for {
+		var readfds syscall.FdSet
+		fdSetAdd(&readfds, stdinFD)
+		fdSetAdd(&readfds, wakeFD)
+		if err := selectRead(maxFD+1, &readfds, nil); err != nil {
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+			return false, false, err
 		}
-		return false, err
+		return fdSetHas(&readfds, stdinFD), fdSetHas(&readfds, wakeFD), nil
 	}
-	return fdSetHas(&readfds, wakeFD), nil
 }
 
 func readWakeTags(wake *os.File) ([]byte, error) {

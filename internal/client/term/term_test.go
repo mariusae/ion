@@ -1025,6 +1025,36 @@ func TestDrawBufferModeUsesTerminalBarCursor(t *testing.T) {
 	}
 }
 
+func TestWaitForTTYReadyReportsStdinAndWakeReadinessTogether(t *testing.T) {
+	t.Parallel()
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(stdin) error = %v", err)
+	}
+	defer stdinR.Close()
+	defer stdinW.Close()
+	wakeR, wakeW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(wake) error = %v", err)
+	}
+	defer wakeR.Close()
+	defer wakeW.Close()
+	if _, err := stdinW.Write([]byte("x")); err != nil {
+		t.Fatalf("stdin write error = %v", err)
+	}
+	if _, err := wakeW.Write([]byte{wakePicker}); err != nil {
+		t.Fatalf("wake write error = %v", err)
+	}
+	stdinReady, wakeReady, err := waitForTTYReady(stdinR, wakeR)
+	if err != nil {
+		t.Fatalf("waitForTTYReady() error = %v", err)
+	}
+	if !stdinReady || !wakeReady {
+		t.Fatalf("waitForTTYReady() = stdin:%v wake:%v, want both ready", stdinReady, wakeReady)
+	}
+}
+
 func TestDrawBufferModeSetsWindowTitleToAbsolutePathOutsideWorkingDirectory(t *testing.T) {
 	prevRows, prevCols := termRows, termCols
 	termRows, termCols = 6, 20

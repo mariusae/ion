@@ -533,41 +533,10 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 	if limit <= 0 {
 		return nil
 	}
-	all := o.renderAllLines()
 	if o != nil && o.picker != nil {
-		if len(all) <= limit {
-			return append([]overlayRenderLine(nil), all...)
-		}
-		selected := o.picker.selected
-		if selected < 0 {
-			return append([]overlayRenderLine(nil), all[:limit]...)
-		}
-		selStart := 0
-		for i, line := range all {
-			if line.history == selected {
-				selStart = i
-				break
-			}
-		}
-		selEnd := selStart + 1
-		for selEnd < len(all) && all[selEnd].history == selected {
-			selEnd++
-		}
-		start := selStart - limit/2
-		if start < 0 {
-			start = 0
-		}
-		if selEnd > start+limit {
-			start = selEnd - limit
-		}
-		if start+limit > len(all) {
-			start = len(all) - limit
-		}
-		if start < 0 {
-			start = 0
-		}
-		return append([]overlayRenderLine(nil), all[start:start+limit]...)
+		return o.renderPickerLines(limit)
 	}
+	all := o.renderAllLines()
 	end := len(all) - o.scroll
 	if end < 0 {
 		end = 0
@@ -579,8 +548,115 @@ func (o *overlayState) renderLines(limit int) []overlayRenderLine {
 	return append([]overlayRenderLine(nil), all[start:end]...)
 }
 
+func (o *overlayState) renderPickerLines(limit int) []overlayRenderLine {
+	if o == nil || o.picker == nil || limit <= 0 {
+		return nil
+	}
+	selected := o.picker.selected
+	if selected < 0 || selected >= len(o.picker.filtered) {
+		selected = 0
+	}
+	startOrder := selected - limit/2
+	if startOrder < 0 {
+		startOrder = 0
+	}
+	build := func(start int) ([]overlayRenderLine, bool) {
+		lines := make([]overlayRenderLine, 0, limit)
+		selectedVisible := false
+		if start == 0 {
+			lines = append(lines, o.pickerStatusLines()...)
+		}
+		for order := start; order < len(o.picker.filtered) && len(lines) < limit; order++ {
+			wrapped := o.pickerItemLines(order)
+			if order == selected {
+				selectedVisible = true
+			}
+			lines = append(lines, wrapped...)
+		}
+		if len(lines) > limit {
+			lines = lines[:limit]
+		}
+		return lines, selectedVisible
+	}
+	lines, selectedVisible := build(startOrder)
+	if !selectedVisible && selected < len(o.picker.filtered) {
+		startOrder = selected
+		lines, _ = build(startOrder)
+	}
+	for startOrder > 0 && len(lines) < limit {
+		startOrder--
+		prefix := o.pickerItemLines(startOrder)
+		lines = append(prefix, lines...)
+		if len(lines) > limit {
+			lines = lines[len(lines)-limit:]
+		}
+	}
+	if startOrder == 0 && len(lines) < limit {
+		status := o.pickerStatusLines()
+		if len(status) > 0 && (len(lines) == 0 || lines[0].history != -1) {
+			lines = append(status, lines...)
+			if len(lines) > limit {
+				lines = lines[:limit]
+			}
+		}
+	}
+	return append([]overlayRenderLine(nil), lines...)
+}
+
+func (o *overlayState) pickerStatusLines() []overlayRenderLine {
+	if o == nil || o.picker == nil || !o.picker.scanning && strings.TrimSpace(o.picker.scanErr) == "" {
+		return nil
+	}
+	label := strings.TrimSpace(o.picker.scanErr)
+	if label == "" {
+		label = pickerScanSpinner() + " scanning " + strings.TrimSpace(o.picker.scanRoot)
+	}
+	wrapped := wrapOverlayRunes([]rune(label), "  ")
+	for i := range wrapped {
+		wrapped[i].history = -1
+	}
+	return wrapped
+}
+
+func (o *overlayState) pickerItemLines(order int) []overlayRenderLine {
+	if o == nil || o.picker == nil || order < 0 || order >= len(o.picker.filtered) {
+		return nil
+	}
+	idx := o.picker.filtered[order]
+	if idx < 0 || idx >= len(o.picker.items) {
+		return nil
+	}
+	prefix := "  "
+	if order == o.picker.selected {
+		prefix = "█ "
+	}
+	wrapped := wrapOverlayRunes([]rune(o.picker.items[idx].label), prefix)
+	for i := range wrapped {
+		wrapped[i].history = order
+		wrapped[i].pickerActive = order == o.picker.selected
+	}
+	return wrapped
+}
+
+func (o *overlayState) pickerLineCount(limit int) int {
+	if o == nil || o.picker == nil || limit <= 0 {
+		return 0
+	}
+	count := len(o.pickerStatusLines())
+	for order := 0; order < len(o.picker.filtered) && count < limit; order++ {
+		count += len(o.pickerItemLines(order))
+	}
+	if count > limit {
+		return limit
+	}
+	return count
+}
+
 func (o *overlayState) maxScroll(limit int) int {
 	if limit <= 0 {
+		return 0
+	}
+	if o != nil && o.picker != nil {
 		return 0
 	}
 	total := len(o.renderAllLines())
@@ -658,12 +734,21 @@ func overlayHeight(o *overlayState) int {
 	topPad := overlayTopPadRows(o)
 	prompt := overlayPromptRows(o)
 	bottomPad := overlayBottomPadRows(o)
-	historyLines := len(o.renderAllLines())
+	maxHeight := overlayMaxHeight(o)
+	historyLimit := maxHeight - topPad - prompt - bottomPad
+	if historyLimit < 1 {
+		historyLimit = 1
+	}
+	historyLines := 0
+	if o.picker != nil {
+		historyLines = o.pickerLineCount(historyLimit)
+	} else {
+		historyLines = len(o.renderAllLines())
+	}
 	height := historyLines + topPad + prompt + bottomPad
 	if height < minOverlayRows {
 		height = minOverlayRows
 	}
-	maxHeight := overlayMaxHeight(o)
 	minVisible := topPad + prompt + bottomPad
 	if historyLines > 0 {
 		minVisible++

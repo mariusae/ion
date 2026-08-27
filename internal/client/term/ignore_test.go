@@ -2,7 +2,7 @@ package term
 
 import (
 	"context"
-	"io"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,7 +27,7 @@ func TestScanRecursiveFilePickerRespectsIgnoreFiles(t *testing.T) {
 	updates := make(chan recursivePickerUpdate, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go scanRecursiveFilePicker(ctx, 7, root, updates, io.Discard)
+	go scanRecursiveFilePicker(ctx, 7, root, updates, func() {})
 
 	var got []string
 	timeout := time.After(2 * time.Second)
@@ -60,6 +60,39 @@ func TestScanRecursiveFilePickerRespectsIgnoreFiles(t *testing.T) {
 		case <-timeout:
 			t.Fatal("timed out waiting for scan")
 		}
+	}
+}
+
+func TestScanRecursiveFilePickerCancelsWhileUpdateDeliveryIsBackpressured(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for i := 0; i < 300; i++ {
+		mustWriteFile(t, filepath.Join(root, fmt.Sprintf("file-%03d.txt", i)), "")
+	}
+	updates := make(chan recursivePickerUpdate, 1)
+	notified := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		scanRecursiveFilePicker(ctx, 11, root, updates, func() {
+			select {
+			case notified <- struct{}{}:
+			default:
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial scan update")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan did not stop after cancellation")
 	}
 }
 

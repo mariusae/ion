@@ -1,6 +1,7 @@
 package term
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -436,7 +437,7 @@ func TestDirectoryPickerNavigationPaths(t *testing.T) {
 	child := filepath.Clean("/tmp/child")
 	overlay := newOverlayState()
 	overlay.openPicker(overlayModeDirectoryPicker, []overlayPickerItem{
-		{key: "dir:" + parent, label: "    ../", value: "../", path: parent, dir: true},
+		{key: "dir:" + parent, label: "..  /tmp/child/", value: "/tmp/child/", path: parent, dir: true},
 		{key: "dir:" + child, label: "    child/", value: "child/", path: child, dir: true},
 		{key: "path:/tmp/file.txt", label: "    file.txt", value: "file.txt", path: "/tmp/file.txt"},
 	}, "")
@@ -546,6 +547,61 @@ func TestRecursivePickerRenderShowsScanningIndicatorWithoutSelection(t *testing.
 	}
 	if !lines[1].pickerActive {
 		t.Fatal("first item pickerActive = false, want true")
+	}
+}
+
+func TestOverlayRecursiveFilePickerAppendsMatchingItemsIncrementally(t *testing.T) {
+	t.Parallel()
+
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, []overlayPickerItem{
+		{key: "path:proc.rs", label: "    proc.rs", value: "proc.rs", search: "proc.rs"},
+		{key: "path:other.rs", label: "    other.rs", value: "other.rs", search: "other.rs"},
+	}, "")
+	overlay.insert([]rune("pr"))
+	overlay.appendPickerItems([]overlayPickerItem{
+		{key: "path:src/process.rs", label: "    src/process.rs", value: "src/process.rs", search: "src/process.rs"},
+		{key: "path:notes.txt", label: "    notes.txt", value: "notes.txt", search: "notes.txt"},
+	}, "", false)
+
+	if got, want := len(overlay.picker.items), 4; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := len(overlay.picker.filtered), 2; got != want {
+		t.Fatalf("len(filtered) = %d, want %d", got, want)
+	}
+	values := recursivePickerFilteredValues(overlay)
+	if !reflect.DeepEqual(values, []string{"proc.rs", "src/process.rs"}) {
+		t.Fatalf("filtered values = %#v, want matching old and appended items", values)
+	}
+}
+
+func TestOverlayRecursiveFilePickerRendersSelectedViewportFromLargeResultSet(t *testing.T) {
+	prevCols := termCols
+	termCols = 80
+	t.Cleanup(func() { termCols = prevCols })
+
+	const itemCount = 10_000
+	items := make([]overlayPickerItem, itemCount)
+	for i := range items {
+		value := fmt.Sprintf("path/to/file-%05d.txt", i)
+		items[i] = overlayPickerItem{key: value, label: "    " + value, value: value, search: value}
+	}
+	overlay := newOverlayState()
+	overlay.openPicker(overlayModeRecursiveFilePicker, items, "")
+	overlay.picker.selected = itemCount - 1
+	lines := overlay.renderLines(5)
+	if got, want := len(lines), 5; got != want {
+		t.Fatalf("len(renderLines) = %d, want %d", got, want)
+	}
+	foundSelected := false
+	for _, line := range lines {
+		if line.pickerActive {
+			foundSelected = true
+		}
+	}
+	if !foundSelected {
+		t.Fatal("renderLines() omitted selected item")
 	}
 }
 

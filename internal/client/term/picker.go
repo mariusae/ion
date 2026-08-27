@@ -40,14 +40,16 @@ type overlayPickerItem struct {
 }
 
 type overlayPicker struct {
-	mode      overlayMode
-	items     []overlayPickerItem
-	filtered  []int
-	selected  int
-	preferred string
-	scanning  bool
-	scanRoot  string
-	scanErr   string
+	mode       overlayMode
+	items      []overlayPickerItem
+	filtered   []int
+	selected   int
+	preferred  string
+	scoreQuery string
+	scores     map[int]recursivePickerMatchScore
+	scanning   bool
+	scanRoot   string
+	scanErr    string
 }
 
 type overlayPickerSnapshot struct {
@@ -770,6 +772,82 @@ func (o *overlayState) setPickerItems(items []overlayPickerItem, preferred strin
 	o.refreshPicker()
 }
 
+func (o *overlayState) appendPickerItems(items []overlayPickerItem, preferred string, final bool) {
+	if o == nil || o.picker == nil || len(items) == 0 && !final {
+		return
+	}
+	if o.picker.mode != overlayModeRecursiveFilePicker {
+		o.picker.items = append(o.picker.items, items...)
+		if strings.TrimSpace(preferred) != "" {
+			o.picker.preferred = strings.TrimSpace(preferred)
+		}
+		o.refreshPicker()
+		return
+	}
+	base := len(o.picker.items)
+	o.picker.items = append(o.picker.items, items...)
+	if strings.TrimSpace(preferred) != "" {
+		o.picker.preferred = strings.TrimSpace(preferred)
+	}
+	query := strings.ToLower(strings.TrimSpace(string(o.input)))
+	if query == "" {
+		for i := range items {
+			o.picker.filtered = append(o.picker.filtered, base+i)
+		}
+		o.picker.scoreQuery = ""
+		o.picker.scores = nil
+		if preferred != "" {
+			for i, idx := range o.picker.filtered {
+				if o.picker.items[idx].key == preferred {
+					o.picker.selected = i
+					return
+				}
+			}
+		}
+		if o.picker.selected < 0 && len(o.picker.filtered) > 0 {
+			o.picker.selected = 0
+		}
+		return
+	}
+	if o.picker.scoreQuery != query || o.picker.scores == nil {
+		o.refreshPicker()
+		return
+	}
+	selectedItem := -1
+	if final && o.picker.selected >= 0 && o.picker.selected < len(o.picker.filtered) {
+		selectedItem = o.picker.filtered[o.picker.selected]
+	}
+	for i, item := range items {
+		idx := base + i
+		score := scoreRecursivePickerMatch(query, item)
+		if !score.matched {
+			continue
+		}
+		o.picker.scores[idx] = score
+		o.picker.filtered = append(o.picker.filtered, idx)
+	}
+	if len(o.picker.filtered) == 0 {
+		o.picker.selected = -1
+		return
+	}
+	if !final {
+		if o.picker.selected < 0 {
+			o.picker.selected = 0
+		}
+		return
+	}
+	sortRecursivePickerMatchesWithScores(o.picker.filtered, o.picker.scores)
+	o.picker.selected = 0
+	if selectedItem >= 0 {
+		for i, idx := range o.picker.filtered {
+			if idx == selectedItem {
+				o.picker.selected = i
+				break
+			}
+		}
+	}
+}
+
 func (o *overlayState) closePicker() {
 	if o == nil {
 		return
@@ -833,16 +911,15 @@ func selectedDirectoryPickerPath(o *overlayState) (string, bool) {
 }
 
 func parentDirectoryPickerPath(o *overlayState) (string, bool) {
-	if o == nil || o.pickerMode() != overlayModeDirectoryPicker || o.picker == nil {
+	if o == nil || o.pickerMode() != overlayModeDirectoryPicker || o.picker == nil || len(o.picker.items) == 0 {
 		return "", false
 	}
-	for _, item := range o.picker.items {
-		if item.dir && item.value == "../" {
-			path := strings.TrimSpace(item.path)
-			return path, path != ""
-		}
+	item := o.picker.items[0]
+	if !item.dir {
+		return "", false
 	}
-	return "", false
+	path := strings.TrimSpace(item.path)
+	return path, path != ""
 }
 
 func (o *overlayState) refreshPicker() {
@@ -866,6 +943,10 @@ func (o *overlayState) refreshPicker() {
 		}
 	}
 	filtered := make([]int, 0, len(o.picker.items))
+	var recursiveScores map[int]recursivePickerMatchScore
+	if o.picker.mode == overlayModeRecursiveFilePicker && query != "" {
+		recursiveScores = make(map[int]recursivePickerMatchScore, len(o.picker.items))
+	}
 	for i, item := range o.picker.items {
 		if o.picker.mode == overlayModeRefinePicker {
 			if rawQuery == "" || refineRe.MatchString(item.value) {
@@ -874,7 +955,13 @@ func (o *overlayState) refreshPicker() {
 			continue
 		}
 		if o.picker.mode == overlayModeRecursiveFilePicker {
-			if query == "" || fuzzyPickerMatch(query, item.search) {
+			if query == "" {
+				filtered = append(filtered, i)
+				continue
+			}
+			score := scoreRecursivePickerMatch(query, item)
+			if score.matched {
+				recursiveScores[i] = score
 				filtered = append(filtered, i)
 			}
 			continue
@@ -884,9 +971,11 @@ func (o *overlayState) refreshPicker() {
 		}
 	}
 	if o.picker.mode == overlayModeRecursiveFilePicker && query != "" {
-		sortRecursivePickerMatches(o.picker.items, filtered, query)
+		sortRecursivePickerMatchesWithScores(filtered, recursiveScores)
 		previousKey = ""
 	}
+	o.picker.scoreQuery = query
+	o.picker.scores = recursiveScores
 	o.picker.filtered = filtered
 	o.picker.selected = -1
 	if len(filtered) == 0 {
@@ -935,8 +1024,9 @@ func fuzzyPickerPositions(query, candidate string) ([]int, bool) {
 }
 
 type recursivePickerMatchScore struct {
-	score int
-	value string
+	score   int
+	value   string
+	matched bool
 }
 
 func sortRecursivePickerMatches(items []overlayPickerItem, filtered []int, query string) {
@@ -944,6 +1034,10 @@ func sortRecursivePickerMatches(items []overlayPickerItem, filtered []int, query
 	for _, idx := range filtered {
 		scores[idx] = scoreRecursivePickerMatch(query, items[idx])
 	}
+	sortRecursivePickerMatchesWithScores(filtered, scores)
+}
+
+func sortRecursivePickerMatchesWithScores(filtered []int, scores map[int]recursivePickerMatchScore) {
 	sort.SliceStable(filtered, func(i, j int) bool {
 		left := filtered[i]
 		right := filtered[j]
@@ -1012,8 +1106,9 @@ func scoreRecursivePickerMatch(query string, item overlayPickerItem) recursivePi
 		20*gapPenalty -
 		len(candidateRunes)
 	return recursivePickerMatchScore{
-		score: score,
-		value: candidate,
+		score:   score,
+		value:   candidate,
+		matched: true,
 	}
 }
 

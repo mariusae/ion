@@ -12,8 +12,8 @@ import (
 var recursivePickerIgnoreFiles = [...]string{".gitignore", ".hgignore", ".ignore"}
 
 type recursiveIgnoreMatcher struct {
-	root  string
-	rules []recursiveIgnoreRule
+	root        string
+	rulesByBase map[string][]recursiveIgnoreRule
 }
 
 type recursiveIgnoreRule struct {
@@ -24,10 +24,14 @@ type recursiveIgnoreRule struct {
 	dirOnly  bool
 	anchored bool
 	hasSlash bool
+	compiled *regexp.Regexp
 }
 
 func newRecursiveIgnoreMatcher(root string) *recursiveIgnoreMatcher {
-	return &recursiveIgnoreMatcher{root: filepath.Clean(root)}
+	return &recursiveIgnoreMatcher{
+		root:        filepath.Clean(root),
+		rulesByBase: make(map[string][]recursiveIgnoreRule),
+	}
 }
 
 func (m *recursiveIgnoreMatcher) loadDir(dir string) {
@@ -89,7 +93,20 @@ func (m *recursiveIgnoreMatcher) loadFile(file, base string) {
 			rule.hasSlash = strings.Contains(line, "/")
 		}
 		rule.pattern = line
-		m.rules = append(m.rules, rule)
+		if rule.regexp {
+			compiled, err := regexp.Compile(rule.pattern)
+			if err != nil {
+				continue
+			}
+			rule.compiled = compiled
+		} else if strings.Contains(rule.pattern, "**") {
+			compiled, err := compileIgnoreGlob(rule.pattern)
+			if err != nil {
+				continue
+			}
+			rule.compiled = compiled
+		}
+		m.rulesByBase[base] = append(m.rulesByBase[base], rule)
 	}
 }
 
@@ -102,12 +119,27 @@ func (m *recursiveIgnoreMatcher) ignored(file string, dir bool) bool {
 		return false
 	}
 	ignored := false
-	for _, rule := range m.rules {
-		if rule.match(rel, dir) {
-			ignored = !rule.negated
+	for _, base := range recursiveIgnoreAncestorBases(rel) {
+		for _, rule := range m.rulesByBase[base] {
+			if rule.match(rel, dir) {
+				ignored = !rule.negated
+			}
 		}
 	}
 	return ignored
+}
+
+func recursiveIgnoreAncestorBases(rel string) []string {
+	bases := []string{""}
+	dir := path.Dir(rel)
+	if dir == "." || dir == "" {
+		return bases
+	}
+	parts := strings.Split(dir, "/")
+	for i := range parts {
+		bases = append(bases, strings.Join(parts[:i+1], "/"))
+	}
+	return bases
 }
 
 func (m *recursiveIgnoreMatcher) relSlash(file string) string {
@@ -131,18 +163,24 @@ func (r recursiveIgnoreRule) match(rel string, dir bool) bool {
 		sub = strings.TrimPrefix(rel, prefix)
 	}
 	if r.regexp {
-		ok, err := regexp.MatchString(r.pattern, sub)
-		return err == nil && ok
+		return r.compiled != nil && r.compiled.MatchString(sub)
 	}
 	if r.anchored || r.hasSlash {
-		return ignoreGlobMatch(r.pattern, sub) || (r.dirOnly && strings.HasPrefix(sub, r.pattern+"/"))
+		return r.globMatch(sub) || (r.dirOnly && strings.HasPrefix(sub, r.pattern+"/"))
 	}
 	for _, part := range strings.Split(sub, "/") {
-		if ignoreGlobMatch(r.pattern, part) {
+		if r.globMatch(part) {
 			return true
 		}
 	}
 	return false
+}
+
+func (r recursiveIgnoreRule) globMatch(candidate string) bool {
+	if r.compiled != nil {
+		return r.compiled.MatchString(candidate)
+	}
+	return ignoreGlobMatch(r.pattern, candidate)
 }
 
 func ignoreGlobMatch(pattern, candidate string) bool {
@@ -153,6 +191,11 @@ func ignoreGlobMatch(pattern, candidate string) bool {
 		ok, err := path.Match(pattern, candidate)
 		return err == nil && ok
 	}
+	compiled, err := compileIgnoreGlob(pattern)
+	return err == nil && compiled.MatchString(candidate)
+}
+
+func compileIgnoreGlob(pattern string) (*regexp.Regexp, error) {
 	re := strings.Builder{}
 	re.WriteString("^")
 	for i := 0; i < len(pattern); i++ {
@@ -171,8 +214,7 @@ func ignoreGlobMatch(pattern, candidate string) bool {
 		}
 	}
 	re.WriteString("$")
-	ok, err := regexp.MatchString(re.String(), candidate)
-	return err == nil && ok
+	return regexp.Compile(re.String())
 }
 
 func recursivePickerAlwaysSkipDir(name string) bool {

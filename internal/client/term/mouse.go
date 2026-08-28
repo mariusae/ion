@@ -67,8 +67,8 @@ func shouldRevealHUDFromBottomWheel(overlay *overlayState, event mouseEvent) boo
 	if overlay == nil || overlay.visible || event.y < 0 || event.y >= termRows {
 		return false
 	}
-	dir, ok := event.verticalWheelDirection()
-	return ok && dir < 0 && event.y >= termRows-hudMouseRevealRows
+	_, ok := event.verticalWheelDirection()
+	return ok && event.y >= termRows-hudMouseRevealRows
 }
 
 func bufferViewRows(overlay *overlayState) int {

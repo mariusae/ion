@@ -412,8 +412,8 @@ func TestShouldRevealHUDFromBottomWheel(t *testing.T) {
 	}{
 		{name: "bottom row", overlay: hidden, event: mouseEvent{button: 64, y: 9}, want: true},
 		{name: "second bottom row", overlay: hidden, event: mouseEvent{button: 64, y: 8}, want: true},
+		{name: "wheel down", overlay: hidden, event: mouseEvent{button: 65, y: 9}, want: true},
 		{name: "above reveal zone", overlay: hidden, event: mouseEvent{button: 64, y: 7}},
-		{name: "wheel down", overlay: hidden, event: mouseEvent{button: 65, y: 9}},
 		{name: "horizontal wheel", overlay: hidden, event: mouseEvent{button: 66, y: 9}},
 		{name: "left click", overlay: hidden, event: mouseEvent{button: 0, y: 9, pressed: true}},
 		{name: "already visible", overlay: visible, event: mouseEvent{button: 64, y: 9}},

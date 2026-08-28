@@ -17,6 +17,8 @@ type mouseEvent struct {
 	repeat  int
 }
 
+const hudMouseRevealRows = 2
+
 func (e mouseEvent) isMotion() bool {
 	return e.button >= 32 && e.button < 64
 }
@@ -59,6 +61,14 @@ func (e mouseEvent) dismissesOverlayOutside() bool {
 		return true
 	}
 	return !e.isMotion() && e.pressed
+}
+
+func shouldRevealHUDFromBottomWheel(overlay *overlayState, event mouseEvent) bool {
+	if overlay == nil || overlay.visible || event.y < 0 || event.y >= termRows {
+		return false
+	}
+	dir, ok := event.verticalWheelDirection()
+	return ok && dir < 0 && event.y >= termRows-hudMouseRevealRows
 }
 
 func bufferViewRows(overlay *overlayState) int {

@@ -2446,6 +2446,10 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			if menu.visible {
 				return false, nil
 			}
+			if shouldRevealHUDFromBottomWheel(overlay, *mouse) {
+				overlay.reopen()
+				return false, overlaySurfaceRedraw(redrawOverlayOpen)
+			}
 			if handleScrollbarMouseEvent(buffer, overlay, *mouse) {
 				clearLastBufferMouseSelection()
 				return false, bufferRedraw(redrawBufferViewport)
@@ -4518,7 +4522,7 @@ func handleOverlayMouseEvent(stdout io.Writer, overlay *overlayState, event mous
 	}
 	promptTop := termRows - overlayPromptRows(overlay) - overlayBottomPadRows(overlay)
 	promptBottom := termRows - overlayBottomPadRows(overlay)
-	if event.baseButton() == 1 && event.pressed && !event.isMotion() && event.y >= promptTop && event.y < promptBottom {
+	if event.baseButton() == 1 && event.pressed && !event.isMotion() && !event.isWheel() && event.y >= promptTop && event.y < promptBottom {
 		if pasteInput != nil {
 			return true, pasteInput()
 		}

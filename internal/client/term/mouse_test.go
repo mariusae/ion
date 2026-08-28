@@ -394,6 +394,39 @@ func TestMouseEventDismissesOverlayOutside(t *testing.T) {
 	}
 }
 
+func TestShouldRevealHUDFromBottomWheel(t *testing.T) {
+	prevRows := termRows
+	termRows = 10
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	hidden := newOverlayState()
+	visible := newOverlayState()
+	visible.visible = true
+	tests := []struct {
+		name    string
+		overlay *overlayState
+		event   mouseEvent
+		want    bool
+	}{
+		{name: "bottom row", overlay: hidden, event: mouseEvent{button: 64, y: 9}, want: true},
+		{name: "second bottom row", overlay: hidden, event: mouseEvent{button: 64, y: 8}, want: true},
+		{name: "above reveal zone", overlay: hidden, event: mouseEvent{button: 64, y: 7}},
+		{name: "wheel down", overlay: hidden, event: mouseEvent{button: 65, y: 9}},
+		{name: "horizontal wheel", overlay: hidden, event: mouseEvent{button: 66, y: 9}},
+		{name: "left click", overlay: hidden, event: mouseEvent{button: 0, y: 9, pressed: true}},
+		{name: "already visible", overlay: visible, event: mouseEvent{button: 64, y: 9}},
+		{name: "outside terminal", overlay: hidden, event: mouseEvent{button: 64, y: 10}},
+	}
+
+	for _, tt := range tests {
+		if got := shouldRevealHUDFromBottomWheel(tt.overlay, tt.event); got != tt.want {
+			t.Errorf("%s: shouldRevealHUDFromBottomWheel() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestHandleOverlayMouseEventIgnoresPassiveMotionWithoutSelection(t *testing.T) {
 	t.Parallel()
 
@@ -656,6 +689,36 @@ func TestHandleOverlayMouseEventMiddleClickPastesIntoPrompt(t *testing.T) {
 	}
 	if got, want := string(overlay.input), "paste"; got != want {
 		t.Fatalf("overlay input = %q, want %q", got, want)
+	}
+}
+
+func TestHandleOverlayMouseEventWheelDownInPromptDoesNotPaste(t *testing.T) {
+	t.Parallel()
+
+	prevRows := termRows
+	termRows = 8
+	t.Cleanup(func() {
+		termRows = prevRows
+	})
+
+	overlay := newOverlayState()
+	overlay.open("")
+	called := false
+
+	_, err := handleOverlayMouseEvent(io.Discard, overlay, mouseEvent{
+		button:  65,
+		x:       0,
+		y:       termRows - overlayBottomPadRows(overlay) - 1,
+		pressed: true,
+	}, nil, nil, func() error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("handleOverlayMouseEvent() error = %v", err)
+	}
+	if called {
+		t.Fatal("paste callback invoked for wheel-down event")
 	}
 }
 

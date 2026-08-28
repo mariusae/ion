@@ -4,14 +4,111 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	clientsession "ion/internal/client/session"
+	"ion/internal/proto/wire"
 	"ion/internal/server/transport"
 	"ion/internal/server/workspace"
 )
+
+func TestParseArgsRecognizesEditorAttachMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseArgs([]string{"-E", "message.txt"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.editor || !cfg.attach {
+		t.Fatalf("config = %#v, want editor attach mode", cfg)
+	}
+	if got, want := cfg.files, []string{"message.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("files = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseArgsEditorAttachRequiresFile(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseArgs([]string{"-E"}); err == nil || err.Error() != "-E requires at least one file" {
+		t.Fatalf("parseArgs(-E) error = %v, want missing file error", err)
+	}
+}
+
+func TestNewlyOpenedBufferIDsExcludesExistingBuffers(t *testing.T) {
+	t.Parallel()
+
+	before := []wire.BufferView{{ID: 4}, {ID: 9}}
+	after := []wire.BufferView{{ID: 4}, {ID: 7}, {ID: 9}, {ID: 12}}
+	if got, want := newlyOpenedBufferIDs(before, after), []int{7, 12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("newlyOpenedBufferIDs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCleanupEditorBuffersRemovesOnlyNewBuffers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing.txt")
+	opened := filepath.Join(root, "opened.txt")
+	for _, path := range []string{existing, opened} {
+		if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	server := transport.New(workspace.New())
+	socketPath, cleanup, err := makeSocketPath()
+	if err != nil {
+		t.Fatalf("makeSocketPath() error = %v", err)
+	}
+	defer cleanup()
+
+	err = withServerSocket(server, socketPath, io.Discard, io.Discard, func(client *clientsession.Client) error {
+		if err := client.Bootstrap([]string{existing}); err != nil {
+			return err
+		}
+		before, err := client.BufferSnapshots()
+		if err != nil {
+			return err
+		}
+		if _, err := client.OpenFiles([]string{opened}); err != nil {
+			return err
+		}
+		after, err := client.BufferSnapshots()
+		if err != nil {
+			return err
+		}
+		ids := newlyOpenedBufferIDs(before, after)
+		if got, want := len(ids), 1; got != want {
+			return fmt.Errorf("new editor buffer count = %d, want %d", got, want)
+		}
+		if _, err := client.Replace(0, 0, "unsaved"); err != nil {
+			return err
+		}
+		if err := cleanupEditorBuffers(socketPath, ids); err != nil {
+			return err
+		}
+		remaining, err := client.BufferSnapshots()
+		if err != nil {
+			return err
+		}
+		if got, want := len(remaining), 1; got != want {
+			return fmt.Errorf("remaining buffer count = %d, want %d", got, want)
+		}
+		if got, want := remaining[0].Path, existing; got != want {
+			return fmt.Errorf("remaining path = %q, want %q", got, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWithServerSocketClientsInterruptCancelsCurrentSession(t *testing.T) {
 	t.Parallel()

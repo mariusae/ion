@@ -20,6 +20,7 @@ import (
 type config struct {
 	download   bool
 	attach     bool
+	editor     bool
 	nmode      bool
 	bmode      bool
 	pmode      bool
@@ -152,6 +153,7 @@ func parseArgs(args []string) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.download, "d", false, "run in command-line download mode")
 	fs.BoolVar(&cfg.attach, "A", false, "attach to a resident shared server")
+	fs.BoolVar(&cfg.editor, "E", false, "attach to a resident shared server and remove newly opened files on exit")
 	fs.BoolVar(&cfg.nmode, "N", false, "create a new tmux pane attached to a resident shared server")
 	fs.BoolVar(&cfg.cmode, "C", false, "connect to a resident server and execute one command")
 	fs.BoolVar(&disableAutoIndent, "no-autoindent", false, "turn off autoindent mode")
@@ -168,6 +170,19 @@ func parseArgs(args []string) (config, error) {
 	}
 	cfg.autoindent = !disableAutoIndent
 	cfg.files = fs.Args()
+	if cfg.editor && cfg.attach {
+		return config{}, fmt.Errorf("-A and -E cannot be combined")
+	}
+	if cfg.editor && len(cfg.files) == 0 {
+		return config{}, fmt.Errorf("-E requires at least one file")
+	}
+	if cfg.editor {
+		cfg.attach = true
+	}
+	attachOption := "-A"
+	if cfg.editor {
+		attachOption = "-E"
+	}
 	cfg.pmode = cfg.paneID != "" && !cfg.bmode && !cfg.nmode
 	if !cfg.attach && !cfg.nmode && !cfg.bmode && !cfg.pmode && !cfg.cmode && !cfg.bserve && !cfg.serve && !cfg.rage && len(cfg.files) > 0 && looksLikeCommandScript(cfg.files[0]) {
 		cfg.cmode = true
@@ -179,7 +194,7 @@ func parseArgs(args []string) (config, error) {
 		return config{}, fmt.Errorf("-B and -d cannot be combined")
 	}
 	if cfg.download && cfg.attach {
-		return config{}, fmt.Errorf("-A and -d cannot be combined")
+		return config{}, fmt.Errorf("%s and -d cannot be combined", attachOption)
 	}
 	if cfg.download && cfg.nmode {
 		return config{}, fmt.Errorf("-N and -d cannot be combined")
@@ -200,7 +215,7 @@ func parseArgs(args []string) (config, error) {
 		return config{}, fmt.Errorf("-kill and -rage cannot be combined")
 	}
 	if cfg.rage && cfg.attach {
-		return config{}, fmt.Errorf("-A and -rage cannot be combined")
+		return config{}, fmt.Errorf("%s and -rage cannot be combined", attachOption)
 	}
 	if cfg.rage && cfg.nmode {
 		return config{}, fmt.Errorf("-N and -rage cannot be combined")
@@ -218,25 +233,25 @@ func parseArgs(args []string) (config, error) {
 		return config{}, fmt.Errorf("-p and -rage cannot be combined")
 	}
 	if cfg.attach && cfg.bmode {
-		return config{}, fmt.Errorf("-A and -B cannot be combined")
+		return config{}, fmt.Errorf("%s and -B cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.nmode {
-		return config{}, fmt.Errorf("-A and -N cannot be combined")
+		return config{}, fmt.Errorf("%s and -N cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.cmode {
-		return config{}, fmt.Errorf("-A and -C cannot be combined")
+		return config{}, fmt.Errorf("%s and -C cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.bserve {
-		return config{}, fmt.Errorf("-A and -b-serve cannot be combined")
+		return config{}, fmt.Errorf("%s and -b-serve cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.serve {
-		return config{}, fmt.Errorf("-A and -serve cannot be combined")
+		return config{}, fmt.Errorf("%s and -serve cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.killSignal != 0 {
-		return config{}, fmt.Errorf("-A and -kill cannot be combined")
+		return config{}, fmt.Errorf("%s and -kill cannot be combined", attachOption)
 	}
 	if cfg.attach && cfg.pmode {
-		return config{}, fmt.Errorf("-A and -p cannot be combined")
+		return config{}, fmt.Errorf("%s and -p cannot be combined", attachOption)
 	}
 	if cfg.nmode && cfg.bmode {
 		return config{}, fmt.Errorf("-B and -N cannot be combined")
@@ -347,6 +362,7 @@ func helpText() string {
 		"modes:\n" +
 		"  -d        command-line download mode\n" +
 		"  -A        attach to resident server\n" +
+		"  -E        attach and remove files newly opened by this invocation on exit\n" +
 		"  -N        open a new tmux pane attached to resident server\n" +
 		"  -B        reuse the last active session in the resident server\n" +
 		"  -p PANE   execute a command in an ion tmux pane; also targets -B/-N\n" +

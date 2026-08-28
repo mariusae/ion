@@ -75,7 +75,7 @@ func runAttachMode(cfg config, stdin io.Reader, stdout, stderr io.Writer) error 
 	return runAttachModeWith(cfg, stdin, stdout, stderr, defaultResidentRuntime())
 }
 
-func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt residentRuntime) error {
+func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt residentRuntime) (retErr error) {
 	paths, err := ensureResidentServer(cfg, rt)
 	if err != nil {
 		return err
@@ -96,8 +96,26 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 	defer clearPaneSession()
 
 	service := wrapInteractiveClient(cfg, rt, paths, client)
+	var editorBufferIDs []int
+	var buffersBefore []wire.BufferView
+	if cfg.editor {
+		buffersBefore, err = client.BufferSnapshots()
+		if err != nil {
+			return err
+		}
+	}
 	if err := bootstrapAttachTargets(&wireBModeClient{client: client}, targets); err != nil {
 		return err
+	}
+	if cfg.editor {
+		buffersAfter, err := client.BufferSnapshots()
+		if err != nil {
+			return err
+		}
+		editorBufferIDs = newlyOpenedBufferIDs(buffersBefore, buffersAfter)
+		defer func() {
+			retErr = errors.Join(retErr, cleanupEditorBuffers(paths.socketPath, editorBufferIDs))
+		}()
 	}
 	if len(targets) > 0 {
 		if _, err := clienttarget.Open(service, cfg.files); err != nil {
@@ -110,6 +128,74 @@ func runAttachModeWith(cfg config, stdin io.Reader, stdout, stderr io.Writer, rt
 		Refresh:    refresh,
 		Interrupt:  interrupt,
 	})
+}
+
+func newlyOpenedBufferIDs(before, after []wire.BufferView) []int {
+	existing := make(map[int]struct{}, len(before))
+	for _, buffer := range before {
+		existing[buffer.ID] = struct{}{}
+	}
+	ids := make([]int, 0, len(after))
+	for _, buffer := range after {
+		if buffer.ID == 0 {
+			continue
+		}
+		if _, ok := existing[buffer.ID]; ok {
+			continue
+		}
+		ids = append(ids, buffer.ID)
+	}
+	return ids
+}
+
+func cleanupEditorBuffers(socketPath string, ids []int) (retErr error) {
+	if len(ids) == 0 {
+		return nil
+	}
+	client, err := clientsession.DialUnix(socketPath, io.Discard, io.Discard)
+	if err != nil {
+		// If the resident server exited too, there is no file list left to clean.
+		return nil
+	}
+	defer func() {
+		retErr = errors.Join(retErr, client.Close())
+	}()
+	session, err := client.NewSession()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, session.Close())
+	}()
+
+	for _, id := range ids {
+		files, err := client.MenuFiles()
+		if err != nil {
+			return err
+		}
+		present := false
+		for _, file := range files {
+			if file.ID == id {
+				present = true
+				break
+			}
+		}
+		if !present {
+			continue
+		}
+		if _, err := client.FocusFile(id); err != nil {
+			return err
+		}
+		if _, err := client.Execute("D\n"); err != nil {
+			if !strings.HasPrefix(err.Error(), "changes to ") {
+				return err
+			}
+			if _, err := client.Execute("D\n"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func bootstrapAttachTargets(client bModeClient, targets []clienttarget.Target) error {

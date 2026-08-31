@@ -2750,6 +2750,31 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 			menu.dismiss()
 		}
 		switch r {
+		case 0x07:
+			var lines []string
+			if capture != nil {
+				capture.Start(func(line string) {
+					lines = append(lines, line)
+				})
+			}
+			status, done, err := saveThenQuit(svc)
+			if capture != nil {
+				capture.Stop()
+			}
+			if err != nil {
+				buffer.status = diagnosticText(err)
+				return false, bufferRedraw(redrawBufferStatus)
+			}
+			if done {
+				return true, nil
+			}
+			view, err := svc.CurrentView()
+			if err != nil {
+				return false, err
+			}
+			applyBufferView(view)
+			applyStatusResult(status, lines)
+			return false, allLayersRedraw(redrawRefresh)
 		case 0x19:
 			previous := snapshotBufferState(buffer)
 			if err := pasteBufferSelectionLocal(); err != nil {
@@ -5722,6 +5747,18 @@ func hasDirtyFiles(svc wire.TermService) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func saveThenQuit(svc wire.TermService) (string, bool, error) {
+	status, err := svc.Save()
+	if err != nil {
+		return status, false, err
+	}
+	ok, err := svc.Execute("q\n")
+	if err != nil {
+		return status, false, err
+	}
+	return status, !ok, nil
 }
 
 func refreshCurrentBufferDirty(svc wire.TermService, state *bufferState) {

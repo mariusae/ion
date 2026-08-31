@@ -25,6 +25,7 @@ type fakeTermService struct {
 	openTargets   []string
 	executeCalls  []string
 	executeFunc   func(string) (bool, error)
+	saveFunc      func() (string, error)
 	setDotCalls   int
 	lastDotStart  int
 	lastDotEnd    int
@@ -173,7 +174,62 @@ func (f *fakeTermService) Undo() (wire.BufferView, error) {
 }
 
 func (f *fakeTermService) Save() (string, error) {
+	if f.saveFunc != nil {
+		return f.saveFunc()
+	}
 	return "saved", nil
+}
+
+func TestSaveThenQuitSavesBeforeQuitting(t *testing.T) {
+	t.Parallel()
+
+	var actions []string
+	svc := &fakeTermService{
+		saveFunc: func() (string, error) {
+			actions = append(actions, "save")
+			return "saved", nil
+		},
+		executeFunc: func(script string) (bool, error) {
+			actions = append(actions, script)
+			return false, nil
+		},
+	}
+
+	status, done, err := saveThenQuit(svc)
+	if err != nil {
+		t.Fatalf("saveThenQuit() error = %v", err)
+	}
+	if got, want := status, "saved"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if !done {
+		t.Fatal("done = false, want true")
+	}
+	if got, want := fmt.Sprint(actions), fmt.Sprint([]string{"save", "q\n"}); got != want {
+		t.Fatalf("actions = %s, want %s", got, want)
+	}
+}
+
+func TestSaveThenQuitDoesNotQuitAfterSaveFailure(t *testing.T) {
+	t.Parallel()
+
+	wantErr := fmt.Errorf("save failed")
+	svc := &fakeTermService{
+		saveFunc: func() (string, error) {
+			return "", wantErr
+		},
+	}
+
+	_, done, err := saveThenQuit(svc)
+	if err != wantErr {
+		t.Fatalf("saveThenQuit() error = %v, want %v", err, wantErr)
+	}
+	if done {
+		t.Fatal("done = true, want false")
+	}
+	if len(svc.executeCalls) != 0 {
+		t.Fatalf("executeCalls = %q, want none", svc.executeCalls)
+	}
 }
 
 func TestSplitTargetsForBufferUsesPathAndCurrentAddress(t *testing.T) {

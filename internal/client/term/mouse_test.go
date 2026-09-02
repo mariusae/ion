@@ -186,6 +186,29 @@ func TestReadBufferEscapeMetaShortcuts(t *testing.T) {
 	}
 }
 
+func TestReadBufferSpecialKeyControlQAliasesOptionQ(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("unused"))
+	key, mouse, err := readBufferSpecialKey(0x11, reader, nil)
+	if err != nil {
+		t.Fatalf("readBufferSpecialKey() error = %v", err)
+	}
+	if got, want := key, metaKey('q'); got != want {
+		t.Fatalf("readBufferSpecialKey() key = %d, want %d", got, want)
+	}
+	if mouse != nil {
+		t.Fatalf("readBufferSpecialKey() mouse = %#v, want nil", mouse)
+	}
+	remaining, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read remaining input: %v", err)
+	}
+	if got, want := string(remaining), "unused"; got != want {
+		t.Fatalf("readBufferSpecialKey() remaining input = %q, want %q", got, want)
+	}
+}
+
 func TestLegacyAltKeyTranslatesEditorMetaBindings(t *testing.T) {
 	t.Parallel()
 

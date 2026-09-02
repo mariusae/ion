@@ -2890,8 +2890,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 		if inBufferMode {
 			if overlay.visible {
 				if overlay.pickerActive() {
-					if r == 0x1b {
-						key, mouse, err := readBufferEscape(reader, stdin)
+					if r == 0x1b || r == 0x11 {
+						key, mouse, err := readBufferSpecialKey(r, reader, stdin)
 						if err != nil {
 							return err
 						}
@@ -3261,8 +3261,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 					}
 					continue
 				}
-				if r == 0x1b {
-					key, mouse, err := readBufferEscape(reader, stdin)
+				if r == 0x1b || r == 0x11 {
+					key, mouse, err := readBufferSpecialKey(r, reader, stdin)
 					if err != nil {
 						return err
 					}
@@ -3559,8 +3559,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				continue
 			}
 			if menu.visible {
-				if r == 0x1b {
-					key, mouse, err := readBufferEscape(reader, stdin)
+				if r == 0x1b || r == 0x11 {
+					key, mouse, err := readBufferSpecialKey(r, reader, stdin)
 					if err != nil {
 						return err
 					}
@@ -3695,8 +3695,8 @@ func runTTY(stdin *os.File, stdout, stderr io.Writer, svc wire.TermService, capt
 				}
 				continue
 			}
-			if r == 0x1b {
-				key, mouse, err := readBufferEscape(reader, stdin)
+			if r == 0x1b || r == 0x11 {
+				key, mouse, err := readBufferSpecialKey(r, reader, stdin)
 				if err != nil {
 					return err
 				}

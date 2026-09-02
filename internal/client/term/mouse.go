@@ -179,6 +179,13 @@ func readBufferEscape(reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, e
 	return keyEsc, nil, nil
 }
 
+func readBufferSpecialKey(r rune, reader *bufio.Reader, stdin *os.File) (int, *mouseEvent, error) {
+	if r == 0x11 { // Ctrl-Q is an alias for Option-Q.
+		return metaKey('q'), nil, nil
+	}
+	return readBufferEscape(reader, stdin)
+}
+
 func decodeCSIKey(seq []byte) int {
 	if len(seq) == 0 {
 		return keyEsc
